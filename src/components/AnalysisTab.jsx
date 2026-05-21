@@ -2,8 +2,9 @@ import React, { useState } from 'react';
 import {
   AreaChart, Area, BarChart, Bar, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, ReferenceLine,
+  ResponsiveContainer, ReferenceLine, ComposedChart, Line,
 } from 'recharts';
+import { fetchCategoricalMetrics } from '../api/analysisApi';
 
 /**
  * Full Analysis tab content.
@@ -34,6 +35,38 @@ export function AnalysisTab({
   onCompare,
 }) {
   const [shareState, setShareState] = useState('idle'); // 'idle' | 'copied'
+
+  // ── Verification Metrics state ──────────────────────────────────────────────
+  const [catThreshold, setCatThreshold]   = useState(25);    // mm/6h
+  const [catHourMin,   setCatHourMin]     = useState(0);
+  const [catHourMax,   setCatHourMax]     = useState(240);
+  const [catLoading,   setCatLoading]     = useState(false);
+  const [catData,      setCatData]        = useState(null);  // full API response
+  const [catError,     setCatError]       = useState(null);
+  const [catHasRun,    setCatHasRun]      = useState(false);
+
+  const handleRunCategorical = async () => {
+    if (!clickedPoint || !currentModel) return;
+    setCatLoading(true);
+    setCatError(null);
+    setCatHasRun(true);
+    try {
+      const data = await fetchCategoricalMetrics({
+        model:        currentModel.name,
+        variable:     selectedVariable,
+        lat:          clickedPoint.lat,
+        lon:          clickedPoint.lon,
+        thresholdMm6h: parseFloat(catThreshold) || 25,
+        hourMin:      catHourMin,
+        hourMax:      catHourMax,
+      });
+      setCatData(data);
+    } catch (err) {
+      setCatError(err.message || 'Failed to load verification metrics');
+    } finally {
+      setCatLoading(false);
+    }
+  };
 
   const handleDownload = () => {
     if (!analysisPlotUrl) return;
@@ -312,7 +345,249 @@ export function AnalysisTab({
           </>
         )}
 
-        {/* ── Section 3: Spatial Metric Map ── */}
+        {/* ── Section 3: Verification Metrics ── */}
+        {clickedPoint && (
+          <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '24px', marginTop: '32px' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '16px', marginBottom: '14px', flexWrap: 'wrap' }}>
+              <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: '14px', fontWeight: '600', margin: 0, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                🎯 Verification Metrics
+              </h3>
+              <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: '12px' }}>
+                CSI · POD · FAR · FBI · Brier Score · Composite Confidence
+              </span>
+            </div>
+
+            {/* Controls row */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
+              {/* Threshold */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', whiteSpace: 'nowrap' }}>Threshold</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={catThreshold}
+                  onChange={e => setCatThreshold(e.target.value)}
+                  style={{
+                    width: '72px', padding: '4px 8px', fontSize: '13px', fontWeight: '600',
+                    background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)',
+                    borderRadius: '6px', color: 'white', textAlign: 'right', outline: 'none',
+                  }}
+                />
+                <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px' }}>mm/6h</span>
+              </div>
+
+              {/* Hour range */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', whiteSpace: 'nowrap' }}>Hours</span>
+                <input
+                  type="number" min="0" step="6" value={catHourMin}
+                  onChange={e => setCatHourMin(parseInt(e.target.value, 10) || 0)}
+                  style={{ width: '60px', padding: '4px 6px', fontSize: '12px', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'white', textAlign: 'center', outline: 'none' }}
+                />
+                <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px' }}>–</span>
+                <input
+                  type="number" min="0" step="24" value={catHourMax}
+                  onChange={e => setCatHourMax(parseInt(e.target.value, 10) || 240)}
+                  style={{ width: '60px', padding: '4px 6px', fontSize: '12px', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'white', textAlign: 'center', outline: 'none' }}
+                />
+                <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px' }}>h</span>
+              </div>
+
+              {/* Run button */}
+              <button
+                onClick={handleRunCategorical}
+                disabled={catLoading}
+                style={{
+                  padding: '6px 16px', fontSize: '12px', fontWeight: '700', cursor: catLoading ? 'not-allowed' : 'pointer',
+                  background: catLoading ? 'rgba(52,152,219,0.08)' : 'rgba(52,152,219,0.18)',
+                  border: '1px solid rgba(52,152,219,0.45)', borderRadius: '8px',
+                  color: catLoading ? 'rgba(52,152,219,0.45)' : 'rgba(52,152,219,0.95)',
+                  display: 'flex', alignItems: 'center', gap: '6px', transition: 'all 0.15s',
+                }}
+              >
+                {catLoading ? '⏳ Running…' : '▶ Run Metrics'}
+              </button>
+
+              {catData && !catLoading && (
+                <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>
+                  {currentModel.name} · >{catData.threshold_info?.threshold_mm_6h ?? catThreshold} mm/6h
+                  {' '}(≡ {catData.threshold_info?.threshold_rate?.toFixed(3) ?? '—'} mm/h)
+                </span>
+              )}
+            </div>
+
+            {/* Error banner */}
+            {catError && (
+              <div style={{ background: 'rgba(231,76,60,0.12)', border: '1px solid rgba(231,76,60,0.3)', borderRadius: '8px', padding: '10px 14px', marginBottom: '14px', color: '#e74c3c', fontSize: '12px' }}>
+                ⚠️ {catError}
+              </div>
+            )}
+
+            {/* Obs coverage warning banner */}
+            {catData && catData.obs_warning && (
+              <div style={{ background: 'rgba(243,156,18,0.10)', border: '1px solid rgba(243,156,18,0.3)', borderRadius: '8px', padding: '8px 14px', marginBottom: '16px', color: '#f39c12', fontSize: '12px', display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+                <span style={{ flexShrink: 0 }}>⚠️</span>
+                <span>{catData.obs_warning}</span>
+              </div>
+            )}
+
+            {/* Empty-hours result */}
+            {catHasRun && !catLoading && catData && catData.hours?.length === 0 && (
+              <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '13px', padding: '16px 0' }}>
+                No overlapping observations found for this location and time window. Try a different point or extend the hour range.
+              </div>
+            )}
+
+            {/* ── Stat badges ── */}
+            {catData && catData.summary && catData.hours?.length > 0 && (() => {
+              const s = catData.summary;
+              const cc = s.composite_confidence;
+
+              const metricColor = (key, val) => {
+                if (val == null) return '#666';
+                if (key === 'csi')  return val >= 0.5 ? '#2ecc71' : val >= 0.3 ? '#f39c12' : '#e74c3c';
+                if (key === 'pod')  return val >= 0.7 ? '#2ecc71' : val >= 0.5 ? '#f39c12' : '#e74c3c';
+                if (key === 'far')  return val <= 0.3 ? '#2ecc71' : val <= 0.5 ? '#f39c12' : '#e74c3c';
+                if (key === 'fbi')  return val >= 0.8 && val <= 1.2 ? '#2ecc71' : '#f39c12';
+                if (key === 'bs')   return val <= 0.1 ? '#2ecc71' : val <= 0.25 ? '#f39c12' : '#e74c3c';
+                if (key === 'cc')   return val >= 0.6 ? '#2ecc71' : val >= 0.4 ? '#f39c12' : '#e74c3c';
+                return '#aaa';
+              };
+
+              const badges = [
+                { key: 'csi', label: 'CSI',    hint: 'Critical Success Index (0→1, higher=better)', val: s.csi   },
+                { key: 'pod', label: 'POD',    hint: 'Probability of Detection (hit rate)',          val: s.pod   },
+                { key: 'far', label: 'FAR',    hint: 'False Alarm Ratio (0=perfect)',                val: s.far   },
+                { key: 'fbi', label: 'FBI',    hint: 'Frequency Bias (1=unbiased)',                  val: s.fbi   },
+                { key: 'bs',  label: 'Brier',  hint: 'Brier Score (0=perfect)',                      val: s.brier_score },
+              ];
+
+              const contingencyTotal = s.hits + s.misses + s.false_alarms + s.correct_neg;
+
+              return (
+                <>
+                  {/* Badges row */}
+                  <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
+                    {badges.map(({ key, label, hint, val }) => (
+                      <div key={key} style={{
+                        background: 'rgba(255,255,255,0.06)', borderRadius: '10px',
+                        padding: '12px 16px', minWidth: '100px',
+                        borderLeft: `3px solid ${metricColor(key, val)}`,
+                      }}>
+                        <div style={{ color: metricColor(key, val), fontSize: '22px', fontWeight: '700', lineHeight: 1 }}>
+                          {val != null ? val.toFixed(3) : 'N/A'}
+                        </div>
+                        <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '12px', marginTop: '4px', fontWeight: '600' }}>{label}</div>
+                        <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '10px', marginTop: '2px' }}>{hint}</div>
+                      </div>
+                    ))}
+
+                    {/* Composite Confidence badge — wider, highlighted */}
+                    <div style={{
+                      background: cc != null ? `rgba(${cc >= 0.6 ? '46,204,113' : cc >= 0.4 ? '243,156,18' : '231,76,60'},0.10)` : 'rgba(255,255,255,0.06)',
+                      borderRadius: '10px', padding: '12px 16px', minWidth: '130px',
+                      borderLeft: `3px solid ${metricColor('cc', cc)}`,
+                      borderTop: `1px solid ${metricColor('cc', cc)}33`,
+                    }}>
+                      <div style={{ color: metricColor('cc', cc), fontSize: '24px', fontWeight: '800', lineHeight: 1 }}>
+                        {cc != null ? cc.toFixed(3) : 'N/A'}
+                      </div>
+                      <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: '12px', marginTop: '4px', fontWeight: '700' }}>Composite Confidence</div>
+                      <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '10px', marginTop: '2px' }}>
+                        0.40×CSI + 0.20×POD + 0.10×(1–FAR) ÷ 0.70
+                      </div>
+                      <div style={{ color: 'rgba(255,255,255,0.2)', fontSize: '10px', marginTop: '1px' }}>FSS = N/A (spatial-only)</div>
+                    </div>
+                  </div>
+
+                  {/* Contingency table mini-summary */}
+                  <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', flexWrap: 'wrap' }}>
+                    {[
+                      { label: 'Hits',         val: s.hits,         color: '#2ecc71' },
+                      { label: 'Misses',        val: s.misses,       color: '#e74c3c' },
+                      { label: 'False Alarms',  val: s.false_alarms, color: '#f39c12' },
+                      { label: 'Correct Neg.',  val: s.correct_neg,  color: '#3498db' },
+                    ].map(({ label, val, color }) => (
+                      <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '5px', background: 'rgba(255,255,255,0.04)', borderRadius: '6px', padding: '5px 10px', border: `1px solid ${color}33` }}>
+                        <span style={{ color, fontWeight: '700', fontSize: '13px' }}>{val}</span>
+                        <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: '11px' }}>{label}</span>
+                      </div>
+                    ))}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px', background: 'rgba(255,255,255,0.04)', borderRadius: '6px', padding: '5px 10px', border: '1px solid rgba(255,255,255,0.1)' }}>
+                      <span style={{ color: 'rgba(255,255,255,0.6)', fontWeight: '700', fontSize: '13px' }}>{contingencyTotal}</span>
+                      <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: '11px' }}>Total cases</span>
+                    </div>
+                  </div>
+
+                  {/* Event Probability chart */}
+                  <div>
+                    <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+                      <span>Event Probability per Lead Time (threshold &gt; {catData.threshold_info?.threshold_mm_6h ?? catThreshold} mm/6h)</span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <span style={{ display: 'inline-block', width: '10px', height: '10px', background: 'rgba(52,152,219,0.6)', borderRadius: '2px' }} />
+                        P(event) — Gaussian
+                      </span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <span style={{ display: 'inline-block', width: '14px', height: '3px', background: '#2ecc71', borderRadius: '1px' }} />
+                        Observed event
+                      </span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <span style={{ display: 'inline-block', width: '14px', height: '2px', background: '#e74c3c', borderRadius: '1px', borderTop: '2px dashed #e74c3c' }} />
+                        Forecast event (deterministic)
+                      </span>
+                    </div>
+                    <ResponsiveContainer width="100%" height={230}>
+                      <ComposedChart data={catData.hours} margin={{ top: 8, right: 20, left: 0, bottom: 20 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false} />
+                        <XAxis
+                          dataKey="hour"
+                          stroke="rgba(255,255,255,0.3)"
+                          tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }}
+                          tickFormatter={h => `+${h}h`}
+                          label={{ value: 'Forecast Hour', position: 'insideBottom', offset: -12, fill: 'rgba(255,255,255,0.4)', fontSize: 11 }}
+                        />
+                        <YAxis
+                          domain={[0, 1]}
+                          stroke="rgba(255,255,255,0.3)"
+                          tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }}
+                          tickFormatter={v => `${(v * 100).toFixed(0)}%`}
+                          label={{ value: 'Probability', angle: -90, position: 'insideLeft', fill: 'rgba(255,255,255,0.4)', fontSize: 11 }}
+                        />
+                        <Tooltip
+                          contentStyle={{ background: '#1a2535', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: 'white', fontSize: '12px' }}
+                          formatter={(value, name) => {
+                            if (name === 'P(event)')          return [`${(value * 100).toFixed(1)}%`, 'P(event) Gaussian'];
+                            if (name === 'Obs event')         return [value === 1 ? 'Yes' : 'No', 'Observed event'];
+                            if (name === 'Fcst event')        return [value === 1 ? 'Yes' : 'No', 'Forecast event (det.)'];
+                            if (name === 'Mean rate (mm/h)')  return [Number(value).toFixed(4) + ' mm/h', 'Ens. mean rate'];
+                            return [value, name];
+                          }}
+                          labelFormatter={h => `Forecast +${h}h`}
+                        />
+                        {/* P(event) bars */}
+                        <Bar dataKey="p_event" name="P(event)" fill="rgba(52,152,219,0.55)" radius={[3, 3, 0, 0]} isAnimationActive={false} />
+                        {/* Observed event step line */}
+                        <Line type="stepAfter" dataKey="is_obs"  name="Obs event"  stroke="#2ecc71" strokeWidth={2.5} dot={{ r: 4, fill: '#2ecc71' }} isAnimationActive={false} connectNulls />
+                        {/* Deterministic forecast event dashed line */}
+                        <Line type="stepAfter" dataKey="is_fcst" name="Fcst event" stroke="#e74c3c" strokeWidth={1.5} strokeDasharray="5 3" dot={false} isAnimationActive={false} connectNulls />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                </>
+              );
+            })()}
+
+            {/* Pre-run placeholder */}
+            {!catHasRun && !catLoading && (
+              <div style={{ color: 'rgba(255,255,255,0.25)', fontSize: '13px', padding: '28px 0', textAlign: 'center' }}>
+                Set a threshold and click <strong style={{ color: 'rgba(52,152,219,0.6)' }}>▶ Run Metrics</strong> to generate verification scores
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Section 4: Spatial Metric Map ── */}
         {spatialData?.points?.length > 0 && (
           <div style={{ marginTop: clickedPoint ? '32px' : '0', marginBottom: '16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>

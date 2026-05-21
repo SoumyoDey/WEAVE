@@ -1487,6 +1487,225 @@ def compare_spatial_agreement():
         return_db_connection(conn)
 
 
+@app.route('/api/categorical-metrics', methods=['POST'])
+def categorical_metrics_endpoint():
+    """
+    Computes categorical and probabilistic verification metrics at a point.
+
+    Metric definitions (all computed in mm/h after accumulation normalisation):
+      POD  = hits / (hits + misses)                  — recall
+      FAR  = false_alarms / (hits + false_alarms)    — 0 = perfect
+      FBI  = (hits + false_alarms) / (hits + misses) — 1 = perfect
+      CSI  = hits / (hits + misses + false_alarms)   — threat score
+      BS   = mean((P_event – I_obs)²)               — Brier Score, 0 = perfect
+      Composite Confidence (no FSS, weights re-normalised to sum 1):
+           = (0.40·CSI + 0.20·POD + 0.10·(1-FAR)) / 0.70
+
+    Request JSON:
+        { model, variable, lat, lon, threshold_mm_6h, hour_min, hour_max }
+    """
+    body              = request.get_json(force=True)
+    model_name        = body.get('model',            'AIFS')
+    variable          = body.get('variable',         'precipitation')
+    lat               = float(body.get('lat',         35.0))
+    lon               = float(body.get('lon',        -75.0))
+    threshold_mm_6h   = float(body.get('threshold_mm_6h', 25.0))
+    hour_min          = int(body.get('hour_min',     0))
+    hour_max          = int(body.get('hour_max',     168))
+
+    if variable == 'wind':
+        fcst_var, obs_var, obs_src = 'wind_u_10m', 'wind_speed', 'ERA5_WIND'
+    else:
+        fcst_var, obs_var, obs_src = variable, 'precipitation', 'GPM_IMERG_V07B'
+
+    accum_h        = MODEL_ACCUM_HOURS.get(model_name, 1)
+    threshold_rate = threshold_mm_6h / 6.0          # mm/h comparison unit
+
+    conn   = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        # ── 1. Forecast rows ─────────────────────────────────────────────────
+        cursor.execute("""
+            SELECT
+                rf.forecast_hour,
+                rf.mean_value,
+                rf.std_dev,
+                fr.initialization_time
+            FROM regridded_forecast rf
+            JOIN models m  ON m.model_name = rf.model_name
+            JOIN forecast_runs fr
+                ON fr.model_id = m.model_id
+               AND fr.run_id = (
+                       SELECT run_id FROM forecast_runs fr2
+                       JOIN models m2 ON m2.model_id = fr2.model_id
+                       WHERE m2.model_name = rf.model_name
+                       ORDER BY fr2.initialization_time DESC LIMIT 1
+                   )
+            WHERE rf.model_name   = %s
+              AND rf.variable_name = %s
+              AND rf.forecast_hour BETWEEN %s AND %s
+              AND rf.latitude  BETWEEN %s AND %s
+              AND rf.longitude BETWEEN %s AND %s
+              AND rf.mean_value IS NOT NULL AND rf.std_dev IS NOT NULL
+            ORDER BY rf.forecast_hour
+        """, (model_name, fcst_var, hour_min, hour_max,
+              lat - 0.26, lat + 0.26, lon - 0.26, lon + 0.26))
+        fcst_rows = cursor.fetchall()
+
+        if not fcst_rows:
+            return jsonify({'error': 'No forecast data found for the selected parameters.'}), 404
+
+        # ── 2. Observations (extended window for accumulation) ────────────────
+        valid_times = [
+            r['initialization_time'] + timedelta(hours=r['forecast_hour'])
+            for r in fcst_rows
+        ]
+        min_obs_t = min(valid_times) - timedelta(hours=accum_h - 1)
+        max_obs_t = max(valid_times)
+
+        cursor.execute("""
+            SELECT obs_time, AVG(value) AS obs_val
+            FROM regridded_observation
+            WHERE variable_name = %s AND source = %s
+              AND obs_time BETWEEN %s AND %s
+              AND latitude  BETWEEN %s AND %s
+              AND longitude BETWEEN %s AND %s
+            GROUP BY obs_time ORDER BY obs_time
+        """, (obs_var, obs_src, min_obs_t, max_obs_t,
+              lat - 0.26, lat + 0.26, lon - 0.26, lon + 0.26))
+        obs_by_time = {r['obs_time']: float(r['obs_val']) for r in cursor.fetchall()}
+
+        if not obs_by_time:
+            return jsonify({
+                'hours': [], 'summary': {}, 'obs_hours': [],
+                'obs_warning': 'No observations found for this location and variable.',
+            })
+
+        # ── 3. Per-hour categorical + probabilistic metrics ───────────────────
+        hours_data = []
+        hits = misses = false_alarms = correct_neg = 0
+        brier_sq_sum = 0.0
+
+        for row in fcst_rows:
+            hour     = row['forecast_hour']
+            mean     = float(row['mean_value'])
+            std      = float(row['std_dev'])
+            vt       = row['initialization_time'] + timedelta(hours=hour)
+
+            obs_window = [
+                obs_by_time[vt - timedelta(hours=dh)]
+                for dh in range(accum_h - 1, -1, -1)
+                if (vt - timedelta(hours=dh)) in obs_by_time
+            ]
+            if not obs_window:
+                continue
+
+            obs_rate  = sum(obs_window) / len(obs_window)
+            mean_rate = mean / accum_h
+            std_rate  = std  / accum_h
+
+            is_fcst = mean_rate > threshold_rate
+            is_obs  = obs_rate  > threshold_rate
+
+            # Contingency table
+            if   is_fcst and     is_obs:  hits         += 1
+            elif is_fcst and not is_obs:  false_alarms += 1
+            elif not is_fcst and is_obs:  misses       += 1
+            else:                         correct_neg  += 1
+
+            # Probabilistic event probability (Gaussian)
+            if std_rate > 1e-10:
+                p_event = float(1.0 - scipy.stats.norm.cdf(
+                    threshold_rate, loc=mean_rate, scale=std_rate
+                ))
+            else:
+                p_event = 1.0 if mean_rate > threshold_rate else 0.0
+
+            brier_sq_sum += (p_event - float(is_obs)) ** 2
+
+            hours_data.append({
+                'hour':      hour,
+                'is_fcst':   int(is_fcst),
+                'is_obs':    int(is_obs),
+                'p_event':   round(p_event,   4),
+                'mean_rate': round(mean_rate, 4),
+                'obs_rate':  round(obs_rate,  4),
+            })
+
+        if not hours_data:
+            return jsonify({
+                'hours': [], 'summary': {}, 'obs_hours': [],
+                'obs_warning': 'No observations matched forecast hours for this location.',
+            })
+
+        # ── 4. Summary statistics ─────────────────────────────────────────────
+        n            = len(hours_data)
+        n_obs_yes    = hits + misses
+        n_fcst_yes   = hits + false_alarms
+        n_denom_csi  = hits + misses + false_alarms
+
+        pod  = round(hits / n_obs_yes,   4) if n_obs_yes   > 0 else None
+        far  = round(false_alarms / n_fcst_yes, 4) if n_fcst_yes > 0 else None
+        fbi  = round(n_fcst_yes  / n_obs_yes,   4) if n_obs_yes   > 0 else None
+        csi  = round(hits / n_denom_csi, 4) if n_denom_csi > 0 else None
+        bs   = round(brier_sq_sum / n,   6)
+
+        # Composite Confidence (FSS excluded — spatial-only metric)
+        # Original weights: 0.40 CSI + 0.30 FSS + 0.20 POD + 0.10(1-FAR)
+        # Without FSS re-normalise remaining to sum = 1 (÷ 0.70)
+        if csi is not None and pod is not None and far is not None:
+            composite = round(
+                (0.40 * csi + 0.20 * pod + 0.10 * (1.0 - far)) / 0.70, 4
+            )
+        else:
+            composite = None
+
+        obs_hours_list = sorted(h['hour'] for h in hours_data)
+        n_obs = len(obs_hours_list)
+        obs_warning = (
+            f"Observations available for {n_obs} lead times "
+            f"({obs_hours_list[0]}h–{obs_hours_list[-1]}h). "
+            "Ingest more data to extend verification coverage."
+        ) if obs_hours_list else 'No observations found.'
+
+        print(f"✅ categorical-metrics: {model_name} {variable} ({lat},{lon}) "
+              f"thr={threshold_mm_6h}mm/6h  "
+              f"H={hits} M={misses} FA={false_alarms} CN={correct_neg}  "
+              f"CSI={csi} POD={pod} FAR={far} FBI={fbi} BS={bs} CC={composite}")
+
+        return jsonify({
+            'hours':        hours_data,
+            'summary': {
+                'hits':                  hits,
+                'misses':                misses,
+                'false_alarms':          false_alarms,
+                'correct_neg':           correct_neg,
+                'pod':                   pod,
+                'far':                   far,
+                'fbi':                   fbi,
+                'csi':                   csi,
+                'brier_score':           bs,
+                'composite_confidence':  composite,
+            },
+            'obs_hours':    obs_hours_list,
+            'obs_warning':  obs_warning,
+            'threshold_info': {
+                'threshold_mm_6h': threshold_mm_6h,
+                'threshold_rate':  round(threshold_rate, 4),
+                'accum_h':         accum_h,
+                'model':           model_name,
+            },
+        })
+
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        print(f"❌ Error in categorical-metrics: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        return_db_connection(conn)
+
+
 if __name__ == '__main__':
     print("🚀 Flask API Starting...")
     print("=" * 60)
@@ -1503,7 +1722,8 @@ if __name__ == '__main__':
     print("  • GET  /api/health")
     print("  • POST /api/compare/timeseries  {models, lat, lon, hour_min, hour_max, variable}")
     print("  • POST /api/compare/skill       {models, lat, lon, hour_min, hour_max, variable}")
-    print("  • POST /api/compare/spatial-agreement  {models, min_lat, max_lat, min_lon, max_lon, hour, variable}")
+    print("  • POST /api/compare/spatial-agreement  {models, min_lat, max_lat, min_lon, max_lon, hour, variable}
+  • POST /api/categorical-metrics  {model, variable, lat, lon, threshold_mm_6h, hour_min, hour_max}")
     print("=" * 60)
     print("✅ Optimized with connection pooling")
     print("🌬️  Wind: speed = √(u² + v²), direction = atan2(u,v)")
