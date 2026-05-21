@@ -6,6 +6,7 @@ import math
 import io
 import base64
 from datetime import timedelta
+import scipy.stats
 
 # ── Matplotlib / Cartopy (Agg backend — no display required) ──────────────────
 import matplotlib
@@ -934,24 +935,535 @@ def health_check():
         return_db_connection(conn)
 
 
+# ── Comparison endpoints (multi-model, regridded_forecast / regridded_observation) ──
+
+
+@app.route('/api/compare/timeseries', methods=['POST'])
+def compare_timeseries():
+    """
+    Returns ensemble mean and std per forecast hour for multiple models at a
+    single lat/lon point, queried from regridded_forecast.
+
+    Request JSON:
+        { models, lat, lon, hour_min, hour_max, variable }
+    Response:
+        { "AIFS": [{"hour": 6, "mean": 1.234, "std": 0.456}, ...], ... }
+    """
+    body     = request.get_json(force=True)
+    models   = body.get('models', [])
+    lat      = float(body.get('lat', 35.0))
+    lon      = float(body.get('lon', -75.0))
+    hour_min = int(body.get('hour_min', 0))
+    hour_max = int(body.get('hour_max', 168))
+    variable = body.get('variable', 'precipitation')
+
+    # Map 'wind' shorthand to the u-component stored in regridded_forecast
+    var_name = 'wind_u_10m' if variable == 'wind' else variable
+
+    if not models:
+        return jsonify({'error': 'No models specified'}), 400
+
+    conn   = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cursor.execute("""
+            SELECT model_name, forecast_hour, mean_value, std_dev
+            FROM regridded_forecast
+            WHERE model_name = ANY(%s)
+              AND variable_name = %s
+              AND forecast_hour BETWEEN %s AND %s
+              AND latitude  BETWEEN %s AND %s
+              AND longitude BETWEEN %s AND %s
+            ORDER BY model_name, forecast_hour
+        """, (
+            models, var_name, hour_min, hour_max,
+            lat - 0.26, lat + 0.26,
+            lon - 0.26, lon + 0.26,
+        ))
+        rows = cursor.fetchall()
+
+        result = {}
+        for row in rows:
+            m = row['model_name']
+            if m not in result:
+                result[m] = []
+            result[m].append({
+                'hour': row['forecast_hour'],
+                'mean': round(float(row['mean_value']), 4) if row['mean_value'] is not None else None,
+                'std':  round(float(row['std_dev']),    4) if row['std_dev']    is not None else None,
+            })
+
+        print(f"✅ compare/timeseries: {sum(len(v) for v in result.values())} pts "
+              f"for models {models} at ({lat},{lon})")
+        return jsonify(result)
+
+    except Exception as e:
+        print(f"❌ Error in compare/timeseries: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        return_db_connection(conn)
+
+
+@app.route('/api/compare/skill', methods=['POST'])
+def compare_skill():
+    """
+    Computes per-hour and summary skill metrics (SSR, CRPS, Bias, MAE, RMSE)
+    by matching regridded_forecast values against regridded_observation at the
+    valid time = initialization_time + forecast_hour hours.
+
+    Request JSON:
+        { models, lat, lon, hour_min, hour_max, variable }
+    """
+    body     = request.get_json(force=True)
+    models   = body.get('models', [])
+    lat      = float(body.get('lat', 35.0))
+    lon      = float(body.get('lon', -75.0))
+    hour_min = int(body.get('hour_min', 0))
+    hour_max = int(body.get('hour_max', 168))
+    variable = body.get('variable', 'precipitation')
+
+    if variable == 'wind':
+        fcst_var = 'wind_u_10m'
+        obs_var  = 'wind_speed'
+        obs_src  = 'ERA5_WIND'
+    else:
+        fcst_var = variable          # e.g. 'precipitation'
+        obs_var  = 'precipitation'
+        obs_src  = 'GPM_IMERG_V07B'
+
+    if not models:
+        return jsonify({'error': 'No models specified'}), 400
+
+    conn   = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        # ------------------------------------------------------------------
+        # 1. Fetch forecast rows for all requested models
+        # ------------------------------------------------------------------
+        cursor.execute("""
+            SELECT
+                rf.model_name,
+                rf.forecast_hour,
+                rf.mean_value,
+                rf.std_dev,
+                fr.initialization_time
+            FROM regridded_forecast rf
+            JOIN models m  ON m.model_name = rf.model_name
+            JOIN forecast_runs fr
+                ON fr.model_id = m.model_id
+                AND fr.run_id = (
+                    SELECT run_id FROM forecast_runs fr2
+                    JOIN models m2 ON m2.model_id = fr2.model_id
+                    WHERE m2.model_name = rf.model_name
+                    ORDER BY fr2.initialization_time DESC
+                    LIMIT 1
+                )
+            WHERE rf.model_name = ANY(%s)
+              AND rf.variable_name = %s
+              AND rf.forecast_hour BETWEEN %s AND %s
+              AND rf.latitude  BETWEEN %s AND %s
+              AND rf.longitude BETWEEN %s AND %s
+              AND rf.mean_value IS NOT NULL
+              AND rf.std_dev    IS NOT NULL
+            ORDER BY rf.model_name, rf.forecast_hour
+        """, (
+            models, fcst_var, hour_min, hour_max,
+            lat - 0.26, lat + 0.26,
+            lon - 0.26, lon + 0.26,
+        ))
+        fcst_rows = cursor.fetchall()
+
+        if not fcst_rows:
+            return jsonify({'models': {}, 'obs_hours': [],
+                            'obs_warning': 'No forecast data found for selected parameters.'})
+
+        # ------------------------------------------------------------------
+        # 2. Fetch observations that fall within the valid-time window
+        # ------------------------------------------------------------------
+        # Determine the range of valid times across all models/hours
+        from datetime import datetime
+        valid_times_set = set()
+        for row in fcst_rows:
+            vt = row['initialization_time'] + timedelta(hours=row['forecast_hour'])
+            valid_times_set.add(vt)
+
+        if not valid_times_set:
+            return jsonify({'models': {}, 'obs_hours': [],
+                            'obs_warning': 'No observations found for this location/variable.'})
+
+        min_vt = min(valid_times_set)
+        max_vt = max(valid_times_set)
+
+        cursor.execute("""
+            SELECT obs_time, AVG(value) AS obs_val
+            FROM regridded_observation
+            WHERE variable_name = %s
+              AND source        = %s
+              AND obs_time BETWEEN %s AND %s
+              AND latitude  BETWEEN %s AND %s
+              AND longitude BETWEEN %s AND %s
+            GROUP BY obs_time
+            ORDER BY obs_time
+        """, (
+            obs_var, obs_src, min_vt, max_vt,
+            lat - 0.26, lat + 0.26,
+            lon - 0.26, lon + 0.26,
+        ))
+        obs_rows = cursor.fetchall()
+        obs_lookup = {row['obs_time']: float(row['obs_val']) for row in obs_rows}
+
+        if not obs_lookup:
+            return jsonify({'models': {}, 'obs_hours': [],
+                            'obs_warning': 'No observations found for this location/variable.'})
+
+        # ------------------------------------------------------------------
+        # 3. Match forecasts to observations and compute metrics per model
+        # ------------------------------------------------------------------
+        model_data = {}  # model_name -> list of per-hour dicts
+
+        for row in fcst_rows:
+            m_name = row['model_name']
+            hour   = row['forecast_hour']
+            mean   = float(row['mean_value'])
+            std    = float(row['std_dev'])
+            vt     = row['initialization_time'] + timedelta(hours=hour)
+
+            obs = obs_lookup.get(vt)
+            if obs is None:
+                continue
+
+            err     = mean - obs
+            abs_err = abs(err)
+
+            # SSR
+            err_sq = err ** 2
+            ssr    = round(std ** 2 / err_sq, 6) if err_sq > 1e-10 else None
+
+            # Gaussian CRPS
+            if std > 1e-10:
+                z    = (obs - mean) / std
+                crps = float(std * (
+                    z * (2.0 * scipy.stats.norm.cdf(z) - 1.0)
+                    + 2.0 * scipy.stats.norm.pdf(z)
+                    - 1.0 / math.sqrt(math.pi)
+                ))
+            else:
+                crps = abs_err  # degenerate: std ~ 0
+
+            if m_name not in model_data:
+                model_data[m_name] = []
+
+            model_data[m_name].append({
+                'hour':     hour,
+                'ssr':      round(ssr, 4)   if ssr  is not None else None,
+                'crps':     round(crps, 6),
+                'bias':     round(err,  4),
+                'mae':      round(abs_err, 4),
+                'rmse':     round(math.sqrt(err_sq), 4),
+                'spread':   round(std,  4),
+                'mean_val': round(mean, 4),
+                'obs':      round(obs,  4),
+            })
+
+        # ------------------------------------------------------------------
+        # 4. Compute per-model summaries
+        # ------------------------------------------------------------------
+        result_models = {}
+        obs_hours_all = set()
+
+        for m_name, hours_list in model_data.items():
+            n        = len(hours_list)
+            ssrs     = [h['ssr']  for h in hours_list if h['ssr']  is not None]
+            crpss    = [h['crps'] for h in hours_list]
+            biases   = [h['bias'] for h in hours_list]
+            maes     = [h['mae']  for h in hours_list]
+            rmses    = [h['rmse'] for h in hours_list]
+            spreads  = [h['spread'] for h in hours_list]
+            abs_errs = [h['mae']  for h in hours_list]
+
+            mean_ssr  = round(sum(ssrs)  / len(ssrs),  4) if ssrs  else None
+            mean_crps = round(sum(crpss) / n,          4) if crpss else None
+            bias_val  = round(sum(biases) / n,         4) if biases else None
+            mae_val   = round(sum(maes)  / n,          4) if maes  else None
+            rmse_val  = round(math.sqrt(sum(r ** 2 for r in rmses) / n), 4) if rmses else None
+
+            # Spread-skill correlation (spread vs |error|)
+            corr_val = None
+            if len(spreads) >= 2:
+                ns = len(spreads)
+                ms = sum(spreads) / ns
+                me = sum(abs_errs) / ns
+                num = sum((spreads[i] - ms) * (abs_errs[i] - me) for i in range(ns))
+                den = math.sqrt(
+                    sum((s - ms) ** 2 for s in spreads) *
+                    sum((e - me) ** 2 for e in abs_errs)
+                )
+                corr_val = round(num / den, 4) if den > 1e-10 else None
+
+            result_models[m_name] = {
+                'hours':   hours_list,
+                'summary': {
+                    'mean_ssr':     mean_ssr,
+                    'correlation':  corr_val,
+                    'mean_crps':    mean_crps,
+                    'bias':         bias_val,
+                    'mae':          mae_val,
+                    'rmse':         rmse_val,
+                },
+            }
+            obs_hours_all.update(h['hour'] for h in hours_list)
+
+        obs_hours_sorted = sorted(obs_hours_all)
+
+        # Build obs_warning
+        if obs_hours_sorted:
+            n_obs = len(obs_hours_sorted)
+            obs_warning = (
+                f"Observations cover {n_obs} lead times "
+                f"({obs_hours_sorted[0]}h–{obs_hours_sorted[-1]}h). "
+                f"Ingest more data for extended coverage."
+            )
+        else:
+            obs_warning = 'No observations found for this location/variable.'
+
+        print(f"✅ compare/skill: {len(result_models)} models, "
+              f"{len(obs_hours_sorted)} obs hours at ({lat},{lon})")
+        return jsonify({
+            'models':      result_models,
+            'obs_hours':   obs_hours_sorted,
+            'obs_warning': obs_warning,
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"❌ Error in compare/skill: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        return_db_connection(conn)
+
+
+@app.route('/api/compare/spatial-agreement', methods=['POST'])
+def compare_spatial_agreement():
+    """
+    Renders a Cartopy/matplotlib map of model disagreement (STDDEV of ensemble
+    mean across models) for a bounding box and a single forecast hour.
+
+    Request JSON:
+        { models, min_lat, max_lat, min_lon, max_lon, hour, variable }
+    Response:
+        { image: base64_png, hour, n_models, n_points }
+    """
+    body     = request.get_json(force=True)
+    models   = body.get('models', [])
+    min_lat  = float(body.get('min_lat',  25))
+    max_lat  = float(body.get('max_lat',  45))
+    min_lon  = float(body.get('min_lon', -85))
+    max_lon  = float(body.get('max_lon', -65))
+    hour     = int(body.get('hour', 24))
+    variable = body.get('variable', 'precipitation')
+
+    var_name = 'wind_u_10m' if variable == 'wind' else variable
+
+    VAR_UNITS = {
+        'precipitation': 'mm/h',
+        'wind':          'm/s',
+        'wind_u_10m':    'm/s',
+        'wind_v_10m':    'm/s',
+    }
+    unit = VAR_UNITS.get(variable, variable)
+
+    if not models or len(models) < 2:
+        return jsonify({'error': 'At least 2 models required for spatial agreement'}), 400
+
+    conn   = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cursor.execute("""
+            SELECT
+                latitude,
+                longitude,
+                STDDEV(mean_value)          AS disagreement,
+                AVG(mean_value)             AS avg_mean,
+                COUNT(DISTINCT model_name)  AS n_models
+            FROM regridded_forecast
+            WHERE model_name    = ANY(%s)
+              AND variable_name = %s
+              AND forecast_hour = %s
+              AND latitude  BETWEEN %s AND %s
+              AND longitude BETWEEN %s AND %s
+            GROUP BY latitude, longitude
+            HAVING COUNT(DISTINCT model_name) >= 2
+            ORDER BY latitude, longitude
+        """, (models, var_name, hour, min_lat, max_lat, min_lon, max_lon))
+
+        rows = cursor.fetchall()
+        if not rows:
+            return jsonify({'error': 'No overlapping data for selected models/hour/bounds'}), 404
+
+        n_points  = len(rows)
+        # Determine the actual number of models represented
+        n_models  = max(int(r['n_models']) for r in rows)
+
+        lats  = np.array([float(r['latitude'])      for r in rows])
+        lons  = np.array([float(r['longitude'])     for r in rows])
+        disag = np.array([float(r['disagreement'])  for r in rows])
+
+        # ── Build 2-D grid ────────────────────────────────────────────────
+        lats_set = sorted(set(round(float(r['latitude'])  * 2) / 2 for r in rows))
+        lons_set = sorted(set(round(float(r['longitude']) * 2) / 2 for r in rows))
+
+        pt_lookup = {
+            (round(float(r['latitude'])  * 2) / 2,
+             round(float(r['longitude']) * 2) / 2): float(r['disagreement'])
+            for r in rows
+        }
+
+        lat_arr  = np.array(lats_set)
+        lon_arr  = np.array(lons_set)
+        val_grid = np.full((len(lat_arr), len(lon_arr)), np.nan)
+        for i, la in enumerate(lats_set):
+            for j, lo in enumerate(lons_set):
+                v = pt_lookup.get((la, lo))
+                if v is not None:
+                    val_grid[i, j] = v
+        val_masked = np.ma.masked_invalid(val_grid)
+
+        step      = 0.5
+        lat_edges = np.append(lat_arr - step / 2, lat_arr[-1] + step / 2)
+        lon_edges = np.append(lon_arr - step / 2, lon_arr[-1] + step / 2)
+        lon_mesh, lat_mesh = np.meshgrid(lon_edges, lat_edges)
+
+        # ── Colormap & norm ───────────────────────────────────────────────
+        max_disag = float(np.nanmax(disag)) if disag.size > 0 else 1.0
+        cmap = plt.cm.Reds
+        norm = mcolors.Normalize(vmin=0, vmax=max_disag if max_disag > 0 else 1.0)
+
+        # ── Map extent ────────────────────────────────────────────────────
+        lat_range = lat_arr.max() - lat_arr.min()
+        lon_range = lon_arr.max() - lon_arr.min()
+        pad = max(1.5, min(lat_range, lon_range) * 0.12)
+        extent = [
+            lon_arr.min() - pad, lon_arr.max() + pad,
+            lat_arr.min() - pad, lat_arr.max() + pad,
+        ]
+
+        # ── Figure ───────────────────────────────────────────────────────
+        proj = ccrs.PlateCarree()
+        fig  = plt.figure(figsize=(13, 7), dpi=130)
+        ax   = fig.add_subplot(111, projection=proj)
+        ax.set_extent(extent, crs=proj)
+
+        # Geographic features (same order as spatial_metric_plot)
+        ax.add_feature(cfeature.OCEAN.with_scale('50m'),
+                       facecolor='#cce4f5', zorder=0)
+        ax.add_feature(cfeature.LAND.with_scale('50m'),
+                       facecolor='#f2ede4', zorder=0)
+        ax.add_feature(cfeature.LAKES.with_scale('50m'),
+                       facecolor='#cce4f5', edgecolor='#4a7ea5', linewidth=0.4, zorder=1)
+        ax.add_feature(cfeature.RIVERS.with_scale('50m'),
+                       edgecolor='#8ab4cc', linewidth=0.3, zorder=1)
+
+        mesh = ax.pcolormesh(
+            lon_mesh, lat_mesh, val_masked,
+            cmap=cmap, norm=norm,
+            transform=proj, alpha=0.85, zorder=2,
+        )
+
+        ax.add_feature(cfeature.STATES.with_scale('50m'),
+                       linewidth=0.35, edgecolor='#999999', zorder=3)
+        ax.add_feature(cfeature.BORDERS.with_scale('50m'),
+                       linewidth=0.65, edgecolor='#444444', zorder=3)
+        ax.add_feature(cfeature.COASTLINE.with_scale('50m'),
+                       linewidth=0.8,  edgecolor='#1a1a1a', zorder=3)
+
+        gl = ax.gridlines(
+            draw_labels=True, linewidth=0.4, color='gray',
+            alpha=0.55, linestyle='--',
+            x_inline=False, y_inline=False,
+        )
+        gl.top_labels   = False
+        gl.right_labels = False
+        gl.xlabel_style = {'size': 9, 'color': '#333333'}
+        gl.ylabel_style = {'size': 9, 'color': '#333333'}
+
+        cbar = fig.colorbar(mesh, ax=ax, orientation='vertical',
+                            pad=0.025, shrink=0.82, aspect=26)
+        cbar.set_label(
+            f'Ensemble Mean Std Dev across Models ({unit})',
+            fontsize=10, labelpad=10, color='#222222',
+        )
+        cbar.ax.tick_params(labelcolor='#333333')
+
+        VAR_LABELS = {
+            'precipitation': 'Precipitation',
+            'wind':          'Wind Speed',
+            'wind_u_10m':    'Wind (u-component)',
+            'wind_v_10m':    'Wind (v-component)',
+        }
+        var_label = VAR_LABELS.get(variable, variable)
+        ax.set_title(
+            f"Model Disagreement — {var_label} — +{hour}h"
+            f" | {n_models} models | {n_points} pts",
+            fontsize=10.5, fontweight='bold', pad=10, color='#1a1a1a',
+        )
+
+        # WEAVE watermark
+        ax.text(0.995, 0.005, 'WEAVE', transform=ax.transAxes,
+                fontsize=7, color='gray', alpha=0.55, ha='right', va='bottom')
+
+        plt.tight_layout(pad=0.4)
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format='png', dpi=130, bbox_inches='tight',
+                    facecolor='white', edgecolor='none')
+        buf.seek(0)
+        img_b64 = base64.b64encode(buf.read()).decode('utf-8')
+        plt.close(fig)
+
+        print(f"✅ compare/spatial-agreement: {n_points} pts, "
+              f"{n_models} models, +{hour}h, {variable}")
+        return jsonify({
+            'image':    img_b64,
+            'hour':     hour,
+            'n_models': n_models,
+            'n_points': n_points,
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"❌ Error in compare/spatial-agreement: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        return_db_connection(conn)
+
+
 if __name__ == '__main__':
     print("🚀 Flask API Starting...")
     print("=" * 60)
     print("📍 http://localhost:5000")
     print("=" * 60)
     print("Available endpoints:")
-    print("  • GET /api/forecast-data?model=AIFS&variable=precipitation&hour=6&member=mean")
-    print("  • GET /api/wind-data?model=GEFS&hour=12&member=0")
-    print("  • GET /api/point-timeseries?model=AIFS&variable=precipitation&lat=35.0&lon=-75.0")
-    print("  • GET /api/spread-skill?model=AIFS&variable=precipitation&lat=35.0&lon=-75.0")
+    print("  • GET  /api/forecast-data?model=AIFS&variable=precipitation&hour=6&member=mean")
+    print("  • GET  /api/wind-data?model=GEFS&hour=12&member=0")
+    print("  • GET  /api/point-timeseries?model=AIFS&variable=precipitation&lat=35.0&lon=-75.0")
+    print("  • GET  /api/spread-skill?model=AIFS&variable=precipitation&lat=35.0&lon=-75.0")
     print("  • POST /api/spatial-metric-plot  {metric, model, variable, hour, n_hours, points}")
-    print("  • GET /api/models")
-    print("  • GET /api/variables")
-    print("  • GET /api/health")
+    print("  • GET  /api/models")
+    print("  • GET  /api/variables")
+    print("  • GET  /api/health")
+    print("  • POST /api/compare/timeseries  {models, lat, lon, hour_min, hour_max, variable}")
+    print("  • POST /api/compare/skill       {models, lat, lon, hour_min, hour_max, variable}")
+    print("  • POST /api/compare/spatial-agreement  {models, min_lat, max_lat, min_lon, max_lon, hour, variable}")
     print("=" * 60)
     print("✅ Optimized with connection pooling")
     print("🌬️  Wind: speed = √(u² + v²), direction = atan2(u,v)")
     print("📊 Cone of Uncertainty: mean, std, min, max, p10/p25/p75/p90 per hour")
+    print("📊 Multi-model comparison: timeseries, skill scores, spatial agreement")
     print("=" * 60)
 
     app.run(debug=True, host='0.0.0.0', port=5000)

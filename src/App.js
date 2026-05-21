@@ -27,6 +27,7 @@ import { AboutModal }         from './components/AboutModal';
 import { SelectionToolbar }   from './components/SelectionToolbar';
 import { MetricPanel }        from './components/MetricPanel';
 import { AnalysisTab }        from './components/AnalysisTab';
+import { ComparisonTab }      from './components/ComparisonTab';
 import { IDWLegend }          from './components/legends/IDWLegend';
 import { BivariateLegend }    from './components/legends/BivariateLegend';
 import { VSUPFanLegend }      from './components/legends/VSUPFanLegend';
@@ -467,7 +468,7 @@ function App() {
       {/* Tab bar */}
       <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: TAB_BAR_H, background: 'rgba(22,33,44,0.98)', display: 'flex', alignItems: 'center', zIndex: 1100, boxShadow: '0 2px 8px rgba(0,0,0,0.35)', paddingLeft: '16px', gap: '4px' }}>
         <span style={{ color: 'white', fontWeight: '700', fontSize: '16px', marginRight: '16px', letterSpacing: '1px' }}>🌧️ WEAVE</span>
-        {[['visualization','🗺 Visualization'], ['analysis','📊 Analysis']].map(([id, label]) => (
+        {[['visualization','🗺 Visualization'], ['analysis','📊 Analysis'], ['comparison','⚖️ Comparison']].map(([id, label]) => (
           <button key={id} onClick={() => setActiveTab(id)}
             style={{ padding: '6px 22px', fontSize: '13px', fontWeight: '600', border: 'none', borderRadius: '6px', cursor: 'pointer', transition: 'all 0.2s', background: activeTab === id ? 'rgba(255,255,255,0.15)' : 'transparent', color: activeTab === id ? 'white' : 'rgba(255,255,255,0.45)', borderBottom: activeTab === id ? '2px solid #3498db' : '2px solid transparent' }}>
             {label}
@@ -621,6 +622,17 @@ function App() {
           spatialData={spatialData} metricHour={metricHour}
           analysisPlotLoading={analysisPlotLoading} analysisPlotUrl={analysisPlotUrl}
           analysisSpatialCanvasRef={analysisSpatialCanvasRef}
+          onCompare={() => setActiveTab('comparison')}
+        />
+      </div>
+
+      {/* ══ COMPARISON TAB ══ */}
+      <div style={{ display: activeTab === 'comparison' ? 'flex' : 'none', position: 'absolute', top: TAB_BAR_H, left: 0, right: 0, bottom: 0, background: '#0f1923', flexDirection: 'column', overflow: 'hidden' }}>
+        <ComparisonTab
+          defaultLocation={clickedPoint}
+          defaultHour={selectedHour}
+          selectedVariable={selectedVariable}
+          onJumpToComparison={(lat, lon) => setActiveTab('comparison')}
         />
       </div>
 

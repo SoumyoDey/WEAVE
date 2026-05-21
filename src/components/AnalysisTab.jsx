@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   AreaChart, Area, BarChart, Bar, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip,
@@ -31,7 +31,55 @@ export function AnalysisTab({
   spatialData, metricHour,
   analysisPlotLoading, analysisPlotUrl,
   analysisSpatialCanvasRef,
+  onCompare,
 }) {
+  const [shareState, setShareState] = useState('idle'); // 'idle' | 'copied'
+
+  const handleDownload = () => {
+    if (!analysisPlotUrl) return;
+    const label = spatialData?.metric === 'ssr'
+      ? `ssr-h${spatialData.hour ?? metricHour}`
+      : `corr-${spatialData?.n_hours ?? ''}leads`;
+    const a = document.createElement('a');
+    a.href = analysisPlotUrl;
+    a.download = `WEAVE-${currentModel.name}-${label}.png`;
+    a.click();
+  };
+
+  const handleShare = async () => {
+    if (!analysisPlotUrl) return;
+    // 1. Try native Web Share API (mobile / Electron)
+    try {
+      const res  = await fetch(analysisPlotUrl);
+      const blob = await res.blob();
+      const file = new File([blob], 'weave-spatial-metric.png', { type: 'image/png' });
+      if (navigator.share && navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ title: 'WEAVE — Spatial Metric Map', files: [file] });
+        return;
+      }
+    } catch {}
+    // 2. Copy image to clipboard (desktop Chrome / Edge)
+    try {
+      const res  = await fetch(analysisPlotUrl);
+      const blob = await res.blob();
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      setShareState('copied');
+      setTimeout(() => setShareState('idle'), 2500);
+      return;
+    } catch {}
+    // 3. Fallback — trigger download
+    handleDownload();
+  };
+
+  const btnBase = {
+    display: 'flex', alignItems: 'center', gap: '5px',
+    fontSize: '11px', fontWeight: '600',
+    padding: '4px 10px', borderRadius: '8px', cursor: 'pointer',
+    border: '1px solid rgba(255,255,255,0.12)',
+    background: 'rgba(255,255,255,0.06)',
+    color: 'rgba(255,255,255,0.7)',
+  };
+
   const ssrBarColor = (ssr) => {
     if (ssr === null) return '#555';
     if (ssr >= 0.8 && ssr <= 1.2) return '#2ecc71';
@@ -267,11 +315,11 @@ export function AnalysisTab({
         {/* ── Section 3: Spatial Metric Map ── */}
         {spatialData?.points?.length > 0 && (
           <div style={{ marginTop: clickedPoint ? '32px' : '0', marginBottom: '16px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
               <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: '14px', fontWeight: '600', margin: 0, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                 🗺️ Spatial Metric Map
               </h3>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)' }}>
                   {spatialData.metric === 'ssr'
                     ? `SSR · +${spatialData.hour ?? metricHour}h · ${spatialData.points.length} pts`
@@ -280,6 +328,24 @@ export function AnalysisTab({
                 <span style={{ fontSize: '10px', color: 'rgba(52,152,219,0.7)', background: 'rgba(52,152,219,0.12)', padding: '2px 8px', borderRadius: '10px', border: '1px solid rgba(52,152,219,0.25)' }}>
                   {currentModel.name}
                 </span>
+                {/* Export actions — only shown when image is ready */}
+                {analysisPlotUrl && !analysisPlotLoading && (
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button onClick={handleDownload} style={btnBase} title="Download as PNG">
+                      ⬇ Download
+                    </button>
+                    <button
+                      onClick={handleShare}
+                      style={{
+                        ...btnBase,
+                        ...(shareState === 'copied' ? { background: 'rgba(46,204,113,0.15)', borderColor: 'rgba(46,204,113,0.4)', color: '#2ecc71' } : {}),
+                      }}
+                      title="Copy image to clipboard"
+                    >
+                      {shareState === 'copied' ? '✓ Copied!' : '⎘ Share'}
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -295,7 +361,7 @@ export function AnalysisTab({
                   ref={analysisSpatialCanvasRef}
                   src={analysisPlotUrl}
                   alt="Spatial metric map"
-                  style={{ width: '100%', display: 'block' }}
+                  style={{ maxWidth: '100%', maxHeight: '380px', width: 'auto', display: 'block', margin: '0 auto' }}
                 />
               )}
               {!analysisPlotLoading && !analysisPlotUrl && (
@@ -304,6 +370,18 @@ export function AnalysisTab({
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {/* ── Compare shortcut ── */}
+        {clickedPoint && (
+          <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', padding: '14px 0 4px', display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              onClick={onCompare}
+              style={{ background: 'rgba(52,152,219,0.12)', border: '1px solid rgba(52,152,219,0.3)', color: 'rgba(52,152,219,0.9)', fontSize: '12px', fontWeight: '600', padding: '6px 14px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              ⚖️ Compare models at this point →
+            </button>
           </div>
         )}
 
