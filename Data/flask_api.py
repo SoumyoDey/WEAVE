@@ -935,6 +935,18 @@ def health_check():
         return_db_connection(conn)
 
 
+# ── Model accumulation periods (hours) ───────────────────────────────────────
+# AIFS outputs 6-hourly accumulated precipitation (mm/6h)
+# GEFS outputs 3-hourly accumulated precipitation (mm/3h)
+# UKMO outputs hourly instantaneous values (mm/h)
+# All skill metrics are computed in mm/h (rate) by dividing mean/std by this
+# factor and averaging observations over the same accumulation window.
+MODEL_ACCUM_HOURS = {
+    'AIFS': 6,
+    'GEFS': 3,
+    'UKMO': 1,
+}
+
 # ── Comparison endpoints (multi-model, regridded_forecast / regridded_observation) ──
 
 
@@ -1079,10 +1091,11 @@ def compare_skill():
                             'obs_warning': 'No forecast data found for selected parameters.'})
 
         # ------------------------------------------------------------------
-        # 2. Fetch observations that fall within the valid-time window
+        # 2. Fetch observations covering the full accumulation window
         # ------------------------------------------------------------------
-        # Determine the range of valid times across all models/hours
-        from datetime import datetime
+        # For models with accumulation > 1h (AIFS=6h, GEFS=3h) we need obs
+        # at multiple hourly timestamps to compute the average rate in that
+        # window.  Expand the obs query backward by max(accum_h) - 1 hours.
         valid_times_set = set()
         for row in fcst_rows:
             vt = row['initialization_time'] + timedelta(hours=row['forecast_hour'])
@@ -1092,8 +1105,9 @@ def compare_skill():
             return jsonify({'models': {}, 'obs_hours': [],
                             'obs_warning': 'No observations found for this location/variable.'})
 
-        min_vt = min(valid_times_set)
-        max_vt = max(valid_times_set)
+        max_accum = max(MODEL_ACCUM_HOURS.get(m, 1) for m in models)
+        min_obs_t = min(valid_times_set) - timedelta(hours=max_accum - 1)
+        max_obs_t = max(valid_times_set)
 
         cursor.execute("""
             SELECT obs_time, AVG(value) AS obs_val
@@ -1106,64 +1120,91 @@ def compare_skill():
             GROUP BY obs_time
             ORDER BY obs_time
         """, (
-            obs_var, obs_src, min_vt, max_vt,
+            obs_var, obs_src, min_obs_t, max_obs_t,
             lat - 0.26, lat + 0.26,
             lon - 0.26, lon + 0.26,
         ))
-        obs_rows = cursor.fetchall()
-        obs_lookup = {row['obs_time']: float(row['obs_val']) for row in obs_rows}
+        obs_rows     = cursor.fetchall()
+        # keyed by obs_time for O(1) lookup
+        obs_by_time  = {row['obs_time']: float(row['obs_val']) for row in obs_rows}
 
-        if not obs_lookup:
+        if not obs_by_time:
             return jsonify({'models': {}, 'obs_hours': [],
                             'obs_warning': 'No observations found for this location/variable.'})
 
         # ------------------------------------------------------------------
-        # 3. Match forecasts to observations and compute metrics per model
+        # 3. Match forecasts to observations and compute rate-normalised metrics
         # ------------------------------------------------------------------
+        # All metrics are computed in mm/h so cross-model comparisons are fair:
+        #   mean_rate = mean_value / accum_h
+        #   std_rate  = std_dev    / accum_h
+        #   obs_rate  = average of hourly IMERG values in the accum window (mm/h)
+        #
+        # SSR is scale-invariant (accum_h cancels), so the value is identical
+        # to computing on raw totals.  CRPS, bias, MAE, RMSE all scale with
+        # the unit, so normalising to mm/h makes them cross-model comparable.
         model_data = {}  # model_name -> list of per-hour dicts
 
         for row in fcst_rows:
-            m_name = row['model_name']
-            hour   = row['forecast_hour']
-            mean   = float(row['mean_value'])
-            std    = float(row['std_dev'])
-            vt     = row['initialization_time'] + timedelta(hours=hour)
+            m_name  = row['model_name']
+            hour    = row['forecast_hour']
+            mean    = float(row['mean_value'])
+            std     = float(row['std_dev'])
+            vt      = row['initialization_time'] + timedelta(hours=hour)
+            accum_h = MODEL_ACCUM_HOURS.get(m_name, 1)
 
-            obs = obs_lookup.get(vt)
-            if obs is None:
+            # Collect hourly obs in the half-open window (vt - accum_h, vt]
+            # e.g. AIFS +6h  →  obs at vt-5h, vt-4h, vt-3h, vt-2h, vt-1h, vt
+            obs_window = []
+            for dh in range(accum_h - 1, -1, -1):
+                t = vt - timedelta(hours=dh)
+                if t in obs_by_time:
+                    obs_window.append(obs_by_time[t])
+
+            if not obs_window:
                 continue
 
-            err     = mean - obs
+            obs_rate  = sum(obs_window) / len(obs_window)  # avg mm/h in window
+            mean_rate = mean / accum_h                      # mm/h
+            std_rate  = std  / accum_h                      # mm/h
+
+            err     = mean_rate - obs_rate
             abs_err = abs(err)
+            err_sq  = err ** 2
 
-            # SSR
-            err_sq = err ** 2
-            ssr    = round(std ** 2 / err_sq, 6) if err_sq > 1e-10 else None
+            # SSR (scale-invariant — same result as with raw totals)
+            ssr = round(std_rate ** 2 / err_sq, 6) if err_sq > 1e-10 else None
 
-            # Gaussian CRPS
-            if std > 1e-10:
-                z    = (obs - mean) / std
-                crps = float(std * (
+            # Gaussian CRPS (in mm/h — comparable across models)
+            if std_rate > 1e-10:
+                z    = (obs_rate - mean_rate) / std_rate
+                crps = float(std_rate * (
                     z * (2.0 * scipy.stats.norm.cdf(z) - 1.0)
                     + 2.0 * scipy.stats.norm.pdf(z)
                     - 1.0 / math.sqrt(math.pi)
                 ))
             else:
-                crps = abs_err  # degenerate: std ~ 0
+                crps = abs_err
 
             if m_name not in model_data:
                 model_data[m_name] = []
 
             model_data[m_name].append({
-                'hour':     hour,
-                'ssr':      round(ssr, 4)   if ssr  is not None else None,
-                'crps':     round(crps, 6),
-                'bias':     round(err,  4),
-                'mae':      round(abs_err, 4),
-                'rmse':     round(math.sqrt(err_sq), 4),
-                'spread':   round(std,  4),
-                'mean_val': round(mean, 4),
-                'obs':      round(obs,  4),
+                'hour':      hour,
+                'ssr':       round(ssr, 4)        if ssr is not None else None,
+                'crps':      round(crps, 6),
+                'bias':      round(err,  4),
+                'mae':       round(abs_err, 4),
+                'rmse':      round(math.sqrt(err_sq), 4),
+                # spread and obs in mm/h for display
+                'spread':    round(std_rate,  4),
+                'mean_val':  round(mean_rate, 4),
+                'obs':       round(obs_rate,  4),
+                # raw stored values for reference
+                'raw_mean':  round(mean, 4),
+                'raw_std':   round(std,  4),
+                'accum_h':   accum_h,
+                'n_obs_in_window': len(obs_window),
             })
 
         # ------------------------------------------------------------------
@@ -1228,11 +1269,15 @@ def compare_skill():
             obs_warning = 'No observations found for this location/variable.'
 
         print(f"✅ compare/skill: {len(result_models)} models, "
-              f"{len(obs_hours_sorted)} obs hours at ({lat},{lon})")
+              f"{len(obs_hours_sorted)} obs hours at ({lat},{lon}), "
+              f"accum_hours={MODEL_ACCUM_HOURS}")
         return jsonify({
-            'models':      result_models,
-            'obs_hours':   obs_hours_sorted,
-            'obs_warning': obs_warning,
+            'models':             result_models,
+            'obs_hours':          obs_hours_sorted,
+            'obs_warning':        obs_warning,
+            # Metadata so the frontend can display the conversion notes
+            'model_accum_hours':  {m: MODEL_ACCUM_HOURS.get(m, 1) for m in models},
+            'units':              'mm/h',  # all metrics are in mm/h after normalisation
         })
 
     except Exception as e:

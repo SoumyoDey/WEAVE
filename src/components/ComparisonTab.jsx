@@ -7,7 +7,15 @@ import {
 import { fetchComparisonTimeseries, fetchComparisonSkill, fetchSpatialAgreement } from '../api/comparisonApi';
 
 const MODEL_COLORS = { AIFS: '#3498db', GEFS: '#e74c3c', UKMO: '#2ecc71' };
-const MODEL_NAMES = ['AIFS', 'GEFS', 'UKMO'];
+const MODEL_NAMES  = ['AIFS', 'GEFS', 'UKMO'];
+
+// Temporal accumulation period for each model's precipitation output.
+// Values are divided by this factor to convert to mm/h rate before display
+// and before computing skill metrics, so cross-model comparisons are fair.
+//   AIFS → 6-hour accumulated totals (mm/6h)  ÷ 6 → mm/h
+//   GEFS → 3-hour accumulated totals (mm/3h)  ÷ 3 → mm/h
+//   UKMO → Hourly instantaneous values (mm/h) ÷ 1 → mm/h (unchanged)
+const MODEL_ACCUM_HOURS = { AIFS: 6, GEFS: 3, UKMO: 1 };
 
 // ── Shared style tokens ──────────────────────────────────────────────────────
 const CARD = {
@@ -78,41 +86,49 @@ function corrColor(c) {
 }
 
 // ── Custom Tooltip for Forecast Comparison chart ─────────────────────────────
-// Always shows raw (un-normalised) values so the tooltip is meaningful even
-// when the chart is in normalised mode.
-function ForecastTooltip({ active, payload, label, selectedModels, normalized, yAxisUnit }) {
+// Always reads raw values from the data row so the tooltip shows actual
+// stored values (mm/6h, mm/3h, mm/h) alongside the converted mm/h rate.
+function ForecastTooltip({ active, payload, label, selectedModels, normalized }) {
   if (!active || !payload || !payload.length) return null;
-  // Full data row is available on any payload entry's .payload
   const row = payload[0]?.payload || {};
 
   const means = selectedModels
     .map(m => {
-      // Raw values are always stored on the row regardless of normalisation
       const rawMean = row[`${m}_raw_mean`];
       const rawStd  = row[`${m}_raw_std`];
       if (rawMean == null) return null;
-      return { model: m, mean: rawMean, spread: rawStd };
+      const accumH  = MODEL_ACCUM_HOURS[m] || 1;
+      const rateMean = rawMean / accumH;
+      const rateStd  = rawStd  != null ? rawStd  / accumH : null;
+      return { model: m, rateMean, rateStd, rawMean, rawStd, accumH };
     })
     .filter(Boolean);
 
   if (!means.length) return null;
 
   return (
-    <div style={{ ...TOOLTIP_STYLE, padding: '10px 14px' }}>
-      <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: '11px', marginBottom: '6px' }}>
-        +{label}h forecast{normalized ? <span style={{ color: '#f39c12' }}> · normalised view</span> : ''}
+    <div style={{ ...TOOLTIP_STYLE, padding: '10px 14px', minWidth: '210px' }}>
+      <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: '11px', marginBottom: '8px' }}>
+        +{label}h forecast
+        {normalized && <span style={{ color: '#f39c12', marginLeft: '6px' }}>· per-model normalised</span>}
       </div>
-      {means.map(({ model, mean, spread }) => (
-        <div key={model} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '3px' }}>
-          <span style={{ display: 'inline-block', width: '10px', height: '10px', borderRadius: '2px', background: MODEL_COLORS[model] }} />
-          <span style={{ color: 'rgba(255,255,255,0.85)', fontWeight: '600' }}>{model}</span>
-          <span style={{ color: 'rgba(255,255,255,0.7)' }}>
-            {Number(mean).toFixed(3)}
-            {spread != null && (
-              <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '11px' }}> ±{Number(spread).toFixed(3)}</span>
+      {means.map(({ model, rateMean, rateStd, rawMean, accumH }) => (
+        <div key={model} style={{ marginBottom: '6px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ display: 'inline-block', width: '10px', height: '10px', borderRadius: '2px', background: MODEL_COLORS[model] }} />
+            <span style={{ color: 'rgba(255,255,255,0.85)', fontWeight: '600', minWidth: '44px' }}>{model}</span>
+            <span style={{ color: 'rgba(255,255,255,0.85)', fontWeight: '700' }}>
+              {rateMean.toFixed(3)}
+              <span style={{ color: 'rgba(255,255,255,0.5)', fontWeight: '400', fontSize: '10px', marginLeft: '2px' }}>mm/h</span>
+            </span>
+            {rateStd != null && (
+              <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '11px' }}>±{rateStd.toFixed(3)}</span>
             )}
-            <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '10px', marginLeft: '4px' }}>{yAxisUnit}</span>
-          </span>
+          </div>
+          {/* Raw stored value for reference */}
+          <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '10px', marginLeft: '18px', marginTop: '1px' }}>
+            raw: {rawMean.toFixed(3)} mm/{accumH}h
+          </div>
         </div>
       ))}
     </div>
@@ -120,19 +136,24 @@ function ForecastTooltip({ active, payload, label, selectedModels, normalized, y
 }
 
 // ── Build merged timeseries dataset ─────────────────────────────────────────
-// When normalize=true every model is scaled by its own peak (mean+std) so all
-// curves fit in [0,1] even if their absolute magnitudes differ dramatically.
+// Step 1 (always): divide each model's values by MODEL_ACCUM_HOURS[m] to
+//   convert to mm/h rate. This is the scientific normalisation that makes
+//   AIFS (6h accum), GEFS (3h accum) and UKMO (hourly) directly comparable.
+// Step 2 (optional, normalize=true): further divide by each model's peak
+//   rate so all curves sit in [0, 1]. Useful when models genuinely forecast
+//   different magnitudes even after the unit conversion.
 // Raw values are always stored alongside for the tooltip.
 function buildMergedTimeseries(tsData, selectedModels, normalize = false) {
   if (!tsData) return [];
 
-  // Per-model scale factor (peak hi value across all hours)
-  const modelScales = {};
+  // Per-model peak RATE (after accum conversion) for optional normalisation
+  const modelPeaks = {};
   if (normalize) {
     selectedModels.forEach(m => {
+      const ah = MODEL_ACCUM_HOURS[m] || 1;
       if (tsData[m]) {
-        const peak = Math.max(...tsData[m].map(r => (r.mean || 0) + (r.std || 0)));
-        modelScales[m] = peak > 1e-9 ? peak : 1;
+        const peak = Math.max(...tsData[m].map(r => ((r.mean || 0) + (r.std || 0)) / ah));
+        modelPeaks[m] = peak > 1e-9 ? peak : 1;
       }
     });
   }
@@ -146,15 +167,17 @@ function buildMergedTimeseries(tsData, selectedModels, normalize = false) {
   return hours.map(hour => {
     const row = { hour };
     selectedModels.forEach(m => {
-      const entry = tsData[m]?.find(r => r.hour === hour);
+      const entry  = tsData[m]?.find(r => r.hour === hour);
       if (entry) {
-        const scale = normalize ? (modelScales[m] || 1) : 1;
-        const mean  = entry.mean != null ? entry.mean : null;
-        const std   = entry.std  != null ? entry.std  : 0;
-        row[`${m}_mean`]     = mean != null ? mean / scale : null;
-        row[`${m}_hi`]       = mean != null ? (mean + std) / scale : null;
-        row[`${m}_lo`]       = mean != null ? Math.max(0, (mean - std) / scale) : null;
-        // Raw values always stored so tooltip can show original units
+        const ah   = MODEL_ACCUM_HOURS[m] || 1;
+        const norm = normalize ? (modelPeaks[m] || 1) : 1;
+        const mean = entry.mean != null ? entry.mean : null;
+        const std  = entry.std  != null ? entry.std  : 0;
+        // Display values (mm/h, optionally normalised)
+        row[`${m}_mean`] = mean != null ? (mean / ah) / norm : null;
+        row[`${m}_hi`]   = mean != null ? ((mean + std) / ah) / norm : null;
+        row[`${m}_lo`]   = mean != null ? Math.max(0, (mean - std) / ah) / norm : null;
+        // Raw values always kept for tooltip display
         row[`${m}_raw_mean`] = mean;
         row[`${m}_raw_std`]  = entry.std;
       }
@@ -163,11 +186,17 @@ function buildMergedTimeseries(tsData, selectedModels, normalize = false) {
   });
 }
 
-// Returns the ratio of max model peak to min model peak; used to warn about
-// scale mismatch (e.g. AIFS 14 mm/6h vs UKMO 0.3 mm/6h → ratio ≈ 47)
+// Computes ratio of max-to-min peak RATE across models.
+// After the accum conversion this should be small; a large ratio still
+// indicates a genuine magnitude difference (not just a units issue).
 function computeScaleRatio(tsData, models) {
   const peaks = models
-    .map(m => tsData[m] ? Math.max(...tsData[m].map(r => (r.mean || 0) + (r.std || 0))) : 0)
+    .map(m => {
+      const ah = MODEL_ACCUM_HOURS[m] || 1;
+      return tsData[m]
+        ? Math.max(...tsData[m].map(r => ((r.mean || 0) + (r.std || 0)) / ah))
+        : 0;
+    })
     .filter(v => v > 0);
   if (peaks.length < 2) return 1;
   return Math.max(...peaks) / Math.min(...peaks);
@@ -323,10 +352,12 @@ export function ComparisonTab({
 
   // Derived chart data
   const mergedTs = buildMergedTimeseries(tsData, selectedModels, normalizeScales);
-  const yAxisUnit = selectedVariable === 'wind' ? 'm/s' : 'mm/6h';
+  // For precipitation, all display values are in mm/h (rate) after accum conversion
+  const yAxisUnit     = selectedVariable === 'wind' ? 'm/s' : 'mm/h';
   const thresholdUnit = selectedVariable === 'wind' ? 'm/s' : 'mm/6h';
+  // After the accum conversion the ratio should be much smaller than the raw ratio
   const scaleRatio = tsData ? computeScaleRatio(tsData, selectedModels) : 1;
-  const hasScaleMismatch = scaleRatio > 5; // >5× difference → warn
+  const hasScaleMismatch = scaleRatio > 5; // still >5× after unit fix → warn
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: 1 }}>
@@ -543,7 +574,33 @@ export function ComparisonTab({
         {/* ── Section 3: Forecast Comparison ── */}
         {hasRun && (
           <div style={{ marginBottom: '28px' }}>
-            <h3 style={SECTION_TITLE}>Forecast Comparison</h3>
+            <h3 style={{ ...SECTION_TITLE, marginBottom: '6px' }}>Forecast Comparison</h3>
+            {/* Accumulation conversion note — always visible for precipitation */}
+            {selectedVariable !== 'wind' && (
+              <div style={{
+                display: 'flex', gap: '10px', flexWrap: 'wrap',
+                marginBottom: '12px', alignItems: 'center',
+              }}>
+                <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.25)' }}>
+                  Converted to mm/h —
+                </span>
+                {selectedModels.map(m => {
+                  const ah = MODEL_ACCUM_HOURS[m] || 1;
+                  return (
+                    <span key={m} style={{
+                      fontSize: '11px', fontWeight: '600',
+                      color: MODEL_COLORS[m],
+                      opacity: 0.75,
+                    }}>
+                      {m} {ah > 1 ? `÷${ah}` : '(native)'}
+                    </span>
+                  );
+                })}
+                <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.18)', marginLeft: '4px' }}>
+                  Hover for raw values
+                </span>
+              </div>
+            )}
 
             {tsLoading && <Spinner />}
 
@@ -589,12 +646,12 @@ export function ComparisonTab({
                 {/* Legend row */}
                 <div style={{ display: 'flex', gap: '12px', marginBottom: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
                   {selectedModels.map(m => {
+                    const ah        = MODEL_ACCUM_HOURS[m] || 1;
                     const modelRows = tsData[m];
-                    const lastRow = modelRows && modelRows.length > 0
-                      ? modelRows[modelRows.length - 1]
-                      : null;
-                    const latestMean = lastRow ? lastRow.mean : null;
-                    const color = MODEL_COLORS[m];
+                    const lastRow   = modelRows?.length > 0 ? modelRows[modelRows.length - 1] : null;
+                    // Show the rate value (mm/h) in the legend chip
+                    const rateValue = lastRow?.mean != null ? lastRow.mean / ah : null;
+                    const color     = MODEL_COLORS[m];
                     return (
                       <div key={m} style={{
                         display: 'flex', alignItems: 'center', gap: '7px',
@@ -605,9 +662,9 @@ export function ComparisonTab({
                       }}>
                         <span style={{ display: 'inline-block', width: '12px', height: '3px', background: color, borderRadius: '2px' }} />
                         <span style={{ color: 'rgba(255,255,255,0.85)', fontSize: '12px', fontWeight: '600' }}>{m}</span>
-                        {latestMean != null && (
+                        {rateValue != null && (
                           <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: '11px' }}>
-                            {latestMean.toFixed(3)} {yAxisUnit}
+                            {rateValue.toFixed(3)} {yAxisUnit}
                           </span>
                         )}
                       </div>
@@ -732,7 +789,14 @@ export function ComparisonTab({
         {/* ── Section 4: Skill Verification ── */}
         {hasRun && (
           <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '24px', marginBottom: '28px' }}>
-            <h3 style={SECTION_TITLE}>Skill Verification</h3>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', marginBottom: '14px' }}>
+              <h3 style={{ ...SECTION_TITLE, margin: 0 }}>Skill Verification</h3>
+              {selectedVariable !== 'wind' && (
+                <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.25)', letterSpacing: '0.04em' }}>
+                  Metrics in mm/h · accumulation window matched per model
+                </span>
+              )}
+            </div>
 
             {skillLoading && <Spinner />}
 
