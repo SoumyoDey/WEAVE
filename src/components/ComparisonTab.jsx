@@ -78,34 +78,40 @@ function corrColor(c) {
 }
 
 // ── Custom Tooltip for Forecast Comparison chart ─────────────────────────────
-function ForecastTooltip({ active, payload, label, selectedModels }) {
+// Always shows raw (un-normalised) values so the tooltip is meaningful even
+// when the chart is in normalised mode.
+function ForecastTooltip({ active, payload, label, selectedModels, normalized, yAxisUnit }) {
   if (!active || !payload || !payload.length) return null;
+  // Full data row is available on any payload entry's .payload
+  const row = payload[0]?.payload || {};
+
   const means = selectedModels
     .map(m => {
-      const entry = payload.find(p => p.dataKey === `${m}_mean`);
-      const hiEntry = payload.find(p => p.dataKey === `${m}_hi`);
-      const loEntry = payload.find(p => p.dataKey === `${m}_lo`);
-      if (!entry) return null;
-      const mean = entry.value;
-      const hi = hiEntry ? hiEntry.value : null;
-      const lo = loEntry ? loEntry.value : null;
-      const spread = (hi != null && lo != null) ? ((hi - lo) / 2).toFixed(3) : null;
-      return { model: m, mean, spread };
+      // Raw values are always stored on the row regardless of normalisation
+      const rawMean = row[`${m}_raw_mean`];
+      const rawStd  = row[`${m}_raw_std`];
+      if (rawMean == null) return null;
+      return { model: m, mean: rawMean, spread: rawStd };
     })
     .filter(Boolean);
+
+  if (!means.length) return null;
 
   return (
     <div style={{ ...TOOLTIP_STYLE, padding: '10px 14px' }}>
       <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: '11px', marginBottom: '6px' }}>
-        +{label}h forecast
+        +{label}h forecast{normalized ? <span style={{ color: '#f39c12' }}> · normalised view</span> : ''}
       </div>
       {means.map(({ model, mean, spread }) => (
         <div key={model} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '3px' }}>
           <span style={{ display: 'inline-block', width: '10px', height: '10px', borderRadius: '2px', background: MODEL_COLORS[model] }} />
           <span style={{ color: 'rgba(255,255,255,0.85)', fontWeight: '600' }}>{model}</span>
           <span style={{ color: 'rgba(255,255,255,0.7)' }}>
-            {mean != null ? Number(mean).toFixed(3) : 'N/A'}
-            {spread != null && <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '11px' }}> ±{spread}</span>}
+            {Number(mean).toFixed(3)}
+            {spread != null && (
+              <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '11px' }}> ±{Number(spread).toFixed(3)}</span>
+            )}
+            <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '10px', marginLeft: '4px' }}>{yAxisUnit}</span>
           </span>
         </div>
       ))}
@@ -114,8 +120,23 @@ function ForecastTooltip({ active, payload, label, selectedModels }) {
 }
 
 // ── Build merged timeseries dataset ─────────────────────────────────────────
-function buildMergedTimeseries(tsData, selectedModels) {
+// When normalize=true every model is scaled by its own peak (mean+std) so all
+// curves fit in [0,1] even if their absolute magnitudes differ dramatically.
+// Raw values are always stored alongside for the tooltip.
+function buildMergedTimeseries(tsData, selectedModels, normalize = false) {
   if (!tsData) return [];
+
+  // Per-model scale factor (peak hi value across all hours)
+  const modelScales = {};
+  if (normalize) {
+    selectedModels.forEach(m => {
+      if (tsData[m]) {
+        const peak = Math.max(...tsData[m].map(r => (r.mean || 0) + (r.std || 0)));
+        modelScales[m] = peak > 1e-9 ? peak : 1;
+      }
+    });
+  }
+
   const hourSet = new Set();
   selectedModels.forEach(m => {
     if (tsData[m]) tsData[m].forEach(row => hourSet.add(row.hour));
@@ -127,13 +148,29 @@ function buildMergedTimeseries(tsData, selectedModels) {
     selectedModels.forEach(m => {
       const entry = tsData[m]?.find(r => r.hour === hour);
       if (entry) {
-        row[`${m}_mean`] = entry.mean;
-        row[`${m}_hi`] = entry.mean + entry.std;
-        row[`${m}_lo`] = Math.max(0, entry.mean - entry.std);
+        const scale = normalize ? (modelScales[m] || 1) : 1;
+        const mean  = entry.mean != null ? entry.mean : null;
+        const std   = entry.std  != null ? entry.std  : 0;
+        row[`${m}_mean`]     = mean != null ? mean / scale : null;
+        row[`${m}_hi`]       = mean != null ? (mean + std) / scale : null;
+        row[`${m}_lo`]       = mean != null ? Math.max(0, (mean - std) / scale) : null;
+        // Raw values always stored so tooltip can show original units
+        row[`${m}_raw_mean`] = mean;
+        row[`${m}_raw_std`]  = entry.std;
       }
     });
     return row;
   });
+}
+
+// Returns the ratio of max model peak to min model peak; used to warn about
+// scale mismatch (e.g. AIFS 14 mm/6h vs UKMO 0.3 mm/6h → ratio ≈ 47)
+function computeScaleRatio(tsData, models) {
+  const peaks = models
+    .map(m => tsData[m] ? Math.max(...tsData[m].map(r => (r.mean || 0) + (r.std || 0))) : 0)
+    .filter(v => v > 0);
+  if (peaks.length < 2) return 1;
+  return Math.max(...peaks) / Math.min(...peaks);
 }
 
 // ── Main component ───────────────────────────────────────────────────────────
@@ -152,6 +189,7 @@ export function ComparisonTab({
   const [hourMax, setHourMax] = useState(168);
   const [spatialHour, setSpatialHour] = useState(defaultHour || 6);
   const [showSpreadBands, setShowSpreadBands] = useState(true);
+  const [normalizeScales, setNormalizeScales] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [threshold, setThreshold] = useState(25);
   const [fssWindow, setFssWindow] = useState(5);
@@ -284,9 +322,11 @@ export function ComparisonTab({
   };
 
   // Derived chart data
-  const mergedTs = buildMergedTimeseries(tsData, selectedModels);
+  const mergedTs = buildMergedTimeseries(tsData, selectedModels, normalizeScales);
   const yAxisUnit = selectedVariable === 'wind' ? 'm/s' : 'mm/6h';
   const thresholdUnit = selectedVariable === 'wind' ? 'm/s' : 'mm/6h';
+  const scaleRatio = tsData ? computeScaleRatio(tsData, selectedModels) : 1;
+  const hasScaleMismatch = scaleRatio > 5; // >5× difference → warn
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: 1 }}>
@@ -509,6 +549,43 @@ export function ComparisonTab({
 
             {!tsLoading && tsData && (
               <>
+                {/* Scale mismatch warning banner */}
+                {hasScaleMismatch && !normalizeScales && (
+                  <div style={{
+                    background: 'rgba(243,156,18,0.08)',
+                    border: '1px solid rgba(243,156,18,0.25)',
+                    borderRadius: '8px',
+                    padding: '9px 14px',
+                    marginBottom: '12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '12px',
+                    flexWrap: 'wrap',
+                  }}>
+                    <span style={{ color: '#f39c12', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      ⚠ Models differ by <strong>{scaleRatio.toFixed(0)}×</strong> in magnitude — one or more lines may be invisible.
+                      Tooltip hover still shows exact values.
+                    </span>
+                    <button
+                      onClick={() => setNormalizeScales(true)}
+                      style={{
+                        background: 'rgba(243,156,18,0.15)',
+                        border: '1px solid rgba(243,156,18,0.4)',
+                        borderRadius: '6px',
+                        color: '#f39c12',
+                        fontSize: '12px',
+                        fontWeight: '600',
+                        padding: '4px 12px',
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      Enable normalise
+                    </button>
+                  </div>
+                )}
+
                 {/* Legend row */}
                 <div style={{ display: 'flex', gap: '12px', marginBottom: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
                   {selectedModels.map(m => {
@@ -537,20 +614,27 @@ export function ComparisonTab({
                     );
                   })}
 
-                  {/* Spread bands toggle */}
-                  <label style={{
-                    display: 'flex', alignItems: 'center', gap: '6px',
-                    color: 'rgba(255,255,255,0.5)', fontSize: '12px', cursor: 'pointer',
-                    marginLeft: 'auto',
-                  }}>
-                    <input
-                      type="checkbox"
-                      checked={showSpreadBands}
-                      onChange={e => setShowSpreadBands(e.target.checked)}
-                      style={{ accentColor: '#3498db', cursor: 'pointer' }}
-                    />
-                    Show spread bands
-                  </label>
+                  {/* Toggles */}
+                  <div style={{ display: 'flex', gap: '14px', marginLeft: 'auto', alignItems: 'center' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'rgba(255,255,255,0.5)', fontSize: '12px', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={normalizeScales}
+                        onChange={e => setNormalizeScales(e.target.checked)}
+                        style={{ accentColor: '#f39c12', cursor: 'pointer' }}
+                      />
+                      <span style={{ color: normalizeScales ? '#f39c12' : undefined }}>Normalise</span>
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'rgba(255,255,255,0.5)', fontSize: '12px', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={showSpreadBands}
+                        onChange={e => setShowSpreadBands(e.target.checked)}
+                        style={{ accentColor: '#3498db', cursor: 'pointer' }}
+                      />
+                      Spread bands
+                    </label>
+                  </div>
                 </div>
 
                 {/* Chart */}
@@ -568,10 +652,18 @@ export function ComparisonTab({
                       <YAxis
                         stroke="rgba(255,255,255,0.3)"
                         tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }}
-                        label={{ value: yAxisUnit, angle: -90, position: 'insideLeft', fill: 'rgba(255,255,255,0.4)', fontSize: 12 }}
+                        label={{
+                          value: normalizeScales ? 'Normalised (0–1)' : yAxisUnit,
+                          angle: -90,
+                          position: 'insideLeft',
+                          fill: normalizeScales ? '#f39c12' : 'rgba(255,255,255,0.4)',
+                          fontSize: 11,
+                        }}
+                        domain={normalizeScales ? [0, 1] : ['auto', 'auto']}
+                        tickFormatter={normalizeScales ? v => v.toFixed(1) : undefined}
                       />
                       <Tooltip
-                        content={<ForecastTooltip selectedModels={selectedModels} />}
+                        content={<ForecastTooltip selectedModels={selectedModels} normalized={normalizeScales} yAxisUnit={yAxisUnit} />}
                       />
                       {/* 24h boundary reference lines */}
                       {[24, 48, 72, 96, 120, 144, 168].filter(h => h >= hourMin && h <= hourMax).map(h => (
@@ -801,24 +893,35 @@ export function ComparisonTab({
                       <div>
                         <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
                           <span style={{ fontWeight: '600' }}>CRPS by Lead Time</span>
-                          {selectedModels.map(m => (
-                            <span key={m} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                              <span style={{ display: 'inline-block', width: '16px', height: '2px', background: MODEL_COLORS[m], borderRadius: '1px' }} />
-                              <span style={{ fontSize: '11px' }}>{m}</span>
-                            </span>
-                          ))}
+                          {selectedModels.map(m => {
+                            const mHours = skillData.models?.[m]?.hours?.length || 0;
+                            return (
+                              <span key={m} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                <span style={{ display: 'inline-block', width: '16px', height: '2px', background: MODEL_COLORS[m], borderRadius: '1px' }} />
+                                <span style={{ fontSize: '11px' }}>{m}</span>
+                                <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)' }}>({mHours} pts)</span>
+                              </span>
+                            );
+                          })}
                         </div>
                         <div style={{ height: '220px' }}>
                           <ResponsiveContainer width="100%" height="100%">
                             <LineChart
-                              data={obsHours.map(hour => {
-                                const row = { hour };
+                              data={(() => {
+                                // Union of all hours across all models (not just obsHours)
+                                const allHours = new Set();
                                 selectedModels.forEach(m => {
-                                  const hourEntry = skillData.models?.[m]?.hours?.find(h => h.hour === hour);
-                                  row[`crps_${m}`] = hourEntry ? hourEntry.crps : null;
+                                  skillData.models?.[m]?.hours?.forEach(h => allHours.add(h.hour));
                                 });
-                                return row;
-                              })}
+                                return Array.from(allHours).sort((a, b) => a - b).map(hour => {
+                                  const row = { hour };
+                                  selectedModels.forEach(m => {
+                                    const hourEntry = skillData.models?.[m]?.hours?.find(h => h.hour === hour);
+                                    row[`crps_${m}`] = hourEntry ? hourEntry.crps : null;
+                                  });
+                                  return row;
+                                });
+                              })()}
                               margin={{ top: 8, right: 20, left: 0, bottom: 24 }}
                             >
                               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
@@ -842,18 +945,24 @@ export function ComparisonTab({
                                 }}
                                 labelFormatter={h => `+${h}h`}
                               />
-                              {selectedModels.map(m => (
-                                <Line
-                                  key={m}
-                                  type="monotone"
-                                  dataKey={`crps_${m}`}
-                                  name={`crps_${m}`}
-                                  stroke={MODEL_COLORS[m]}
-                                  strokeWidth={2}
-                                  dot={{ r: 3, fill: MODEL_COLORS[m], strokeWidth: 0 }}
-                                  isAnimationActive={false}
-                                />
-                              ))}
+                              {selectedModels.map(m => {
+                                // Use fewer dots for sparse models (< 10 points)
+                                const nPts = skillData.models?.[m]?.hours?.length || 0;
+                                return (
+                                  <Line
+                                    key={m}
+                                    type="linear"
+                                    dataKey={`crps_${m}`}
+                                    name={`crps_${m}`}
+                                    stroke={MODEL_COLORS[m]}
+                                    strokeWidth={nPts < 10 ? 2.5 : 2}
+                                    connectNulls
+                                    dot={{ r: nPts < 10 ? 5 : 3, fill: MODEL_COLORS[m], strokeWidth: 0 }}
+                                    activeDot={{ r: 6 }}
+                                    isAnimationActive={false}
+                                  />
+                                );
+                              })}
                             </LineChart>
                           </ResponsiveContainer>
                         </div>
