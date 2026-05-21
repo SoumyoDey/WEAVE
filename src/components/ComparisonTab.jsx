@@ -732,46 +732,45 @@ export function ComparisonTab({
                           label={{ value: `D${h / 24}`, position: 'top', fill: 'rgba(255,255,255,0.18)', fontSize: 9 }}
                         />
                       ))}
-                      {/* Per-model: band areas + mean line */}
-                      {selectedModels.map(m => {
-                        const color = MODEL_COLORS[m];
-                        return (
-                          <React.Fragment key={m}>
-                            {showSpreadBands && (
-                              <>
-                                {/* Upper band fill (model color, low opacity) */}
-                                <Area
-                                  dataKey={`${m}_hi`}
-                                  stroke="none"
-                                  fill={color}
-                                  fillOpacity={0.12}
-                                  legendType="none"
-                                  isAnimationActive={false}
-                                />
-                                {/* Lower band fill (background color — creates gap effect) */}
-                                <Area
-                                  dataKey={`${m}_lo`}
-                                  stroke="none"
-                                  fill="#0f1923"
-                                  fillOpacity={1}
-                                  legendType="none"
-                                  isAnimationActive={false}
-                                />
-                              </>
-                            )}
-                            {/* Mean line */}
-                            <Line
-                              type="monotone"
-                              dataKey={`${m}_mean`}
-                              stroke={color}
-                              strokeWidth={2.5}
-                              dot={false}
-                              legendType="none"
-                              isAnimationActive={false}
-                            />
-                          </React.Fragment>
-                        );
-                      })}
+                      {/* Per-model: spread bands + mean line
+                          ─────────────────────────────────────────────────────
+                          IMPORTANT: Do NOT use the "background-erase" (lo fill
+                          with solid background color) technique here.
+                          With 3 models, each model's lo-erase layer overwrites
+                          the previous models' colored fills — leaving only the
+                          last model's band visible.
+                          Instead: render a simple top-down fill from 0 → hi for
+                          each model at low opacity. All models remain visible
+                          and their bands can overlap transparently. */}
+
+                      {/* Pass 1: all spread band fills (drawn first, underneath lines) */}
+                      {showSpreadBands && selectedModels.map(m => (
+                        <Area
+                          key={`band_${m}`}
+                          dataKey={`${m}_hi`}
+                          stroke="none"
+                          fill={MODEL_COLORS[m]}
+                          fillOpacity={0.10}
+                          connectNulls
+                          legendType="none"
+                          isAnimationActive={false}
+                        />
+                      ))}
+
+                      {/* Pass 2: all mean lines (drawn on top of all fills) */}
+                      {selectedModels.map(m => (
+                        <Line
+                          key={`line_${m}`}
+                          type="monotone"
+                          dataKey={`${m}_mean`}
+                          stroke={MODEL_COLORS[m]}
+                          strokeWidth={2.5}
+                          dot={false}
+                          connectNulls
+                          legendType="none"
+                          isAnimationActive={false}
+                        />
+                      ))}
                     </ComposedChart>
                   </ResponsiveContainer>
                 </div>
