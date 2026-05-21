@@ -98,7 +98,7 @@ export function Timeline({ currentModel, selectedHour, setSelectedHour, selected
         gap: '6px',
       }}>
         <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.2)', letterSpacing: '0.03em' }}>
-          © 2025 Northeastern University
+          © {new Date().getFullYear()} Northeastern University
         </span>
         <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.1)' }}>·</span>
         <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.15)', letterSpacing: '0.05em', fontWeight: 600 }}>

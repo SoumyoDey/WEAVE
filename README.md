@@ -1,4 +1,4 @@
-# WEAVE — Weather Ensemble Analysis & Visualization Engine
+# WEAVE — Weather Ensemble Analysis & Visualization Environment
 
 WEAVE is an interactive web application for visualizing probabilistic weather forecast data from multiple ensemble models. It supports spatial uncertainty visualization, time-series analysis, and ensemble spread diagnostics over a Leaflet map base.
 
