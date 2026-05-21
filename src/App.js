@@ -632,6 +632,7 @@ function App() {
           defaultLocation={clickedPoint}
           defaultHour={selectedHour}
           selectedVariable={selectedVariable}
+          selectedRegion={selectedRegion}
           onJumpToComparison={(lat, lon) => setActiveTab('comparison')}
         />
       </div>
