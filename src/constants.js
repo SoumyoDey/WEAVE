@@ -91,7 +91,31 @@ export const METRIC_CONFIG = [
     shortLabel:   'SSR',
     requiresHour: true,
     requiresThreshold: false,
-    description:  'Ratio of ensemble variance to squared forecast error. Ideal ≈ 1.',
+    description:  'Ratio of ensemble variance to squared forecast error at a single lead time. Ideal ≈ 1.',
+    colorFn: (v) => {
+      if (v == null) return null;
+      if (v < 0.5)  return 'rgba(192,0,0,0.82)';
+      if (v < 0.8)  return 'rgba(231,76,60,0.82)';
+      if (v <= 1.2) return 'rgba(39,174,96,0.82)';
+      if (v <= 2.0) return 'rgba(230,126,34,0.82)';
+      return 'rgba(52,152,219,0.82)';
+    },
+    legend: [
+      { color: 'rgba(192,0,0,0.82)',   label: '< 0.5  —  Severely underdispersive' },
+      { color: 'rgba(231,76,60,0.82)',  label: '0.5 – 0.8  —  Overconfident' },
+      { color: 'rgba(39,174,96,0.82)',  label: '0.8 – 1.2  —  Well calibrated ✓' },
+      { color: 'rgba(230,126,34,0.82)', label: '1.2 – 2.0  —  Underconfident' },
+      { color: 'rgba(52,152,219,0.82)', label: '> 2.0  —  Severely overdispersive' },
+    ],
+    legendGradient: null,
+  },
+  {
+    key:          'ssr_agg',
+    label:        'Spread-Skill Ratio (time-aggregated)',
+    shortLabel:   'SSR',
+    requiresHour: false,
+    requiresThreshold: false,
+    description:  'Time-aggregated SSR: mean(σ²) / mean(ε²) across all verified lead times. Ideal ≈ 1.',
     colorFn: (v) => {
       if (v == null) return null;
       if (v < 0.5)  return 'rgba(192,0,0,0.82)';

@@ -10,7 +10,7 @@ import { METRIC_CONFIG } from '../constants';
 
 // ── Region metric definitions (defined outside component to avoid recreation) ──
 const REGION_METRICS = [
-  { key: 'ssr',         group: 'calibration',  label: 'Spread-Skill Ratio',         requiresHour: true,  requiresThreshold: false },
+  { key: 'ssr_agg',     group: 'calibration',  label: 'Spread-Skill Ratio',         requiresHour: false, requiresThreshold: false },
   { key: 'correlation', group: 'calibration',  label: 'Spread-Skill Correlation',   requiresHour: false, requiresThreshold: false },
   { key: 'bias',        group: 'accuracy',     label: 'Bias (Mean Error)',          requiresHour: false, requiresThreshold: false },
   { key: 'mae',         group: 'accuracy',     label: 'MAE',                        requiresHour: false, requiresThreshold: false },
@@ -63,7 +63,6 @@ export function AnalysisTab({
 
   // ── Region mode state ────────────────────────────────────────────────────────
   const [analysisMode,       setAnalysisMode]       = useState('point');
-  const [regionHour,         setRegionHour]         = useState(24);
   const [regionHourMin,      setRegionHourMin]      = useState(0);
   const [regionHourMax,      setRegionHourMax]      = useState(168);
   const [regionThreshold,    setRegionThreshold]    = useState(25);
@@ -163,17 +162,17 @@ export function AnalysisTab({
           metric:    m.key,
           modelName: currentModel.name,
           variable:  selectedVariable,
-          hour:      m.requiresHour ? regionHour : undefined,
+          hour:      undefined,
           threshold: m.requiresThreshold ? regionThreshold : undefined,
-          hourMin:   (!m.requiresHour && !m.requiresThreshold) || m.requiresThreshold ? regionHourMin : undefined,
-          hourMax:   (!m.requiresHour && !m.requiresThreshold) || m.requiresThreshold ? regionHourMax : undefined,
+          hourMin:   regionHourMin,
+          hourMax:   regionHourMax,
           bounds,
         });
         const plot = await fetchSpatialMetricPlot({
           metric:         m.key,
           model:          currentModel.name,
           variable:       selectedVariable,
-          hour:           regionHour,
+          hour:           undefined,
           threshold_mm_6h: m.requiresThreshold ? regionThreshold : undefined,
           points:         pts.points || [],
           n_hours:        pts.n_hours,
@@ -793,16 +792,7 @@ export function AnalysisTab({
               <>
                 {/* Controls row */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px', flexWrap: 'wrap', background: 'rgba(255,255,255,0.04)', borderRadius: '10px', padding: '12px 16px', border: '1px solid rgba(255,255,255,0.08)' }}>
-                  {/* SSR Hour */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '11px', whiteSpace: 'nowrap' }}>SSR Hour</span>
-                    <input type="number" min="0" step="6" value={regionHour}
-                      onChange={e => setRegionHour(parseInt(e.target.value, 10) || 24)}
-                      style={{ width: '56px', padding: '4px 6px', fontSize: '12px', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'white', textAlign: 'center', outline: 'none' }} />
-                    <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px' }}>h</span>
-                  </div>
-
-                  {/* Hour range for accuracy/categorical */}
+                  {/* Hour range */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '11px', whiteSpace: 'nowrap' }}>Hours</span>
                     <input type="number" min="0" step="6" value={regionHourMin}
@@ -838,7 +828,7 @@ export function AnalysisTab({
 
                 {/* Metric map groups */}
                 {[
-                  { id: 'calibration', label: 'Calibration', hint: 'Is the ensemble spread reliable?', keys: ['ssr', 'correlation'] },
+                  { id: 'calibration', label: 'Calibration', hint: 'Is the ensemble spread reliable?', keys: ['ssr_agg', 'correlation'] },
                   { id: 'accuracy',    label: 'Accuracy vs Observations', hint: 'How close is the ensemble mean to obs?', keys: ['bias', 'mae', 'rmse', 'crps'] },
                   { id: 'categorical', label: `Categorical  (threshold > ${regionThreshold} mm/6h)`, hint: 'Event-based skill for threshold exceedances', keys: ['csi', 'pod', 'far', 'brier'] },
                 ].map(group => (

@@ -527,8 +527,41 @@ def _dispatch_brier(cursor, run_id, variable_id, init_time, args,
 #   2. Write a _dispatch_<name>() wrapper with the same signature as above.
 #   3. Add an entry here.
 #   4. Add a matching entry to PLOT_STYLE_REGISTRY below.
+def _compute_ssr_agg_points_rf(cursor, model_name, variable,
+                                min_lat, max_lat, min_lon, max_lon,
+                                hour_min=0, hour_max=168, **_kw):
+    """
+    Time-aggregated SSR using regridded tables.
+    SSR = mean(σ²) / mean(ε²) across all matched lead times per grid point.
+    Requires ≥2 matched pairs to be meaningful.
+    """
+    pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
+                                           min_lat, max_lat, min_lon, max_lon,
+                                           hour_min, hour_max)
+    points = []
+    for (lat, lon), entries in pairs.items():
+        if len(entries) < 2:
+            continue
+        mean_var    = float(np.mean([sr ** 2 for _, _, sr, _   in entries]))
+        mean_sq_err = float(np.mean([(mr - orr) ** 2 for _, mr, _, orr in entries]))
+        if mean_sq_err > 1e-10:
+            ssr = round(mean_var / mean_sq_err, 4)
+            points.append({'lat': lat, 'lon': lon, 'value': ssr})
+    return points
+
+
+def _dispatch_ssr_agg(cursor, run_id, variable_id, init_time, args,
+                      min_lat, max_lat, min_lon, max_lon, obs_col):
+    return _compute_ssr_agg_points_rf(
+        cursor, args.get('model', 'AIFS'), args.get('variable', 'precipitation'),
+        min_lat, max_lat, min_lon, max_lon,
+        int(args.get('hour_min', 0)), int(args.get('hour_max', 168)),
+    ), {}
+
+
 SPATIAL_METRIC_REGISTRY = {
     'ssr':         _dispatch_ssr,
+    'ssr_agg':     _dispatch_ssr_agg,
     'correlation': _dispatch_correlation,
     'bias':        _dispatch_bias,
     'mae':         _dispatch_mae,
@@ -1029,6 +1062,20 @@ PLOT_STYLE_REGISTRY = {
         ),
         'norm':           mcolors.BoundaryNorm([0, 0.5, 0.8, 1.2, 2.0, 10.0], 5),
         'cbar_label':     'Spread-Skill Ratio (SSR)',
+        'cbar_ticks':     [0.25, 0.65, 1.0, 1.6, 5.0],
+        'cbar_ticklabels': ['< 0.5\nSev. underdisp.',
+                            '0.5 – 0.8\nOverconfident',
+                            '0.8 – 1.2\nCalibrated ✓',
+                            '1.2 – 2.0\nUnderconfident',
+                            '> 2.0\nSev. overdisp.'],
+        'cbar_fontsize':  7.5,
+    },
+    'ssr_agg': {
+        'cmap': mcolors.ListedColormap(
+            ['#c00000', '#e74c3c', '#27ae60', '#e67e22', '#3498db']
+        ),
+        'norm':           mcolors.BoundaryNorm([0, 0.5, 0.8, 1.2, 2.0, 10.0], 5),
+        'cbar_label':     'SSR (time-aggregated)',
         'cbar_ticks':     [0.25, 0.65, 1.0, 1.6, 5.0],
         'cbar_ticklabels': ['< 0.5\nSev. underdisp.',
                             '0.5 – 0.8\nOverconfident',
