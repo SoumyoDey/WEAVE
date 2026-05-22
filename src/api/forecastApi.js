@@ -1,4 +1,4 @@
-const BASE = 'http://localhost:5000/api';
+const BASE = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
 /**
  * Fetches a single forecast field (mean / std / member).

@@ -5,8 +5,13 @@ from psycopg2.extras import RealDictCursor
 import math
 import io
 import base64
+import os
 from datetime import timedelta
 import scipy.stats
+
+# ── Load .env (if present) before anything else ───────────────────────────────
+from dotenv import load_dotenv
+load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
 # ── Matplotlib / Cartopy (Agg backend — no display required) ──────────────────
 import matplotlib
@@ -18,20 +23,21 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=os.environ.get('CORS_ORIGIN', 'http://localhost:3000'))
 
 DB_CONFIG = {
-    'dbname': 'weave_weather',
-    'user': 'k.aggarwal',
-    'password': '',
-    'host': 'localhost',
-    'port': 5432
+    'dbname':   os.environ.get('DB_NAME',     'weave_weather'),
+    'user':     os.environ.get('DB_USER',     'k.aggarwal'),
+    'password': os.environ.get('DB_PASSWORD', ''),
+    'host':     os.environ.get('DB_HOST',     'localhost'),
+    'port':     int(os.environ.get('DB_PORT', 5432)),
 }
 
 import psycopg2.pool
 
 connection_pool = psycopg2.pool.SimpleConnectionPool(
-    1, 10,
+    int(os.environ.get('DB_POOL_MIN', 1)),
+    int(os.environ.get('DB_POOL_MAX', 10)),
     **DB_CONFIG
 )
 
@@ -2432,4 +2438,6 @@ if __name__ == '__main__':
     print("📊 Multi-model comparison: timeseries, skill scores, spatial agreement")
     print("=" * 60)
 
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    flask_port  = int(os.environ.get('FLASK_PORT',  5000))
+    flask_debug = os.environ.get('FLASK_DEBUG', 'true').lower() in ('1', 'true', 'yes')
+    app.run(debug=flask_debug, host='0.0.0.0', port=flask_port)
