@@ -69,6 +69,34 @@ export function AnalysisTab({
   const [regionThreshold,    setRegionThreshold]    = useState(25);
   const [spatialMaps,        setSpatialMaps]        = useState({});
   const [regionRunning,      setRegionRunning]      = useState(false);
+  // per-card share feedback: { [key]: 'idle' | 'copied' }
+  const [shareStates,        setShareStates]        = useState({});
+
+  // ── Per-card share ───────────────────────────────────────────────────────────
+  const shareMap = async (key, url) => {
+    if (!url) return;
+    const filename = `WEAVE-${currentModel?.name ?? 'model'}-${key}.png`;
+    // 1. Try native Web Share (mobile / Electron)
+    try {
+      const blob = await (await fetch(url)).blob();
+      const file = new File([blob], filename, { type: 'image/png' });
+      if (navigator.share && navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ title: `WEAVE — ${key.toUpperCase()} map`, files: [file] });
+        return;
+      }
+    } catch {}
+    // 2. Copy image to clipboard (desktop Chrome / Edge)
+    try {
+      const blob = await (await fetch(url)).blob();
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      setShareStates(prev => ({ ...prev, [key]: 'copied' }));
+      setTimeout(() => setShareStates(prev => ({ ...prev, [key]: 'idle' })), 2500);
+      return;
+    } catch {}
+    // 3. Fallback — download
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+  };
 
   const handleRunCategorical = async () => {
     if (!clickedPoint || !currentModel) return;
@@ -829,10 +857,23 @@ export function AnalysisTab({
                             <div style={{ padding: '8px 12px', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                               <span style={{ fontSize: '12px', fontWeight: '600', color: 'rgba(255,255,255,0.75)' }}>{cfg?.label ?? key.toUpperCase()}</span>
                               {st?.url && (
-                                <button onClick={() => {
-                                  const a = document.createElement('a');
-                                  a.href = st.url; a.download = `WEAVE-${currentModel?.name}-${key}.png`; a.click();
-                                }} style={{ fontSize: '10px', color: 'rgba(255,255,255,0.4)', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 6px' }}>⬇ Save</button>
+                                <div style={{ display: 'flex', gap: '4px' }}>
+                                  <button
+                                    onClick={() => { const a = document.createElement('a'); a.href = st.url; a.download = `WEAVE-${currentModel?.name}-${key}.png`; a.click(); }}
+                                    style={{ fontSize: '10px', color: 'rgba(255,255,255,0.45)', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '5px', cursor: 'pointer', padding: '3px 8px' }}
+                                    title="Download as PNG"
+                                  >⬇ Save</button>
+                                  <button
+                                    onClick={() => shareMap(key, st.url)}
+                                    style={{
+                                      fontSize: '10px', borderRadius: '5px', cursor: 'pointer', padding: '3px 8px', border: '1px solid rgba(255,255,255,0.12)',
+                                      ...(shareStates[key] === 'copied'
+                                        ? { background: 'rgba(46,204,113,0.15)', borderColor: 'rgba(46,204,113,0.4)', color: '#2ecc71' }
+                                        : { background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.45)' }),
+                                    }}
+                                    title="Copy to clipboard / Share"
+                                  >{shareStates[key] === 'copied' ? '✓ Copied!' : '⎘ Share'}</button>
+                                </div>
                               )}
                             </div>
                             {/* Card body */}
