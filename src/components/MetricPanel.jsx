@@ -27,6 +27,7 @@ export function MetricPanel({
   panelMinimized, setPanelMinimized,
   metricType, setMetricType,
   metricHour, setMetricHour,
+  metricThreshold, setMetricThreshold,
   spatialLoading, spatialData,
   computeSpatialMetric, clearSelection,
   isDraggingPanelRef, dragStartRef,
@@ -121,6 +122,22 @@ export function MetricPanel({
                     +{h}h
                   </button>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {/* Threshold input — categorical metrics only */}
+          {metricCfg?.requiresThreshold && (
+            <div style={{ marginBottom: '11px' }}>
+              <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.45)', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Threshold</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <input
+                  type="number" min="0" step="1"
+                  value={metricThreshold}
+                  onChange={e => setMetricThreshold(Number(e.target.value))}
+                  style={{ flex: 1, padding: '5px 8px', fontSize: '12px', fontWeight: '600', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'white', textAlign: 'right', outline: 'none' }}
+                />
+                <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', whiteSpace: 'nowrap' }}>mm/6h</span>
               </div>
             </div>
           )}

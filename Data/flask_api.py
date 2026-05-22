@@ -185,6 +185,252 @@ def _compute_correlation_points(cursor, run_id, variable_id, init_time,
     return points, len(hour_data)
 
 
+def _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
+                                   min_lat, max_lat, min_lon, max_lon,
+                                   hour_min=0, hour_max=168):
+    """
+    Fetches per-(lat,lon) lists of (hour, mean_rate, std_rate, obs_rate) tuples
+    from regridded_forecast + regridded_observation tables.
+    All rates are normalised to mm/h by dividing by MODEL_ACCUM_HOURS.
+    Returns dict: {(lat_rounded, lon_rounded): [(hour, mean_rate, std_rate, obs_rate), ...]}
+    """
+    from collections import defaultdict
+    accum_h = MODEL_ACCUM_HOURS.get(model_name, 1)
+    if variable == 'wind':
+        fcst_var, obs_var, obs_src = 'wind_u_10m', 'wind_speed', 'ERA5_WIND'
+    else:
+        fcst_var, obs_var, obs_src = variable, 'precipitation', 'GPM_IMERG_V07B'
+
+    cursor.execute("""
+        SELECT rf.latitude, rf.longitude, rf.forecast_hour,
+               rf.mean_value, rf.std_dev, fr.initialization_time
+        FROM regridded_forecast rf
+        JOIN models m  ON m.model_name = rf.model_name
+        JOIN forecast_runs fr
+            ON fr.model_id = m.model_id
+           AND fr.run_id = (
+               SELECT run_id FROM forecast_runs fr2
+               JOIN models m2 ON m2.model_id = fr2.model_id
+               WHERE m2.model_name = rf.model_name
+               ORDER BY fr2.initialization_time DESC LIMIT 1
+           )
+        WHERE rf.model_name    = %s
+          AND rf.variable_name = %s
+          AND rf.forecast_hour BETWEEN %s AND %s
+          AND rf.latitude  BETWEEN %s AND %s
+          AND rf.longitude BETWEEN %s AND %s
+          AND rf.mean_value IS NOT NULL AND rf.std_dev IS NOT NULL
+        ORDER BY rf.latitude, rf.longitude, rf.forecast_hour
+    """, (model_name, fcst_var, hour_min, hour_max,
+          min_lat, max_lat, min_lon, max_lon))
+    fcst_rows = cursor.fetchall()
+    if not fcst_rows:
+        return {}
+
+    valid_times = [r['initialization_time'] + timedelta(hours=r['forecast_hour'])
+                   for r in fcst_rows]
+    min_obs_t = min(valid_times) - timedelta(hours=accum_h - 1)
+    max_obs_t = max(valid_times)
+
+    cursor.execute("""
+        SELECT obs_time, latitude, longitude, AVG(value) AS obs_val
+        FROM regridded_observation
+        WHERE variable_name = %s AND source = %s
+          AND obs_time BETWEEN %s AND %s
+          AND latitude  BETWEEN %s AND %s
+          AND longitude BETWEEN %s AND %s
+        GROUP BY obs_time, latitude, longitude
+    """, (obs_var, obs_src, min_obs_t, max_obs_t,
+          min_lat, max_lat, min_lon, max_lon))
+    obs_dict = {}
+    for r in cursor.fetchall():
+        lat_k = round(float(r['latitude']),  2)
+        lon_k = round(float(r['longitude']), 2)
+        obs_dict[(lat_k, lon_k, r['obs_time'])] = float(r['obs_val'])
+
+    if not obs_dict:
+        return {}
+
+    result = defaultdict(list)
+    for row in fcst_rows:
+        lat  = round(float(row['latitude']),  2)
+        lon  = round(float(row['longitude']), 2)
+        hour = row['forecast_hour']
+        mean = float(row['mean_value'])
+        std  = float(row['std_dev'])
+        vt   = row['initialization_time'] + timedelta(hours=hour)
+
+        obs_window = [
+            obs_dict[(lat, lon, vt - timedelta(hours=dh))]
+            for dh in range(accum_h - 1, -1, -1)
+            if (lat, lon, vt - timedelta(hours=dh)) in obs_dict
+        ]
+        if not obs_window:
+            continue
+        obs_rate  = sum(obs_window) / len(obs_window)
+        mean_rate = mean / accum_h
+        std_rate  = std  / accum_h
+        result[(lat, lon)].append((hour, mean_rate, std_rate, obs_rate))
+
+    return dict(result)
+
+
+# ── Accuracy metric compute functions (use regridded tables) ──────────────────
+
+def _compute_bias_points_rf(cursor, model_name, variable,
+                             min_lat, max_lat, min_lon, max_lon,
+                             hour_min=0, hour_max=168, **_kw):
+    pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
+                                           min_lat, max_lat, min_lon, max_lon,
+                                           hour_min, hour_max)
+    points = []
+    for (lat, lon), entries in pairs.items():
+        if entries:
+            bias = float(np.mean([mr - orr for _, mr, _, orr in entries]))
+            points.append({'lat': lat, 'lon': lon, 'value': round(bias, 4)})
+    return points
+
+
+def _compute_mae_points_rf(cursor, model_name, variable,
+                            min_lat, max_lat, min_lon, max_lon,
+                            hour_min=0, hour_max=168, **_kw):
+    pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
+                                           min_lat, max_lat, min_lon, max_lon,
+                                           hour_min, hour_max)
+    points = []
+    for (lat, lon), entries in pairs.items():
+        if entries:
+            mae = float(np.mean([abs(mr - orr) for _, mr, _, orr in entries]))
+            points.append({'lat': lat, 'lon': lon, 'value': round(mae, 4)})
+    return points
+
+
+def _compute_rmse_points_rf(cursor, model_name, variable,
+                             min_lat, max_lat, min_lon, max_lon,
+                             hour_min=0, hour_max=168, **_kw):
+    pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
+                                           min_lat, max_lat, min_lon, max_lon,
+                                           hour_min, hour_max)
+    points = []
+    for (lat, lon), entries in pairs.items():
+        if entries:
+            rmse = float(np.sqrt(np.mean([(mr - orr) ** 2 for _, mr, _, orr in entries])))
+            points.append({'lat': lat, 'lon': lon, 'value': round(rmse, 4)})
+    return points
+
+
+def _compute_crps_points_rf(cursor, model_name, variable,
+                             min_lat, max_lat, min_lon, max_lon,
+                             hour_min=0, hour_max=168, **_kw):
+    pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
+                                           min_lat, max_lat, min_lon, max_lon,
+                                           hour_min, hour_max)
+    points = []
+    for (lat, lon), entries in pairs.items():
+        if not entries:
+            continue
+        crps_vals = []
+        for _, mr, sr, orr in entries:
+            if sr > 1e-10:
+                z    = (orr - mr) / sr
+                crps = sr * (z * (2 * scipy.stats.norm.cdf(z) - 1)
+                             + 2 * scipy.stats.norm.pdf(z)
+                             - 1.0 / np.sqrt(np.pi))
+            else:
+                crps = abs(mr - orr)
+            crps_vals.append(max(0.0, crps))
+        points.append({'lat': lat, 'lon': lon, 'value': round(float(np.mean(crps_vals)), 4)})
+    return points
+
+
+# ── Categorical metric compute functions ─────────────────────────────────────
+
+def _compute_csi_points_rf(cursor, model_name, variable,
+                            min_lat, max_lat, min_lon, max_lon,
+                            hour_min=0, hour_max=168,
+                            threshold_rate=25.0 / 6.0, **_kw):
+    pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
+                                           min_lat, max_lat, min_lon, max_lon,
+                                           hour_min, hour_max)
+    points = []
+    for (lat, lon), entries in pairs.items():
+        hits = misses = fa = 0
+        for _, mr, _, orr in entries:
+            if mr > threshold_rate and orr > threshold_rate:      hits   += 1
+            elif mr > threshold_rate and orr <= threshold_rate:   fa     += 1
+            elif mr <= threshold_rate and orr > threshold_rate:   misses += 1
+        denom = hits + misses + fa
+        if denom > 0:
+            points.append({'lat': lat, 'lon': lon,
+                           'value': round(hits / denom, 4)})
+    return points
+
+
+def _compute_pod_points_rf(cursor, model_name, variable,
+                            min_lat, max_lat, min_lon, max_lon,
+                            hour_min=0, hour_max=168,
+                            threshold_rate=25.0 / 6.0, **_kw):
+    pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
+                                           min_lat, max_lat, min_lon, max_lon,
+                                           hour_min, hour_max)
+    points = []
+    for (lat, lon), entries in pairs.items():
+        hits = misses = 0
+        for _, mr, _, orr in entries:
+            if orr > threshold_rate:
+                if mr > threshold_rate: hits   += 1
+                else:                   misses += 1
+        if hits + misses > 0:
+            points.append({'lat': lat, 'lon': lon,
+                           'value': round(hits / (hits + misses), 4)})
+    return points
+
+
+def _compute_far_points_rf(cursor, model_name, variable,
+                            min_lat, max_lat, min_lon, max_lon,
+                            hour_min=0, hour_max=168,
+                            threshold_rate=25.0 / 6.0, **_kw):
+    pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
+                                           min_lat, max_lat, min_lon, max_lon,
+                                           hour_min, hour_max)
+    points = []
+    for (lat, lon), entries in pairs.items():
+        hits = fa = 0
+        for _, mr, _, orr in entries:
+            if mr > threshold_rate:
+                if orr > threshold_rate: hits += 1
+                else:                    fa   += 1
+        if hits + fa > 0:
+            points.append({'lat': lat, 'lon': lon,
+                           'value': round(fa / (hits + fa), 4)})
+    return points
+
+
+def _compute_brier_points_rf(cursor, model_name, variable,
+                              min_lat, max_lat, min_lon, max_lon,
+                              hour_min=0, hour_max=168,
+                              threshold_rate=25.0 / 6.0, **_kw):
+    pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
+                                           min_lat, max_lat, min_lon, max_lon,
+                                           hour_min, hour_max)
+    points = []
+    for (lat, lon), entries in pairs.items():
+        if not entries:
+            continue
+        bs_vals = []
+        for _, mr, sr, orr in entries:
+            is_obs = float(orr > threshold_rate)
+            if sr > 1e-10:
+                p_event = float(1.0 - scipy.stats.norm.cdf(threshold_rate,
+                                                             loc=mr, scale=sr))
+            else:
+                p_event = 1.0 if mr > threshold_rate else 0.0
+            bs_vals.append((p_event - is_obs) ** 2)
+        points.append({'lat': lat, 'lon': lon,
+                       'value': round(float(np.mean(bs_vals)), 6)})
+    return points
+
+
 def _dispatch_ssr(cursor, run_id, variable_id, init_time, args,
                   min_lat, max_lat, min_lon, max_lon, obs_col):
     hour   = int(args.get('hour', 6))
@@ -202,6 +448,79 @@ def _dispatch_correlation(cursor, run_id, variable_id, init_time, args,
     return points, {'n_hours': n_hours}
 
 
+def _dispatch_bias(cursor, run_id, variable_id, init_time, args,
+                   min_lat, max_lat, min_lon, max_lon, obs_col):
+    return _compute_bias_points_rf(
+        cursor, args.get('model', 'AIFS'), args.get('variable', 'precipitation'),
+        min_lat, max_lat, min_lon, max_lon,
+        int(args.get('hour_min', 0)), int(args.get('hour_max', 168)),
+    ), {}
+
+def _dispatch_mae(cursor, run_id, variable_id, init_time, args,
+                  min_lat, max_lat, min_lon, max_lon, obs_col):
+    return _compute_mae_points_rf(
+        cursor, args.get('model', 'AIFS'), args.get('variable', 'precipitation'),
+        min_lat, max_lat, min_lon, max_lon,
+        int(args.get('hour_min', 0)), int(args.get('hour_max', 168)),
+    ), {}
+
+def _dispatch_rmse(cursor, run_id, variable_id, init_time, args,
+                   min_lat, max_lat, min_lon, max_lon, obs_col):
+    return _compute_rmse_points_rf(
+        cursor, args.get('model', 'AIFS'), args.get('variable', 'precipitation'),
+        min_lat, max_lat, min_lon, max_lon,
+        int(args.get('hour_min', 0)), int(args.get('hour_max', 168)),
+    ), {}
+
+def _dispatch_crps(cursor, run_id, variable_id, init_time, args,
+                   min_lat, max_lat, min_lon, max_lon, obs_col):
+    return _compute_crps_points_rf(
+        cursor, args.get('model', 'AIFS'), args.get('variable', 'precipitation'),
+        min_lat, max_lat, min_lon, max_lon,
+        int(args.get('hour_min', 0)), int(args.get('hour_max', 168)),
+    ), {}
+
+def _dispatch_csi(cursor, run_id, variable_id, init_time, args,
+                  min_lat, max_lat, min_lon, max_lon, obs_col):
+    thr = float(args.get('threshold_mm_6h', 25.0)) / 6.0
+    return _compute_csi_points_rf(
+        cursor, args.get('model', 'AIFS'), args.get('variable', 'precipitation'),
+        min_lat, max_lat, min_lon, max_lon,
+        int(args.get('hour_min', 0)), int(args.get('hour_max', 168)),
+        threshold_rate=thr,
+    ), {}
+
+def _dispatch_pod(cursor, run_id, variable_id, init_time, args,
+                  min_lat, max_lat, min_lon, max_lon, obs_col):
+    thr = float(args.get('threshold_mm_6h', 25.0)) / 6.0
+    return _compute_pod_points_rf(
+        cursor, args.get('model', 'AIFS'), args.get('variable', 'precipitation'),
+        min_lat, max_lat, min_lon, max_lon,
+        int(args.get('hour_min', 0)), int(args.get('hour_max', 168)),
+        threshold_rate=thr,
+    ), {}
+
+def _dispatch_far(cursor, run_id, variable_id, init_time, args,
+                  min_lat, max_lat, min_lon, max_lon, obs_col):
+    thr = float(args.get('threshold_mm_6h', 25.0)) / 6.0
+    return _compute_far_points_rf(
+        cursor, args.get('model', 'AIFS'), args.get('variable', 'precipitation'),
+        min_lat, max_lat, min_lon, max_lon,
+        int(args.get('hour_min', 0)), int(args.get('hour_max', 168)),
+        threshold_rate=thr,
+    ), {}
+
+def _dispatch_brier(cursor, run_id, variable_id, init_time, args,
+                    min_lat, max_lat, min_lon, max_lon, obs_col):
+    thr = float(args.get('threshold_mm_6h', 25.0)) / 6.0
+    return _compute_brier_points_rf(
+        cursor, args.get('model', 'AIFS'), args.get('variable', 'precipitation'),
+        min_lat, max_lat, min_lon, max_lon,
+        int(args.get('hour_min', 0)), int(args.get('hour_max', 168)),
+        threshold_rate=thr,
+    ), {}
+
+
 # ── Spatial metric dispatch registry ──────────────────────────────────────────
 # To add a new metric:
 #   1. Write a _compute_<name>_points() helper above.
@@ -211,6 +530,14 @@ def _dispatch_correlation(cursor, run_id, variable_id, init_time, args,
 SPATIAL_METRIC_REGISTRY = {
     'ssr':         _dispatch_ssr,
     'correlation': _dispatch_correlation,
+    'bias':        _dispatch_bias,
+    'mae':         _dispatch_mae,
+    'rmse':        _dispatch_rmse,
+    'crps':        _dispatch_crps,
+    'csi':         _dispatch_csi,
+    'pod':         _dispatch_pod,
+    'far':         _dispatch_far,
+    'brier':       _dispatch_brier,
 }
 
 
@@ -647,6 +974,7 @@ def get_spatial_metric():
     max_lat    = float(request.args.get('max_lat',  45))
     min_lon    = float(request.args.get('min_lon', -85))
     max_lon    = float(request.args.get('max_lon', -65))
+    threshold_mm_6h = float(request.args.get('threshold_mm_6h', 25.0))
 
     if metric not in SPATIAL_METRIC_REGISTRY:
         return jsonify({'error': f'Unknown metric: {metric}. '
@@ -717,7 +1045,70 @@ PLOT_STYLE_REGISTRY = {
         'cbar_ticklabels': ['-1', '-0.5', '0', '+0.5', '+1'],
         'cbar_fontsize':  9,
     },
-    # 'bias': { ... }  ← add future metrics here
+    'bias': {
+        'cmap': plt.cm.RdBu_r,
+        'norm': mcolors.TwoSlopeNorm(vmin=-2.0, vcenter=0.0, vmax=2.0),
+        'cbar_label':      'Bias (mm/h)  [+ = over-forecast]',
+        'cbar_ticks':      [-2, -1, 0, 1, 2],
+        'cbar_ticklabels': ['-2', '-1', '0', '+1', '+2'],
+        'cbar_fontsize':   9,
+    },
+    'mae': {
+        'cmap': plt.cm.YlOrRd,
+        'norm': mcolors.Normalize(vmin=0, vmax=2),
+        'cbar_label':      'MAE (mm/h)',
+        'cbar_ticks':      [0, 0.5, 1.0, 1.5, 2.0],
+        'cbar_ticklabels': ['0', '0.5', '1', '1.5', '2'],
+        'cbar_fontsize':   9,
+    },
+    'rmse': {
+        'cmap': plt.cm.YlOrRd,
+        'norm': mcolors.Normalize(vmin=0, vmax=2),
+        'cbar_label':      'RMSE (mm/h)',
+        'cbar_ticks':      [0, 0.5, 1.0, 1.5, 2.0],
+        'cbar_ticklabels': ['0', '0.5', '1', '1.5', '2'],
+        'cbar_fontsize':   9,
+    },
+    'crps': {
+        'cmap': plt.cm.YlOrRd,
+        'norm': mcolors.Normalize(vmin=0, vmax=1),
+        'cbar_label':      'CRPS (mm/h, lower=better)',
+        'cbar_ticks':      [0, 0.25, 0.5, 0.75, 1.0],
+        'cbar_ticklabels': ['0', '0.25', '0.5', '0.75', '1'],
+        'cbar_fontsize':   9,
+    },
+    'csi': {
+        'cmap': plt.cm.RdYlGn,
+        'norm': mcolors.Normalize(vmin=0, vmax=1),
+        'cbar_label':      'CSI (0→1, higher=better)',
+        'cbar_ticks':      [0, 0.25, 0.5, 0.75, 1.0],
+        'cbar_ticklabels': ['0', '0.25', '0.5', '0.75', '1'],
+        'cbar_fontsize':   9,
+    },
+    'pod': {
+        'cmap': plt.cm.RdYlGn,
+        'norm': mcolors.Normalize(vmin=0, vmax=1),
+        'cbar_label':      'POD (Probability of Detection)',
+        'cbar_ticks':      [0, 0.25, 0.5, 0.75, 1.0],
+        'cbar_ticklabels': ['0', '0.25', '0.5', '0.75', '1'],
+        'cbar_fontsize':   9,
+    },
+    'far': {
+        'cmap': plt.cm.RdYlGn_r,
+        'norm': mcolors.Normalize(vmin=0, vmax=1),
+        'cbar_label':      'FAR (False Alarm Ratio, 0=perfect)',
+        'cbar_ticks':      [0, 0.25, 0.5, 0.75, 1.0],
+        'cbar_ticklabels': ['0', '0.25', '0.5', '0.75', '1'],
+        'cbar_fontsize':   9,
+    },
+    'brier': {
+        'cmap': plt.cm.YlOrRd,
+        'norm': mcolors.Normalize(vmin=0, vmax=0.5),
+        'cbar_label':      'Brier Score (0=perfect)',
+        'cbar_ticks':      [0, 0.1, 0.2, 0.3, 0.4, 0.5],
+        'cbar_ticklabels': ['0', '0.1', '0.2', '0.3', '0.4', '0.5'],
+        'cbar_fontsize':   9,
+    },
 }
 
 
@@ -855,10 +1246,17 @@ def spatial_metric_plot():
         METRIC_LABELS = {k: v['cbar_label'] for k, v in PLOT_STYLE_REGISTRY.items()}
         metric_label = METRIC_LABELS.get(metric, metric)
         title_line1 = f"{model}  ·  {var_label}  ·  {metric_label}"
+        CATEGORICAL_METRICS = {'csi', 'pod', 'far', 'brier'}
+        thr_info = ''
+        if metric in CATEGORICAL_METRICS:
+            thr_mm6h = body.get('threshold_mm_6h', 25)
+            thr_info = f'  ·  thr >{thr_mm6h} mm/6h'
         if metric == 'ssr':
             title_line2 = f"Forecast +{hour}h  |  {len(points)} grid points"
-        else:
+        elif metric == 'correlation':
             title_line2 = f"{n_hours} verified lead times  |  {len(points)} grid points"
+        else:
+            title_line2 = f"{len(points)} grid points{thr_info}"
         ax.set_title(f"{title_line1}\n{title_line2}",
                      fontsize=10.5, fontweight='bold', pad=10, color='#1a1a1a')
 

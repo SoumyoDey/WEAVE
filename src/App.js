@@ -10,7 +10,7 @@ import { pointInPolygon }     from './utils/geoUtils';
 
 // ── API ───────────────────────────────────────────────────────────────────────
 import { fetchForecastData, fetchTimeseries as apiFetchTimeseries, fetchSpreadSkill as apiFetchSpreadSkill } from './api/forecastApi';
-import { fetchSpatialMetric, fetchSpatialMetricPlot } from './api/spatialApi';
+import { fetchSpatialMetric } from './api/spatialApi';
 
 // ── Layer renderers ───────────────────────────────────────────────────────────
 import { drawOnMap }            from './layers/idwLayer';
@@ -75,6 +75,7 @@ function App() {
   const [selectedRegion, setSelectedRegion]     = useState(null);
   const [metricType, setMetricType]             = useState('ssr');
   const [metricHour, setMetricHour]             = useState(6);
+  const [metricThreshold, setMetricThreshold]   = useState(25);
   const [spatialData, setSpatialData]           = useState(null);
   const [spatialLoading, setSpatialLoading]     = useState(false);
   const [showMetricPanel, setShowMetricPanel]   = useState(false);
@@ -82,8 +83,6 @@ function App() {
   const [panelMinimized, setPanelMinimized]     = useState(false);
 
   // ── Analysis tab state ────────────────────────────────────────────────────────
-  const [analysisPlotUrl, setAnalysisPlotUrl]           = useState(null);
-  const [analysisPlotLoading, setAnalysisPlotLoading]   = useState(false);
 
   // ── Refs ─────────────────────────────────────────────────────────────────────
   const mapRef                = useRef(null);
@@ -105,7 +104,6 @@ function App() {
   const metricTypeRef         = useRef('ssr');
   const isDraggingPanelRef    = useRef(false);
   const dragStartRef          = useRef({ mouseX: 0, mouseY: 0, panelX: 0, panelY: 0 });
-  const analysisSpatialCanvasRef = useRef(null);
   const uncertaintyModeRef      = useRef(null);
   const invertUncertaintyRef    = useRef(false);
 
@@ -305,11 +303,13 @@ function App() {
     if (!selectedRegion) return;
     setSpatialLoading(true);
     try {
+      const metricCfg = METRIC_CONFIG.find(m => m.key === metricType);
       let data = await fetchSpatialMetric({
         metric:    metricType,
         modelName: currentModel.name,
         variable:  selectedVariable,
-        hour:      METRIC_CONFIG.find(m => m.key === metricType)?.requiresHour ? metricHour : undefined,
+        hour:      metricCfg?.requiresHour ? metricHour : undefined,
+        threshold: metricCfg?.requiresThreshold ? metricThreshold : undefined,
         bounds:    selectedRegion.bounds,
       });
       let pts = data.points || [];
@@ -429,25 +429,6 @@ function App() {
     window.addEventListener('mouseup',   onMouseUp);
     return () => { window.removeEventListener('mousemove', onMouseMove); window.removeEventListener('mouseup', onMouseUp); };
   }, []);
-
-  // ── Analysis tab: fetch cartopy/matplotlib plot ───────────────────────────────
-  useEffect(() => {
-    if (!spatialData?.points?.length) { setAnalysisPlotUrl(null); return; }
-    let cancelled = false;
-    setAnalysisPlotLoading(true);
-    fetchSpatialMetricPlot({
-      metric:   spatialData.metric,
-      model:    currentModel.name,
-      variable: selectedVariable,
-      hour:     spatialData.hour ?? metricHour,
-      n_hours:  spatialData.n_hours,
-      points:   spatialData.points,
-    })
-      .then(d => { if (!cancelled && d.image) setAnalysisPlotUrl('data:image/png;base64,' + d.image); })
-      .catch(err => console.error('Plot fetch failed:', err))
-      .finally(() => { if (!cancelled) setAnalysisPlotLoading(false); });
-    return () => { cancelled = true; };
-  }, [spatialData]); // eslint-disable-line
 
   // ── Helpers ───────────────────────────────────────────────────────────────────
   const getMemberOptions = () => {
@@ -592,6 +573,7 @@ function App() {
             panelMinimized={panelMinimized} setPanelMinimized={setPanelMinimized}
             metricType={metricType} setMetricType={setMetricType}
             metricHour={metricHour} setMetricHour={setMetricHour}
+            metricThreshold={metricThreshold} setMetricThreshold={setMetricThreshold}
             spatialLoading={spatialLoading} spatialData={spatialData}
             computeSpatialMetric={computeSpatialMetric}
             clearSelection={clearSelection}
@@ -619,9 +601,6 @@ function App() {
           selectedVariable={selectedVariable}
           timeseriesLoading={timeseriesLoading} timeseriesData={timeseriesData}
           ssrLoading={ssrLoading} ssrData={ssrData}
-          spatialData={spatialData} metricHour={metricHour}
-          analysisPlotLoading={analysisPlotLoading} analysisPlotUrl={analysisPlotUrl}
-          analysisSpatialCanvasRef={analysisSpatialCanvasRef}
           onCompare={() => setActiveTab('comparison')}
           selectedRegion={selectedRegion}
         />
