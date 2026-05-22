@@ -872,7 +872,7 @@ export function AnalysisTab({
                                         : { background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.45)' }),
                                     }}
                                     title="Copy to clipboard / Share"
-                                  >{shareStates[key] === 'copied' ? '✓' : '⎘'}</button>
+                                  >{shareStates[key] === 'copied' ? '✓' : '📤'}</button>
                                 </div>
                               )}
                             </div>
