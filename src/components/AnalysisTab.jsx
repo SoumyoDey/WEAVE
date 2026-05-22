@@ -860,19 +860,19 @@ export function AnalysisTab({
                                 <div style={{ display: 'flex', gap: '4px' }}>
                                   <button
                                     onClick={() => { const a = document.createElement('a'); a.href = st.url; a.download = `WEAVE-${currentModel?.name}-${key}.png`; a.click(); }}
-                                    style={{ fontSize: '10px', color: 'rgba(255,255,255,0.45)', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '5px', cursor: 'pointer', padding: '3px 8px' }}
+                                    style={{ fontSize: '13px', color: 'rgba(255,255,255,0.45)', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '5px', cursor: 'pointer', padding: '2px 7px', lineHeight: 1 }}
                                     title="Download as PNG"
-                                  >⬇ Save</button>
+                                  >⬇</button>
                                   <button
                                     onClick={() => shareMap(key, st.url)}
                                     style={{
-                                      fontSize: '10px', borderRadius: '5px', cursor: 'pointer', padding: '3px 8px', border: '1px solid rgba(255,255,255,0.12)',
+                                      fontSize: '13px', borderRadius: '5px', cursor: 'pointer', padding: '2px 7px', border: '1px solid rgba(255,255,255,0.12)', lineHeight: 1,
                                       ...(shareStates[key] === 'copied'
                                         ? { background: 'rgba(46,204,113,0.15)', borderColor: 'rgba(46,204,113,0.4)', color: '#2ecc71' }
                                         : { background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.45)' }),
                                     }}
                                     title="Copy to clipboard / Share"
-                                  >{shareStates[key] === 'copied' ? '✓ Copied!' : '⎘ Share'}</button>
+                                  >{shareStates[key] === 'copied' ? '✓' : '⎘'}</button>
                                 </div>
                               )}
                             </div>
