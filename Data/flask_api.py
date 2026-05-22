@@ -1977,8 +1977,9 @@ if __name__ == '__main__':
     print("  • GET  /api/health")
     print("  • POST /api/compare/timeseries  {models, lat, lon, hour_min, hour_max, variable}")
     print("  • POST /api/compare/skill       {models, lat, lon, hour_min, hour_max, variable}")
-    print("  • POST /api/compare/spatial-agreement  {models, min_lat, max_lat, min_lon, max_lon, hour, variable}
-  • POST /api/categorical-metrics  {model, variable, lat, lon, threshold_mm_6h, hour_min, hour_max}")
+    print("  • POST /api/compare/spatial-agreement  {models, min_lat, max_lat, min_lon, max_lon, hour, variable}")
+    print("  • POST /api/categorical-metrics        {model, variable, lat, lon, threshold_mm_6h, hour_min, hour_max}")
+    print("  • POST /api/region-categorical-metrics {model, variable, min_lat, max_lat, min_lon, max_lon, threshold_mm_6h, hour_min, hour_max}")
     print("=" * 60)
     print("✅ Optimized with connection pooling")
     print("🌬️  Wind: speed = √(u² + v²), direction = atan2(u,v)")
