@@ -59,3 +59,38 @@ export async function fetchCategoricalMetrics({
 
   return response.json();
 }
+
+/**
+ * Fetches categorical verification metrics aggregated over a spatial bounding
+ * box, including FSS (Fractions Skill Score).
+ *
+ * @param {{
+ *   model: string,
+ *   variable: string,
+ *   minLat: number, maxLat: number, minLon: number, maxLon: number,
+ *   thresholdMm6h: number,
+ *   hourMin: number, hourMax: number
+ * }} params
+ */
+export async function fetchRegionCategoricalMetrics({
+  model, variable,
+  minLat, maxLat, minLon, maxLon,
+  thresholdMm6h, hourMin, hourMax,
+}) {
+  const response = await fetch(`${API_BASE}/region-categorical-metrics`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model, variable,
+      min_lat: minLat, max_lat: maxLat,
+      min_lon: minLon, max_lon: maxLon,
+      threshold_mm_6h: thresholdMm6h,
+      hour_min: hourMin, hour_max: hourMax,
+    }),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error || `region-categorical-metrics failed with status ${response.status}`);
+  }
+  return response.json();
+}

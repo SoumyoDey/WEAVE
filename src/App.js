@@ -623,6 +623,7 @@ function App() {
           analysisPlotLoading={analysisPlotLoading} analysisPlotUrl={analysisPlotUrl}
           analysisSpatialCanvasRef={analysisSpatialCanvasRef}
           onCompare={() => setActiveTab('comparison')}
+          selectedRegion={selectedRegion}
         />
       </div>
 

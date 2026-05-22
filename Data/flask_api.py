@@ -1706,6 +1706,261 @@ def categorical_metrics_endpoint():
         return_db_connection(conn)
 
 
+@app.route('/api/region-categorical-metrics', methods=['POST'])
+def region_categorical_metrics_endpoint():
+    """
+    Computes categorical + probabilistic verification metrics aggregated over
+    a spatial bounding box, plus FSS (Fractions Skill Score).
+
+    Request JSON:
+        { model, variable, min_lat, max_lat, min_lon, max_lon,
+          threshold_mm_6h, hour_min, hour_max }
+    """
+    body            = request.get_json(force=True)
+    model_name      = body.get('model', 'AIFS')
+    variable        = body.get('variable', 'precipitation')
+    min_lat         = float(body.get('min_lat', 20.0))
+    max_lat         = float(body.get('max_lat', 40.0))
+    min_lon         = float(body.get('min_lon', -100.0))
+    max_lon         = float(body.get('max_lon', -60.0))
+    threshold_mm_6h = float(body.get('threshold_mm_6h', 25.0))
+    hour_min        = int(body.get('hour_min', 0))
+    hour_max        = int(body.get('hour_max', 168))
+
+    if variable == 'wind':
+        fcst_var, obs_var, obs_src = 'wind_u_10m', 'wind_speed', 'ERA5_WIND'
+    else:
+        fcst_var, obs_var, obs_src = variable, 'precipitation', 'GPM_IMERG_V07B'
+
+    accum_h        = MODEL_ACCUM_HOURS.get(model_name, 1)
+    threshold_rate = threshold_mm_6h / 6.0   # mm/h
+
+    conn   = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        # ── 1. Fetch all forecast grid points in bbox ─────────────────────────
+        cursor.execute("""
+            SELECT rf.forecast_hour, rf.latitude, rf.longitude,
+                   rf.mean_value, rf.std_dev, fr.initialization_time
+            FROM regridded_forecast rf
+            JOIN models m  ON m.model_name = rf.model_name
+            JOIN forecast_runs fr
+                ON fr.model_id = m.model_id
+               AND fr.run_id = (
+                   SELECT run_id FROM forecast_runs fr2
+                   JOIN models m2 ON m2.model_id = fr2.model_id
+                   WHERE m2.model_name = rf.model_name
+                   ORDER BY fr2.initialization_time DESC LIMIT 1
+               )
+            WHERE rf.model_name    = %s
+              AND rf.variable_name = %s
+              AND rf.forecast_hour BETWEEN %s AND %s
+              AND rf.latitude  BETWEEN %s AND %s
+              AND rf.longitude BETWEEN %s AND %s
+              AND rf.mean_value IS NOT NULL AND rf.std_dev IS NOT NULL
+            ORDER BY rf.forecast_hour, rf.latitude, rf.longitude
+        """, (model_name, fcst_var, hour_min, hour_max,
+              min_lat, max_lat, min_lon, max_lon))
+        fcst_rows = cursor.fetchall()
+
+        if not fcst_rows:
+            return jsonify({'error': 'No forecast data found for the selected region.'}), 404
+
+        # ── 2. Fetch per-(lat,lon) observations for the extended time window ──
+        valid_times = [
+            r['initialization_time'] + timedelta(hours=r['forecast_hour'])
+            for r in fcst_rows
+        ]
+        min_obs_t = min(valid_times) - timedelta(hours=accum_h - 1)
+        max_obs_t = max(valid_times)
+
+        cursor.execute("""
+            SELECT obs_time, latitude, longitude, AVG(value) AS obs_val
+            FROM regridded_observation
+            WHERE variable_name = %s AND source = %s
+              AND obs_time BETWEEN %s AND %s
+              AND latitude  BETWEEN %s AND %s
+              AND longitude BETWEEN %s AND %s
+            GROUP BY obs_time, latitude, longitude
+            ORDER BY obs_time, latitude, longitude
+        """, (obs_var, obs_src, min_obs_t, max_obs_t,
+              min_lat, max_lat, min_lon, max_lon))
+        obs_dict = {
+            (round(float(r['latitude']), 2), round(float(r['longitude']), 2), r['obs_time']): float(r['obs_val'])
+            for r in cursor.fetchall()
+        }
+
+        if not obs_dict:
+            return jsonify({
+                'hours': [], 'summary': {}, 'obs_hours': [],
+                'obs_warning': 'No observations found for this region.',
+            })
+
+        # ── 3. Group forecast rows by hour and process ────────────────────────
+        from collections import defaultdict
+        hours_dict = defaultdict(list)
+        for row in fcst_rows:
+            hours_dict[row['forecast_hour']].append(row)
+
+        hours_data = []
+        total_hits = total_misses = total_fa = total_cn = 0
+        total_brier_sum = 0.0
+        total_n = 0
+        obs_hours_set = set()
+
+        for hour in sorted(hours_dict.keys()):
+            h_hits = h_misses = h_fa = h_cn = 0
+            h_brier_sum = 0.0
+            h_fcst_binary = []
+            h_obs_binary  = []
+            h_n_pts = 0
+
+            for row in hours_dict[hour]:
+                lat_k   = round(float(row['latitude']),  2)
+                lon_k   = round(float(row['longitude']), 2)
+                mean    = float(row['mean_value'])
+                std     = float(row['std_dev'])
+                vt      = row['initialization_time'] + timedelta(hours=hour)
+
+                obs_window = [
+                    obs_dict[(lat_k, lon_k, vt - timedelta(hours=dh))]
+                    for dh in range(accum_h - 1, -1, -1)
+                    if (lat_k, lon_k, vt - timedelta(hours=dh)) in obs_dict
+                ]
+                if not obs_window:
+                    continue
+
+                obs_rate  = sum(obs_window) / len(obs_window)
+                mean_rate = mean / accum_h
+                std_rate  = std  / accum_h
+
+                is_fcst = mean_rate > threshold_rate
+                is_obs  = obs_rate  > threshold_rate
+
+                if   is_fcst and     is_obs:  h_hits    += 1
+                elif is_fcst and not is_obs:  h_fa      += 1
+                elif not is_fcst and is_obs:  h_misses  += 1
+                else:                         h_cn      += 1
+
+                if std_rate > 1e-10:
+                    p_event = float(1.0 - scipy.stats.norm.cdf(
+                        threshold_rate, loc=mean_rate, scale=std_rate
+                    ))
+                else:
+                    p_event = 1.0 if mean_rate > threshold_rate else 0.0
+
+                h_brier_sum += (p_event - float(is_obs)) ** 2
+                h_fcst_binary.append(float(is_fcst))
+                h_obs_binary.append(float(is_obs))
+                h_n_pts += 1
+
+            if h_n_pts == 0:
+                continue
+
+            # Per-hour metrics
+            h_n_obs_yes   = h_hits + h_misses
+            h_n_fcst_yes  = h_hits + h_fa
+            h_n_denom_csi = h_hits + h_misses + h_fa
+
+            h_csi = round(h_hits / h_n_denom_csi, 4) if h_n_denom_csi > 0 else None
+            h_pod = round(h_hits / h_n_obs_yes,   4) if h_n_obs_yes   > 0 else None
+            h_far = round(h_fa   / h_n_fcst_yes,  4) if h_n_fcst_yes  > 0 else None
+            h_fbi = round(h_n_fcst_yes / h_n_obs_yes, 4) if h_n_obs_yes > 0 else None
+            h_bs  = round(h_brier_sum / h_n_pts, 6)
+
+            # FSS
+            fcst_frac = sum(h_fcst_binary) / h_n_pts
+            obs_frac  = sum(h_obs_binary)  / h_n_pts
+            mse_f   = (fcst_frac - obs_frac) ** 2
+            mse_ref = 0.5 * (fcst_frac**2 + obs_frac**2)
+            fss_hour = round(1.0 - mse_f / mse_ref, 4) if mse_ref > 1e-10 else 1.0
+
+            hours_data.append({
+                'hour': hour, 'n_pts': h_n_pts,
+                'hits': h_hits, 'misses': h_misses,
+                'false_alarms': h_fa, 'correct_neg': h_cn,
+                'csi': h_csi, 'pod': h_pod, 'far': h_far, 'fbi': h_fbi,
+                'brier_score': h_bs, 'fss': fss_hour,
+                'fcst_frac': round(fcst_frac, 4), 'obs_frac': round(obs_frac, 4),
+            })
+
+            obs_hours_set.add(hour)
+            total_hits    += h_hits
+            total_misses  += h_misses
+            total_fa      += h_fa
+            total_cn      += h_cn
+            total_brier_sum += h_brier_sum
+            total_n         += h_n_pts
+
+        # ── 4. Summary statistics ─────────────────────────────────────────────
+        n_obs_yes   = total_hits + total_misses
+        n_fcst_yes  = total_hits + total_fa
+        n_denom_csi = total_hits + total_misses + total_fa
+
+        pod = round(total_hits / n_obs_yes,    4) if n_obs_yes   > 0 else None
+        far = round(total_fa   / n_fcst_yes,   4) if n_fcst_yes  > 0 else None
+        fbi = round(n_fcst_yes / n_obs_yes,    4) if n_obs_yes   > 0 else None
+        csi = round(total_hits / n_denom_csi,  4) if n_denom_csi > 0 else None
+        bs  = round(total_brier_sum / total_n, 6) if total_n     > 0 else None
+
+        valid_fss_vals = [h['fss'] for h in hours_data if h.get('fss') is not None]
+        mean_fss = round(sum(valid_fss_vals) / len(valid_fss_vals), 4) if valid_fss_vals else None
+
+        if csi is not None and pod is not None and far is not None:
+            if mean_fss is not None:
+                composite = round(0.40*csi + 0.30*mean_fss + 0.20*pod + 0.10*(1.0-far), 4)
+            else:
+                composite = round((0.40*csi + 0.20*pod + 0.10*(1.0-far)) / 0.70, 4)
+        else:
+            composite = None
+
+        # ── 5. Return ─────────────────────────────────────────────────────────
+        n_grid_pts = len(set(
+            (round(float(r['latitude']), 2), round(float(r['longitude']), 2))
+            for r in fcst_rows
+        ))
+        obs_hours_list = sorted(h['hour'] for h in hours_data)
+        obs_warning = (
+            f"Observations available for {len(obs_hours_list)} lead times "
+            f"({obs_hours_list[0]}h–{obs_hours_list[-1]}h) across ~{n_grid_pts} grid points."
+        ) if obs_hours_list else 'No observations matched.'
+
+        print(f"✅ region-categorical-metrics: {model_name} {variable} "
+              f"bbox=[{min_lat},{max_lat},{min_lon},{max_lon}] "
+              f"thr={threshold_mm_6h}mm/6h  "
+              f"H={total_hits} M={total_misses} FA={total_fa} CN={total_cn}  "
+              f"CSI={csi} POD={pod} FAR={far} FSS={mean_fss} CC={composite}")
+
+        return jsonify({
+            'hours':   hours_data,
+            'summary': {
+                'hits': total_hits, 'misses': total_misses,
+                'false_alarms': total_fa, 'correct_neg': total_cn,
+                'pod': pod, 'far': far, 'fbi': fbi, 'csi': csi,
+                'brier_score': bs, 'fss': mean_fss,
+                'composite_confidence': composite,
+                'n_grid_pts': n_grid_pts,
+            },
+            'obs_hours': obs_hours_list,
+            'obs_warning': obs_warning,
+            'threshold_info': {
+                'threshold_mm_6h': threshold_mm_6h,
+                'threshold_rate':  round(threshold_rate, 4),
+                'accum_h':         accum_h,
+                'model':           model_name,
+                'bbox':            [min_lat, max_lat, min_lon, max_lon],
+            },
+        })
+
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        print(f"❌ Error in region-categorical-metrics: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        return_db_connection(conn)
+
+
 if __name__ == '__main__':
     print("🚀 Flask API Starting...")
     print("=" * 60)

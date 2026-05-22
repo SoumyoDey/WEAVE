@@ -4,7 +4,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine, ComposedChart, Line,
 } from 'recharts';
-import { fetchCategoricalMetrics } from '../api/analysisApi';
+import { fetchCategoricalMetrics, fetchRegionCategoricalMetrics } from '../api/analysisApi';
 
 /**
  * Full Analysis tab content.
@@ -33,6 +33,7 @@ export function AnalysisTab({
   analysisPlotLoading, analysisPlotUrl,
   analysisSpatialCanvasRef,
   onCompare,
+  selectedRegion,
 }) {
   const [shareState, setShareState] = useState('idle'); // 'idle' | 'copied'
 
@@ -44,6 +45,13 @@ export function AnalysisTab({
   const [catData,      setCatData]        = useState(null);  // full API response
   const [catError,     setCatError]       = useState(null);
   const [catHasRun,    setCatHasRun]      = useState(false);
+
+  // ── Region categorical state ────────────────────────────────────────────────
+  const [catMode,        setCatMode]        = useState('point');  // 'point' | 'region'
+  const [regCatLoading,  setRegCatLoading]  = useState(false);
+  const [regCatData,     setRegCatData]     = useState(null);
+  const [regCatError,    setRegCatError]    = useState(null);
+  const [regCatHasRun,   setRegCatHasRun]   = useState(false);
 
   const handleRunCategorical = async () => {
     if (!clickedPoint || !currentModel) return;
@@ -65,6 +73,32 @@ export function AnalysisTab({
       setCatError(err.message || 'Failed to load verification metrics');
     } finally {
       setCatLoading(false);
+    }
+  };
+
+  const handleRunRegionCategorical = async () => {
+    if (!selectedRegion?.bounds) return;
+    setRegCatLoading(true);
+    setRegCatError(null);
+    setRegCatHasRun(true);
+    try {
+      const b = selectedRegion.bounds;
+      const data = await fetchRegionCategoricalMetrics({
+        model:         currentModel.name,
+        variable:      selectedVariable,
+        minLat:        b.minLat ?? b.min_lat,
+        maxLat:        b.maxLat ?? b.max_lat,
+        minLon:        b.minLon ?? b.min_lon,
+        maxLon:        b.maxLon ?? b.max_lon,
+        thresholdMm6h: parseFloat(catThreshold) || 25,
+        hourMin:       catHourMin,
+        hourMax:       catHourMax,
+      });
+      setRegCatData(data);
+    } catch (err) {
+      setRegCatError(err.message || 'Failed to load region metrics');
+    } finally {
+      setRegCatLoading(false);
     }
   };
 
@@ -359,20 +393,51 @@ export function AnalysisTab({
 
             {/* Controls row */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
+
+              {/* Point / Region mode toggle */}
+              <div style={{ display: 'flex', borderRadius: '8px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.15)' }}>
+                {['point', 'region'].map(mode => (
+                  <button
+                    key={mode}
+                    onClick={() => setCatMode(mode)}
+                    style={{
+                      padding: '5px 14px', fontSize: '12px', fontWeight: '600', cursor: 'pointer',
+                      background: catMode === mode ? 'rgba(52,152,219,0.25)' : 'rgba(255,255,255,0.04)',
+                      color:  catMode === mode ? 'rgba(52,152,219,0.95)' : 'rgba(255,255,255,0.4)',
+                      border: 'none', outline: 'none',
+                    }}
+                  >
+                    {mode === 'point' ? '📍 Point' : '🗺 Region'}
+                  </button>
+                ))}
+              </div>
+
+              {/* Region badge — shown in region mode */}
+              {catMode === 'region' && selectedRegion?.bounds && (() => {
+                const b = selectedRegion.bounds;
+                const mn = b.minLat ?? b.min_lat, mx = b.maxLat ?? b.max_lat;
+                const mw = b.minLon ?? b.min_lon, me = b.maxLon ?? b.max_lon;
+                return (
+                  <span style={{ fontSize: '11px', color: 'rgba(52,152,219,0.8)', background: 'rgba(52,152,219,0.10)', padding: '3px 10px', borderRadius: '10px', border: '1px solid rgba(52,152,219,0.25)' }}>
+                    {mn?.toFixed(1)}°–{mx?.toFixed(1)}°N · {mw?.toFixed(1)}°–{me?.toFixed(1)}°E
+                  </span>
+                );
+              })()}
+
+              {/* No-region warning */}
+              {catMode === 'region' && !selectedRegion?.bounds && (
+                <span style={{ fontSize: '12px', color: 'rgba(243,156,18,0.8)' }}>
+                  ⚠️ Draw a region on the map first
+                </span>
+              )}
+
               {/* Threshold */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', whiteSpace: 'nowrap' }}>Threshold</span>
                 <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={catThreshold}
+                  type="number" min="0" step="1" value={catThreshold}
                   onChange={e => setCatThreshold(e.target.value)}
-                  style={{
-                    width: '72px', padding: '4px 8px', fontSize: '13px', fontWeight: '600',
-                    background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)',
-                    borderRadius: '6px', color: 'white', textAlign: 'right', outline: 'none',
-                  }}
+                  style={{ width: '72px', padding: '4px 8px', fontSize: '13px', fontWeight: '600', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'white', textAlign: 'right', outline: 'none' }}
                 />
                 <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px' }}>mm/6h</span>
               </div>
@@ -380,69 +445,77 @@ export function AnalysisTab({
               {/* Hour range */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', whiteSpace: 'nowrap' }}>Hours</span>
-                <input
-                  type="number" min="0" step="6" value={catHourMin}
+                <input type="number" min="0" step="6" value={catHourMin}
                   onChange={e => setCatHourMin(parseInt(e.target.value, 10) || 0)}
-                  style={{ width: '60px', padding: '4px 6px', fontSize: '12px', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'white', textAlign: 'center', outline: 'none' }}
-                />
+                  style={{ width: '60px', padding: '4px 6px', fontSize: '12px', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'white', textAlign: 'center', outline: 'none' }} />
                 <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px' }}>–</span>
-                <input
-                  type="number" min="0" step="24" value={catHourMax}
+                <input type="number" min="0" step="24" value={catHourMax}
                   onChange={e => setCatHourMax(parseInt(e.target.value, 10) || 240)}
-                  style={{ width: '60px', padding: '4px 6px', fontSize: '12px', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'white', textAlign: 'center', outline: 'none' }}
-                />
+                  style={{ width: '60px', padding: '4px 6px', fontSize: '12px', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'white', textAlign: 'center', outline: 'none' }} />
                 <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px' }}>h</span>
               </div>
 
               {/* Run button */}
               <button
-                onClick={handleRunCategorical}
-                disabled={catLoading}
+                onClick={catMode === 'point' ? handleRunCategorical : handleRunRegionCategorical}
+                disabled={catMode === 'point' ? (catLoading || !clickedPoint) : (regCatLoading || !selectedRegion?.bounds)}
                 style={{
-                  padding: '6px 16px', fontSize: '12px', fontWeight: '700', cursor: catLoading ? 'not-allowed' : 'pointer',
-                  background: catLoading ? 'rgba(52,152,219,0.08)' : 'rgba(52,152,219,0.18)',
+                  padding: '6px 16px', fontSize: '12px', fontWeight: '700',
+                  cursor: (catMode === 'point' ? catLoading : regCatLoading) ? 'not-allowed' : 'pointer',
+                  background: (catMode === 'point' ? catLoading : regCatLoading) ? 'rgba(52,152,219,0.08)' : 'rgba(52,152,219,0.18)',
                   border: '1px solid rgba(52,152,219,0.45)', borderRadius: '8px',
-                  color: catLoading ? 'rgba(52,152,219,0.45)' : 'rgba(52,152,219,0.95)',
-                  display: 'flex', alignItems: 'center', gap: '6px', transition: 'all 0.15s',
+                  color: (catMode === 'point' ? catLoading : regCatLoading) ? 'rgba(52,152,219,0.45)' : 'rgba(52,152,219,0.95)',
+                  display: 'flex', alignItems: 'center', gap: '6px',
                 }}
               >
-                {catLoading ? '⏳ Running…' : '▶ Run Metrics'}
+                {(catMode === 'point' ? catLoading : regCatLoading) ? '⏳ Running…' : '▶ Run Metrics'}
               </button>
 
-              {catData && !catLoading && (
+              {/* Active result label */}
+              {catMode === 'point' && catData && !catLoading && (
                 <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>
-                  {currentModel.name} · >{catData.threshold_info?.threshold_mm_6h ?? catThreshold} mm/6h
+                  {currentModel.name} · &gt;{catData.threshold_info?.threshold_mm_6h ?? catThreshold} mm/6h
                   {' '}(≡ {catData.threshold_info?.threshold_rate?.toFixed(3) ?? '—'} mm/h)
+                </span>
+              )}
+              {catMode === 'region' && regCatData && !regCatLoading && (
+                <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>
+                  {currentModel.name} · &gt;{regCatData.threshold_info?.threshold_mm_6h ?? catThreshold} mm/6h
+                  {' '}· {regCatData.summary?.n_grid_pts ?? '?'} grid pts
                 </span>
               )}
             </div>
 
             {/* Error banner */}
-            {catError && (
+            {(catMode === 'point' ? catError : regCatError) && (
               <div style={{ background: 'rgba(231,76,60,0.12)', border: '1px solid rgba(231,76,60,0.3)', borderRadius: '8px', padding: '10px 14px', marginBottom: '14px', color: '#e74c3c', fontSize: '12px' }}>
-                ⚠️ {catError}
+                ⚠️ {catMode === 'point' ? catError : regCatError}
               </div>
             )}
 
             {/* Obs coverage warning banner */}
-            {catData && catData.obs_warning && (
+            {(catMode === 'point' ? catData : regCatData)?.obs_warning && (
               <div style={{ background: 'rgba(243,156,18,0.10)', border: '1px solid rgba(243,156,18,0.3)', borderRadius: '8px', padding: '8px 14px', marginBottom: '16px', color: '#f39c12', fontSize: '12px', display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
                 <span style={{ flexShrink: 0 }}>⚠️</span>
-                <span>{catData.obs_warning}</span>
+                <span>{(catMode === 'point' ? catData : regCatData).obs_warning}</span>
               </div>
             )}
 
             {/* Empty-hours result */}
-            {catHasRun && !catLoading && catData && catData.hours?.length === 0 && (
+            {(catMode === 'point' ? (catHasRun && !catLoading && catData && catData.hours?.length === 0)
+                                  : (regCatHasRun && !regCatLoading && regCatData && regCatData.hours?.length === 0)) && (
               <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '13px', padding: '16px 0' }}>
                 No overlapping observations found for this location and time window. Try a different point or extend the hour range.
               </div>
             )}
 
             {/* ── Stat badges ── */}
-            {catData && catData.summary && catData.hours?.length > 0 && (() => {
-              const s = catData.summary;
-              const cc = s.composite_confidence;
+            {(() => {
+              const activeData = catMode === 'point' ? catData : regCatData;
+              if (!activeData || !activeData.summary || !activeData.hours?.length) return null;
+              const s   = activeData.summary;
+              const cc  = s.composite_confidence;
+              const fss = s.fss;   // only non-null for region mode
 
               const metricColor = (key, val) => {
                 if (val == null) return '#666';
@@ -451,30 +524,30 @@ export function AnalysisTab({
                 if (key === 'far')  return val <= 0.3 ? '#2ecc71' : val <= 0.5 ? '#f39c12' : '#e74c3c';
                 if (key === 'fbi')  return val >= 0.8 && val <= 1.2 ? '#2ecc71' : '#f39c12';
                 if (key === 'bs')   return val <= 0.1 ? '#2ecc71' : val <= 0.25 ? '#f39c12' : '#e74c3c';
+                if (key === 'fss')  return val >= 0.5 ? '#2ecc71' : val >= 0.3 ? '#f39c12' : '#e74c3c';
                 if (key === 'cc')   return val >= 0.6 ? '#2ecc71' : val >= 0.4 ? '#f39c12' : '#e74c3c';
                 return '#aaa';
               };
 
               const badges = [
-                { key: 'csi', label: 'CSI',    hint: 'Critical Success Index (0→1, higher=better)', val: s.csi   },
-                { key: 'pod', label: 'POD',    hint: 'Probability of Detection (hit rate)',          val: s.pod   },
-                { key: 'far', label: 'FAR',    hint: 'False Alarm Ratio (0=perfect)',                val: s.far   },
-                { key: 'fbi', label: 'FBI',    hint: 'Frequency Bias (1=unbiased)',                  val: s.fbi   },
-                { key: 'bs',  label: 'Brier',  hint: 'Brier Score (0=perfect)',                      val: s.brier_score },
+                { key: 'csi', label: 'CSI',   hint: 'Critical Success Index (0→1)',       val: s.csi   },
+                { key: 'pod', label: 'POD',   hint: 'Probability of Detection (hit rate)', val: s.pod   },
+                { key: 'far', label: 'FAR',   hint: 'False Alarm Ratio (0=perfect)',       val: s.far   },
+                { key: 'fbi', label: 'FBI',   hint: 'Frequency Bias (1=unbiased)',         val: s.fbi   },
+                { key: 'bs',  label: 'Brier', hint: 'Brier Score (0=perfect)',             val: s.brier_score },
               ];
+              if (catMode === 'region') {
+                badges.push({ key: 'fss', label: 'FSS', hint: 'Fractions Skill Score (0→1, higher=better)', val: fss });
+              }
 
               const contingencyTotal = s.hits + s.misses + s.false_alarms + s.correct_neg;
 
               return (
                 <>
-                  {/* Badges row */}
+                  {/* Badges */}
                   <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
                     {badges.map(({ key, label, hint, val }) => (
-                      <div key={key} style={{
-                        background: 'rgba(255,255,255,0.06)', borderRadius: '10px',
-                        padding: '12px 16px', minWidth: '100px',
-                        borderLeft: `3px solid ${metricColor(key, val)}`,
-                      }}>
+                      <div key={key} style={{ background: 'rgba(255,255,255,0.06)', borderRadius: '10px', padding: '12px 16px', minWidth: '100px', borderLeft: `3px solid ${metricColor(key, val)}` }}>
                         <div style={{ color: metricColor(key, val), fontSize: '22px', fontWeight: '700', lineHeight: 1 }}>
                           {val != null ? val.toFixed(3) : 'N/A'}
                         </div>
@@ -483,7 +556,7 @@ export function AnalysisTab({
                       </div>
                     ))}
 
-                    {/* Composite Confidence badge — wider, highlighted */}
+                    {/* Composite Confidence */}
                     <div style={{
                       background: cc != null ? `rgba(${cc >= 0.6 ? '46,204,113' : cc >= 0.4 ? '243,156,18' : '231,76,60'},0.10)` : 'rgba(255,255,255,0.06)',
                       borderRadius: '10px', padding: '12px 16px', minWidth: '130px',
@@ -495,19 +568,21 @@ export function AnalysisTab({
                       </div>
                       <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: '12px', marginTop: '4px', fontWeight: '700' }}>Composite Confidence</div>
                       <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '10px', marginTop: '2px' }}>
-                        0.40×CSI + 0.20×POD + 0.10×(1–FAR) ÷ 0.70
+                        {catMode === 'region' && fss != null
+                          ? '0.40×CSI + 0.30×FSS + 0.20×POD + 0.10×(1–FAR)'
+                          : '0.40×CSI + 0.20×POD + 0.10×(1–FAR) ÷ 0.70'}
                       </div>
-                      <div style={{ color: 'rgba(255,255,255,0.2)', fontSize: '10px', marginTop: '1px' }}>FSS = N/A (spatial-only)</div>
+                      {catMode === 'point' && <div style={{ color: 'rgba(255,255,255,0.2)', fontSize: '10px', marginTop: '1px' }}>FSS = N/A (spatial-only)</div>}
                     </div>
                   </div>
 
-                  {/* Contingency table mini-summary */}
+                  {/* Contingency mini-table */}
                   <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', flexWrap: 'wrap' }}>
                     {[
-                      { label: 'Hits',         val: s.hits,         color: '#2ecc71' },
-                      { label: 'Misses',        val: s.misses,       color: '#e74c3c' },
-                      { label: 'False Alarms',  val: s.false_alarms, color: '#f39c12' },
-                      { label: 'Correct Neg.',  val: s.correct_neg,  color: '#3498db' },
+                      { label: 'Hits',        val: s.hits,         color: '#2ecc71' },
+                      { label: 'Misses',      val: s.misses,       color: '#e74c3c' },
+                      { label: 'False Alarms',val: s.false_alarms, color: '#f39c12' },
+                      { label: 'Correct Neg.',val: s.correct_neg,  color: '#3498db' },
                     ].map(({ label, val, color }) => (
                       <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '5px', background: 'rgba(255,255,255,0.04)', borderRadius: '6px', padding: '5px 10px', border: `1px solid ${color}33` }}>
                         <span style={{ color, fontWeight: '700', fontSize: '13px' }}>{val}</span>
@@ -516,70 +591,108 @@ export function AnalysisTab({
                     ))}
                     <div style={{ display: 'flex', alignItems: 'center', gap: '5px', background: 'rgba(255,255,255,0.04)', borderRadius: '6px', padding: '5px 10px', border: '1px solid rgba(255,255,255,0.1)' }}>
                       <span style={{ color: 'rgba(255,255,255,0.6)', fontWeight: '700', fontSize: '13px' }}>{contingencyTotal}</span>
-                      <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: '11px' }}>Total cases</span>
+                      <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: '11px' }}>
+                        Total {catMode === 'region' ? `(${(s.n_grid_pts ?? '?')} pts × hours)` : 'cases'}
+                      </span>
                     </div>
                   </div>
 
-                  {/* Event Probability chart */}
-                  <div>
-                    <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
-                      <span>Event Probability per Lead Time (threshold &gt; {catData.threshold_info?.threshold_mm_6h ?? catThreshold} mm/6h)</span>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <span style={{ display: 'inline-block', width: '10px', height: '10px', background: 'rgba(52,152,219,0.6)', borderRadius: '2px' }} />
-                        P(event) — Gaussian
-                      </span>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <span style={{ display: 'inline-block', width: '14px', height: '3px', background: '#2ecc71', borderRadius: '1px' }} />
-                        Observed event
-                      </span>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <span style={{ display: 'inline-block', width: '14px', height: '2px', background: '#e74c3c', borderRadius: '1px', borderTop: '2px dashed #e74c3c' }} />
-                        Forecast event (deterministic)
-                      </span>
+                  {/* Chart — different per mode */}
+                  {catMode === 'point' && (
+                    <div>
+                      <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+                        <span>Event Probability per Lead Time (threshold &gt; {activeData.threshold_info?.threshold_mm_6h ?? catThreshold} mm/6h)</span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ display: 'inline-block', width: '10px', height: '10px', background: 'rgba(52,152,219,0.6)', borderRadius: '2px' }} />P(event) — Gaussian</span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ display: 'inline-block', width: '14px', height: '3px', background: '#2ecc71', borderRadius: '1px' }} />Observed event</span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ display: 'inline-block', width: '14px', height: '2px', background: '#e74c3c' }} />Forecast event (det.)</span>
+                      </div>
+                      <ResponsiveContainer width="100%" height={230}>
+                        <ComposedChart data={activeData.hours} margin={{ top: 8, right: 20, left: 0, bottom: 20 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false} />
+                          <XAxis dataKey="hour" stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }} tickFormatter={h => `+${h}h`} label={{ value: 'Forecast Hour', position: 'insideBottom', offset: -12, fill: 'rgba(255,255,255,0.4)', fontSize: 11 }} />
+                          <YAxis domain={[0, 1]} stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }} tickFormatter={v => `${(v * 100).toFixed(0)}%`} label={{ value: 'Probability', angle: -90, position: 'insideLeft', fill: 'rgba(255,255,255,0.4)', fontSize: 11 }} />
+                          <Tooltip
+                            contentStyle={{ background: '#1a2535', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: 'white', fontSize: '12px' }}
+                            formatter={(value, name) => {
+                              if (name === 'P(event)')   return [`${(value * 100).toFixed(1)}%`, 'P(event) Gaussian'];
+                              if (name === 'Obs event')  return [value === 1 ? 'Yes' : 'No', 'Observed event'];
+                              if (name === 'Fcst event') return [value === 1 ? 'Yes' : 'No', 'Forecast event (det.)'];
+                              return [value, name];
+                            }}
+                            labelFormatter={h => `Forecast +${h}h`}
+                          />
+                          <Bar dataKey="p_event" name="P(event)" fill="rgba(52,152,219,0.55)" radius={[3, 3, 0, 0]} isAnimationActive={false} />
+                          <Line type="stepAfter" dataKey="is_obs"  name="Obs event"  stroke="#2ecc71" strokeWidth={2.5} dot={{ r: 4, fill: '#2ecc71' }} isAnimationActive={false} connectNulls />
+                          <Line type="stepAfter" dataKey="is_fcst" name="Fcst event" stroke="#e74c3c" strokeWidth={1.5} strokeDasharray="5 3" dot={false} isAnimationActive={false} connectNulls />
+                        </ComposedChart>
+                      </ResponsiveContainer>
                     </div>
-                    <ResponsiveContainer width="100%" height={230}>
-                      <ComposedChart data={catData.hours} margin={{ top: 8, right: 20, left: 0, bottom: 20 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false} />
-                        <XAxis
-                          dataKey="hour"
-                          stroke="rgba(255,255,255,0.3)"
-                          tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }}
-                          tickFormatter={h => `+${h}h`}
-                          label={{ value: 'Forecast Hour', position: 'insideBottom', offset: -12, fill: 'rgba(255,255,255,0.4)', fontSize: 11 }}
-                        />
-                        <YAxis
-                          domain={[0, 1]}
-                          stroke="rgba(255,255,255,0.3)"
-                          tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }}
-                          tickFormatter={v => `${(v * 100).toFixed(0)}%`}
-                          label={{ value: 'Probability', angle: -90, position: 'insideLeft', fill: 'rgba(255,255,255,0.4)', fontSize: 11 }}
-                        />
-                        <Tooltip
-                          contentStyle={{ background: '#1a2535', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: 'white', fontSize: '12px' }}
-                          formatter={(value, name) => {
-                            if (name === 'P(event)')          return [`${(value * 100).toFixed(1)}%`, 'P(event) Gaussian'];
-                            if (name === 'Obs event')         return [value === 1 ? 'Yes' : 'No', 'Observed event'];
-                            if (name === 'Fcst event')        return [value === 1 ? 'Yes' : 'No', 'Forecast event (det.)'];
-                            if (name === 'Mean rate (mm/h)')  return [Number(value).toFixed(4) + ' mm/h', 'Ens. mean rate'];
-                            return [value, name];
-                          }}
-                          labelFormatter={h => `Forecast +${h}h`}
-                        />
-                        {/* P(event) bars */}
-                        <Bar dataKey="p_event" name="P(event)" fill="rgba(52,152,219,0.55)" radius={[3, 3, 0, 0]} isAnimationActive={false} />
-                        {/* Observed event step line */}
-                        <Line type="stepAfter" dataKey="is_obs"  name="Obs event"  stroke="#2ecc71" strokeWidth={2.5} dot={{ r: 4, fill: '#2ecc71' }} isAnimationActive={false} connectNulls />
-                        {/* Deterministic forecast event dashed line */}
-                        <Line type="stepAfter" dataKey="is_fcst" name="Fcst event" stroke="#e74c3c" strokeWidth={1.5} strokeDasharray="5 3" dot={false} isAnimationActive={false} connectNulls />
-                      </ComposedChart>
-                    </ResponsiveContainer>
-                  </div>
+                  )}
+
+                  {catMode === 'region' && (
+                    <div>
+                      {/* Two sub-charts side by side */}
+                      <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
+                        {/* Chart A: Forecast vs Observed fraction per hour */}
+                        <div style={{ flex: '1 1 300px', minWidth: 0 }}>
+                          <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                            <span>Event Frequency per Lead Time</span>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ display: 'inline-block', width: '10px', height: '10px', background: 'rgba(52,152,219,0.6)', borderRadius: '2px' }} />Fcst fraction</span>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ display: 'inline-block', width: '10px', height: '10px', background: 'rgba(46,204,113,0.6)', borderRadius: '2px' }} />Obs fraction</span>
+                          </div>
+                          <ResponsiveContainer width="100%" height={210}>
+                            <ComposedChart data={activeData.hours} margin={{ top: 8, right: 16, left: 0, bottom: 20 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false} />
+                              <XAxis dataKey="hour" stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} tickFormatter={h => `+${h}h`} label={{ value: 'Forecast Hour', position: 'insideBottom', offset: -12, fill: 'rgba(255,255,255,0.4)', fontSize: 10 }} />
+                              <YAxis domain={[0, 'auto']} stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} tickFormatter={v => `${(v * 100).toFixed(0)}%`} label={{ value: 'Grid-pt fraction', angle: -90, position: 'insideLeft', fill: 'rgba(255,255,255,0.4)', fontSize: 10 }} />
+                              <Tooltip
+                                contentStyle={{ background: '#1a2535', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: 'white', fontSize: '12px' }}
+                                formatter={(v, n) => [`${(v*100).toFixed(1)}%`, n]}
+                                labelFormatter={h => {
+                                  const r = activeData.hours.find(x => x.hour === h);
+                                  return r ? `+${h}h · ${r.n_pts} grid pts` : `+${h}h`;
+                                }}
+                              />
+                              <Bar dataKey="fcst_frac" name="Fcst fraction" fill="rgba(52,152,219,0.55)" radius={[3,3,0,0]} isAnimationActive={false} />
+                              <Bar dataKey="obs_frac"  name="Obs fraction"  fill="rgba(46,204,113,0.55)" radius={[3,3,0,0]} isAnimationActive={false} />
+                            </ComposedChart>
+                          </ResponsiveContainer>
+                        </div>
+
+                        {/* Chart B: CSI and FSS per hour */}
+                        <div style={{ flex: '1 1 300px', minWidth: 0 }}>
+                          <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                            <span>Skill Scores per Lead Time</span>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ display: 'inline-block', width: '14px', height: '3px', background: '#3498db' }} />CSI</span>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ display: 'inline-block', width: '14px', height: '3px', background: '#f39c12' }} />FSS</span>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ display: 'inline-block', width: '14px', height: '3px', background: '#2ecc71' }} />POD</span>
+                          </div>
+                          <ResponsiveContainer width="100%" height={210}>
+                            <ComposedChart data={activeData.hours} margin={{ top: 8, right: 16, left: 0, bottom: 20 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false} />
+                              <XAxis dataKey="hour" stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} tickFormatter={h => `+${h}h`} label={{ value: 'Forecast Hour', position: 'insideBottom', offset: -12, fill: 'rgba(255,255,255,0.4)', fontSize: 10 }} />
+                              <YAxis domain={[0, 1]} stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} label={{ value: 'Score', angle: -90, position: 'insideLeft', fill: 'rgba(255,255,255,0.4)', fontSize: 10 }} />
+                              <Tooltip
+                                contentStyle={{ background: '#1a2535', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: 'white', fontSize: '12px' }}
+                                formatter={(v, n) => [v != null ? Number(v).toFixed(3) : 'N/A', n]}
+                                labelFormatter={h => `+${h}h`}
+                              />
+                              <ReferenceLine y={0.5} stroke="rgba(255,255,255,0.12)" strokeDasharray="4 4" />
+                              <Line type="monotone" dataKey="csi" name="CSI" stroke="#3498db" strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} connectNulls />
+                              <Line type="monotone" dataKey="fss" name="FSS" stroke="#f39c12" strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} connectNulls />
+                              <Line type="monotone" dataKey="pod" name="POD" stroke="#2ecc71" strokeWidth={1.5} strokeDasharray="5 3" dot={false} isAnimationActive={false} connectNulls />
+                            </ComposedChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </>
               );
             })()}
 
             {/* Pre-run placeholder */}
-            {!catHasRun && !catLoading && (
+            {(catMode === 'point' ? (!catHasRun && !catLoading) : (!regCatHasRun && !regCatLoading)) && (
               <div style={{ color: 'rgba(255,255,255,0.25)', fontSize: '13px', padding: '28px 0', textAlign: 'center' }}>
                 Set a threshold and click <strong style={{ color: 'rgba(52,152,219,0.6)' }}>▶ Run Metrics</strong> to generate verification scores
               </div>
