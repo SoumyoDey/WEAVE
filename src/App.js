@@ -65,6 +65,7 @@ function App() {
   const [showUncertainty, setShowUncertainty]   = useState(false);
   const [showBivariate, setShowBivariate]       = useState(false);
   const [showFanChart, setShowFanChart]         = useState(false);
+  const [selectedTexture, setSelectedTexture]   = useState('none');
   const [bivariateRanges, setBivariateRanges]   = useState(null);
   const [rightPanelOpen, setRightPanelOpen]     = useState(false);
   const [clickedPoint, setClickedPoint]         = useState(null);
@@ -83,6 +84,8 @@ function App() {
   const uncertaintyLayerRef  = useRef(null);
   const bivariateLayerRef    = useRef(null);
   const clickMarkerRef       = useRef(null);
+  const textureCanvasRef     = useRef(null);
+  const textureDataRef       = useRef(null);
 
   const currentModel = MODELS[selectedModel];
 
@@ -145,12 +148,16 @@ function App() {
   useEffect(() => {
     if ((showBivariate || showFanChart) && mapInstanceRef.current) {
       if (canvasRef.current) canvasRef.current.style.display = 'none';
-      drawBivariateLayer(showFanChart ? VSUP_COLORS : BIVARIATE_COLORS);
+      drawBivariateLayer(showFanChart ? buildVsupMatrix() : BIVARIATE_COLORS);
     } else {
       if (canvasRef.current) canvasRef.current.style.display = 'block';
       stopBivariate();
     }
-  }, [showBivariate, showFanChart, selectedHour, selectedModel, selectedVariable]); // eslint-disable-line
+  }, [showBivariate, showFanChart, selectedHour, selectedModel, selectedVariable, selectedColormap]); // eslint-disable-line
+
+  useEffect(() => {
+    if (mapInstanceRef.current) loadTextureData();
+  }, [selectedTexture, selectedHour, selectedModel, selectedVariable]); // eslint-disable-line
 
   // ── Data fetch ────────────────────────────────────────────────────────────────
   const loadDataForHour = async () => {
@@ -181,7 +188,7 @@ function App() {
         }
         if (showUncertainty) drawUncertaintyBoxes();
         if (showBivariate)   drawBivariateLayer(BIVARIATE_COLORS);
-        if (showFanChart)    drawBivariateLayer(VSUP_COLORS);
+        if (showFanChart)    drawBivariateLayer(buildVsupMatrix());
       }, 300);
     } catch (err) {
       console.error('Load error:', err);
@@ -219,6 +226,13 @@ function App() {
     canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:400';
     canvasRef.current = canvas;
     if (showUncertainty || showBivariate || showFanChart) canvas.style.display = 'none';
+
+    // Texture overlay canvas (drawn on top of everything)
+    textureCanvasRef.current?.remove(); textureCanvasRef.current = null;
+    const textureCanvas = document.createElement('canvas');
+    mapInstanceRef.current.getContainer().appendChild(textureCanvas);
+    textureCanvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:500';
+    textureCanvasRef.current = textureCanvas;
 
     const getDynamicColor = (value) => {
       const colors = COLORMAPS[selectedColormap].colors;
@@ -604,12 +618,12 @@ function App() {
         return `rgba(${r},${g},${b},${0.75 - normStd * 0.3})`;
       };
 
-      // bigger box = more uncertain (original working logic)
+      // smaller box = more uncertain
       const minDeg = 0.15, maxDeg = 0.6;
       const sizeScale = (stdVal) => {
         if (stdMax === 0) return (minDeg + maxDeg) / 2;
         const t = Math.sqrt(Math.min(stdVal / stdMax, 1));
-        return minDeg + t * (maxDeg - minDeg);
+        return maxDeg - t * (maxDeg - minDeg);
       };
 
       const cellMap = {};
@@ -645,6 +659,119 @@ function App() {
     }
     uncertaintyCanvasRef.current?.remove();
     uncertaintyCanvasRef.current = null;
+  };
+
+  // ── Builds a 4×4 VSUP color matrix from the currently selected colormap ────────
+  // rowIdx 0 = low uncertainty (full color), rowIdx 3 = high uncertainty (mostly neutral)
+  // colIdx 0..3 = low..high forecast value — mirrors the legend's cmapColor + suppress logic
+  const buildVsupMatrix = () => {
+    const cols    = COLORMAPS[selectedColormap].colors;
+    const neutral = [180, 175, 185];
+    const lerp    = (t) => {
+      const seg = cols.length - 1;
+      const si  = Math.min(Math.floor(t * seg), seg - 1);
+      const st  = t * seg - si;
+      const c1  = cols[si], c2 = cols[Math.min(si + 1, seg)];
+      const r1 = parseInt(c1.slice(1,3),16), g1 = parseInt(c1.slice(3,5),16), b1 = parseInt(c1.slice(5,7),16);
+      const r2 = parseInt(c2.slice(1,3),16), g2 = parseInt(c2.slice(3,5),16), b2 = parseInt(c2.slice(5,7),16);
+      return [Math.round(r1+(r2-r1)*st), Math.round(g1+(g2-g1)*st), Math.round(b1+(b2-b1)*st)];
+    };
+    return Array.from({ length: 4 }, (_, rowIdx) => {
+      const suppress = (rowIdx / 3) * 0.72;  // rowIdx 0 → 0, rowIdx 3 → 0.72
+      return Array.from({ length: 4 }, (_, colIdx) => {
+        const t        = colIdx / 3;
+        const [r,g,b]  = lerp(Math.min(t, 0.999));
+        return `rgb(${Math.round(r*(1-suppress)+neutral[0]*suppress)},${Math.round(g*(1-suppress)+neutral[1]*suppress)},${Math.round(b*(1-suppress)+neutral[2]*suppress)})`;
+      });
+    });
+  };
+
+  // ── Texture Overlay (hatching lines) ─────────────────────────────────────────
+  const drawTextureOverlay = () => {
+    const canvas = textureCanvasRef.current;
+    const map    = mapInstanceRef.current;
+    if (!canvas || !map || !textureDataRef.current) return;
+
+    const container = map.getContainer();
+    canvas.width  = container.clientWidth;
+    canvas.height = container.clientHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (selectedTexture === 'none') return;
+
+    const { points, stdMax } = textureDataRef.current;
+    const SPACING = 7; // fixed line spacing (px) — same for all cells for clean look
+    ctx.strokeStyle = 'rgba(80,80,80,0.55)';
+    ctx.lineWidth   = 0.8;
+
+    for (const { lat, lon, stdVal, half } of points) {
+      const normStd = Math.min(stdVal / stdMax, 1);
+      if (normStd < 0.1) continue; // skip near-zero uncertainty
+
+      const tl = map.latLngToContainerPoint([lat + half, lon - half]);
+      const br = map.latLngToContainerPoint([lat - half, lon + half]);
+      const cw = br.x - tl.x, ch = br.y - tl.y;
+      if (cw <= 0 || ch <= 0) continue;
+
+      ctx.save();
+      // Higher uncertainty → more visible/opaque lines (continuous gradient)
+      ctx.globalAlpha = 0.15 + normStd * 0.7;
+      ctx.beginPath();
+      ctx.rect(tl.x, tl.y, cw, ch);
+      ctx.clip();
+
+      // Globally aligned lines: phase based on absolute position so adjacent
+      // cells share the same line grid — no arrow artefact at boundaries
+      const phase = ((tl.x - tl.y) % SPACING + SPACING) % SPACING;
+      const startX = tl.x - ch - phase;
+      for (let x = startX; x <= tl.x + cw + SPACING; x += SPACING) {
+        ctx.beginPath();
+        ctx.moveTo(x,      tl.y);
+        ctx.lineTo(x + ch, tl.y + ch);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+  };
+
+  const loadTextureData = async () => {
+    const canvas = textureCanvasRef.current;
+    if (!canvas) return;
+    if (selectedTexture === 'none') {
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
+    try {
+      const endpoint = selectedVariable === 'wind' ? 'wind-data' : 'forecast-data';
+      const res  = await fetch(`http://localhost:5000/api/${endpoint}?${new URLSearchParams({
+        model: currentModel.name, variable: selectedVariable, hour: selectedHour, member: 'std'
+      })}`);
+      const stdData = await res.json();
+      if (!Array.isArray(stdData) || !stdData.length) return;
+
+      const stdVals = stdData.map(pt => parseFloat(selectedVariable === 'wind' ? pt.speed : pt.value)).filter(v => !isNaN(v) && v >= 0);
+      const stdMax  = Math.max(...stdVals) || 1;
+      const lats    = [...new Set(stdData.map(p => Math.round(parseFloat(p.lat) * 10) / 10))].sort((a,b) => a-b);
+      const spacing = lats.length > 1 ? Math.abs(lats[1] - lats[0]) : 0.5;
+      const half    = spacing * 0.5;
+
+      textureDataRef.current = {
+        points: stdData.map(pt => ({
+          lat:    parseFloat(pt.lat),
+          lon:    parseFloat(pt.lon),
+          stdVal: parseFloat(selectedVariable === 'wind' ? pt.speed : pt.value),
+          half
+        })),
+        stdMax
+      };
+      drawTextureOverlay();
+
+      // Redraw on map move/zoom
+      mapInstanceRef.current.off('moveend zoomend', drawTextureOverlay);
+      mapInstanceRef.current.on('moveend zoomend',  drawTextureOverlay);
+    } catch (err) { console.error('Texture error:', err); }
   };
 
   // ── Bivariate Choropleth ──────────────────────────────────────────────────────
@@ -812,6 +939,20 @@ function App() {
                   </div>
                 </label>
               </div>
+            </div>
+
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{ display: 'block', fontSize: '11px', fontWeight: '600', marginBottom: '10px', opacity: 0.7, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Texture</label>
+              <select value={selectedTexture} onChange={e => setSelectedTexture(e.target.value)}
+                style={{ width: '100%', padding: '10px', fontSize: '14px', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '6px', background: 'rgba(255,255,255,0.1)', color: 'white', cursor: 'pointer' }}>
+                <option value="none"  style={{ background: '#2c3e50' }}>None</option>
+                <option value="lines" style={{ background: '#2c3e50' }}>Lines</option>
+              </select>
+              {selectedTexture === 'lines' && (
+                <div style={{ marginTop: '8px', fontSize: '11px', opacity: 0.6, lineHeight: '1.4' }}>
+                  Denser hatching = higher uncertainty
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -991,9 +1132,9 @@ function App() {
 
               const title = selectedVariable === 'wind' ? 'WIND_SPEED' : 'PRECIPITATION';
 
-              // Value ticks: 9 boundaries for 8 outermost segments
+              // Value ticks: 8 ticks (skip last one which lands on right spine = collision with uncertainty axis)
               const dAngle8 = totalSpan / 8;
-              const valTicks = Array.from({ length: 9 }, (_, i) => {
+              const valTicks = Array.from({ length: 8 }, (_, i) => {
                 const deg = fanLeft - i * dAngle8;
                 return {
                   deg,
@@ -1012,11 +1153,10 @@ function App() {
                 };
               });
 
-              // "Standard Mean Error" — placed outside right spine, rotated along it
-              const midR = (rInner + rOuter) / 2;
-              const smeOffset = 52;  // px beyond right spine ticks
-              const smeLx = px(midR + smeOffset, fanRight);
-              const smeLy = py(midR + smeOffset, fanRight);
+              // "Std. Error" label: fixed position to the right of all spine tick labels,
+              // vertically centred between j=0 (outermost) and j=4 (innermost)
+              const smeLx = px(rOuter, fanRight) + 38;  // right of the widest tick label
+              const smeLy = (py(rOuter, fanRight) + py(rInner, fanRight)) / 2;
 
               return (
                 <div style={{ background: 'rgba(255,255,255,0.95)', padding: '16px 16px 12px 16px', borderRadius: '8px', boxShadow: '0 4px 15px rgba(0,0,0,0.3)' }}>
@@ -1063,11 +1203,16 @@ function App() {
                       </g>
                     ))}
 
-                    {/* "Standard Mean Error" — rotated along right radial edge, outside tick labels */}
-                    <text x={smeLx.toFixed(1)} y={smeLy.toFixed(1)} fontSize="10" fill="#2c3e50" fontWeight="600"
+                    {/* "Std. Error" axis title — vertical, centred beside the right-spine tick numbers */}
+                    <text x={smeLx.toFixed(1)} y={smeLy.toFixed(1)} fontSize="9" fill="#2c3e50" fontWeight="600"
                       textAnchor="middle" dominantBaseline="middle"
-                      transform={`rotate(${fanRight - 90}, ${smeLx.toFixed(1)}, ${smeLy.toFixed(1)})`}>
-                      Standard Mean Error
+                      transform={`rotate(90, ${smeLx.toFixed(1)}, ${smeLy.toFixed(1)})`}>
+                      Std. Error
+                    </text>
+                    {/* "Forecast Value" axis title — centered below the outer arc */}
+                    <text x={cx} y={cy + 18} fontSize="9" fill="#2c3e50" fontWeight="600"
+                      textAnchor="middle" dominantBaseline="auto">
+                      ← Forecast Value →
                     </text>
                   </svg>
                 </div>
@@ -1100,12 +1245,94 @@ function App() {
               <h3 style={{ margin: '0 0 10px 0', fontSize: '13px', fontWeight: '600', color: '#2c3e50' }}>
                 {selectedVariable === 'wind' ? 'Wind Speed (m/s)' : selectedMember === 'std' ? 'Uncertainty (mm/hr)' : 'Precipitation (mm/hr)'}
               </h3>
-              <div style={{ height: '160px', width: '30px', background: getLegendGradient(selectedColormap), borderRadius: '4px', border: '1px solid #ccc', position: 'relative' }}>
-                <div style={{ position: 'absolute', right: '-50px', top: '-2px',  fontSize: '10px', fontWeight: '600', color: '#2c3e50' }}>{stats ? stats.max : '100+'}</div>
-                <div style={{ position: 'absolute', right: '-50px', top: '40px',  fontSize: '10px', fontWeight: '600', color: '#2c3e50' }}>{stats ? (parseFloat(stats.max) * 0.67).toFixed(1) : '50'}</div>
-                <div style={{ position: 'absolute', right: '-50px', top: '80px',  fontSize: '10px', fontWeight: '600', color: '#2c3e50' }}>{stats ? (parseFloat(stats.max) * 0.33).toFixed(1) : '25'}</div>
-                <div style={{ position: 'absolute', right: '-35px', bottom: '0',  fontSize: '10px', fontWeight: '600', color: '#2c3e50' }}>0</div>
-              </div>
+
+              {selectedTexture === 'lines' ? (() => {
+                // 2-row certainty grid legend matching reference image
+                const cmapColors = COLORMAPS[selectedColormap].colors;
+                const steps = 5;
+                const cellW = 28, cellH = 24;
+                const maxVal = stats ? parseFloat(stats.max) : 10;
+                return (
+                  <div>
+                    <svg width={steps * cellW + 36} height={cellH * 2 + 40} style={{ overflow: 'visible' }}>
+                      {/* Y-axis label */}
+                      <text x={-2} y={cellH} fontSize="8" fill="#2c3e50" fontWeight="600" textAnchor="middle"
+                        transform={`rotate(-90, -2, ${cellH})`}>Certainty</text>
+
+                      {[0, 1].map(row => {
+                        const isLowCert = row === 1; // bottom row = Low certainty = lines
+                        return steps && Array.from({ length: steps }, (_, ci) => {
+                          const t = ci / (steps - 1);
+                          const seg = cmapColors.length - 1;
+                          const si  = Math.min(Math.floor(t * seg), seg - 1);
+                          const tf  = t * seg - si;
+                          const c1  = cmapColors[si], c2 = cmapColors[Math.min(si+1, seg)];
+                          const r = Math.round(parseInt(c1.slice(1,3),16)+(parseInt(c2.slice(1,3),16)-parseInt(c1.slice(1,3),16))*tf);
+                          const g = Math.round(parseInt(c1.slice(3,5),16)+(parseInt(c2.slice(3,5),16)-parseInt(c1.slice(3,5),16))*tf);
+                          const b = Math.round(parseInt(c1.slice(5,7),16)+(parseInt(c2.slice(5,7),16)-parseInt(c1.slice(5,7),16))*tf);
+                          const fill = `rgb(${r},${g},${b})`;
+                          const x = 14 + ci * cellW, y = row * cellH;
+                          return (
+                            <g key={`${row}-${ci}`}>
+                              <rect x={x} y={y} width={cellW} height={cellH} fill={fill} stroke="white" strokeWidth="1" />
+                              {isLowCert && Array.from({ length: 6 }, (_, li) => {
+                                const lx = x - cellH + li * 7;
+                                return <line key={li} x1={lx} y1={y} x2={lx + cellH} y2={y + cellH}
+                                  stroke="rgba(80,80,80,0.55)" strokeWidth="0.8"
+                                  clipPath={`inset(0 0 0 0)`} />;
+                              })}
+                            </g>
+                          );
+                        });
+                      })}
+
+                      {/* Clip hatching to cells */}
+                      <defs>
+                        {Array.from({ length: steps }, (_, ci) => (
+                          <clipPath key={ci} id={`cell-clip-${ci}`}>
+                            <rect x={14 + ci * cellW} y={cellH} width={cellW} height={cellH} />
+                          </clipPath>
+                        ))}
+                      </defs>
+                      {/* Hatching on bottom row (Low certainty = high uncertainty) */}
+                      {Array.from({ length: steps }, (_, ci) => (
+                        Array.from({ length: 8 }, (_, li) => {
+                          const x = 14 + ci * cellW;
+                          const lx = x - 4 + li * 7;
+                          return <line key={`h-${ci}-${li}`}
+                            x1={lx} y1={cellH} x2={lx + cellH} y2={cellH * 2}
+                            stroke="rgba(80,80,80,0.7)" strokeWidth="1.0"
+                            clipPath={`url(#cell-clip-${ci})`} />;
+                        })
+                      ))}
+
+                      {/* X-axis value labels */}
+                      {Array.from({ length: steps }, (_, ci) => (
+                        <text key={ci} x={14 + ci * cellW + cellW / 2} y={cellH * 2 + 12}
+                          fontSize="8" fill="#2c3e50" textAnchor="middle">
+                          {(maxVal * ci / (steps - 1)).toFixed(1)}
+                        </text>
+                      ))}
+                      {/* X-axis title */}
+                      <text x={14 + (steps * cellW) / 2} y={cellH * 2 + 26}
+                        fontSize="8" fill="#2c3e50" fontWeight="600" textAnchor="middle">
+                        {selectedVariable === 'wind' ? 'Wind Speed (m/s)' : 'Precipitation (mm/hr)'}
+                      </text>
+
+                      {/* Y-axis: top = High certainty (no lines), bottom = Low certainty (lines) */}
+                      <text x={14 + steps * cellW + 4} y={cellH / 2 + 4} fontSize="8" fill="#2c3e50" textAnchor="start">High certainty</text>
+                      <text x={14 + steps * cellW + 4} y={cellH + cellH / 2 + 4} fontSize="8" fill="#2c3e50" textAnchor="start">Low certainty</text>
+                    </svg>
+                  </div>
+                );
+              })() : (
+                <div style={{ height: '160px', width: '30px', background: getLegendGradient(selectedColormap), borderRadius: '4px', border: '1px solid #ccc', position: 'relative' }}>
+                  <div style={{ position: 'absolute', right: '-50px', top: '-2px',  fontSize: '10px', fontWeight: '600', color: '#2c3e50' }}>{stats ? stats.max : '100+'}</div>
+                  <div style={{ position: 'absolute', right: '-50px', top: '40px',  fontSize: '10px', fontWeight: '600', color: '#2c3e50' }}>{stats ? (parseFloat(stats.max) * 0.67).toFixed(1) : '50'}</div>
+                  <div style={{ position: 'absolute', right: '-50px', top: '80px',  fontSize: '10px', fontWeight: '600', color: '#2c3e50' }}>{stats ? (parseFloat(stats.max) * 0.33).toFixed(1) : '25'}</div>
+                  <div style={{ position: 'absolute', right: '-35px', bottom: '0',  fontSize: '10px', fontWeight: '600', color: '#2c3e50' }}>0</div>
+                </div>
+              )}
             </div>}
           </div>
         )}
