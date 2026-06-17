@@ -16,6 +16,7 @@ export const drawBivariateLayer = async (
   map, bivariateLayerRef,
   modelName, variable, hour,
   colorMatrix, onRanges,
+  numBuckets = 0,
 ) => {
   if (!map?._loaded) return;
   stopBivariate(map, bivariateLayerRef);
@@ -38,7 +39,8 @@ export const drawBivariateLayer = async (
     const stdMax  = Math.max(...stdVals)  || 1;
     onRanges?.({ meanMax, stdMax });
 
-    const bin = (v, max) => Math.min(3, Math.floor((Math.min(v, max) / max) * 4));
+    const N   = numBuckets > 1 ? numBuckets : colorMatrix.length;
+    const bin = (v, max) => Math.min(N - 1, Math.floor((Math.min(v, max) / max) * N));
 
     // Auto-detect grid spacing from data
     const lats    = meanData.map(p => parseFloat(p.lat)).sort((a, b) => a - b);
