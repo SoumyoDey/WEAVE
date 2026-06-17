@@ -47,7 +47,7 @@ export const VSUP_COLORS = [
 // vsup = false → Bivariate: value hue preserved, muted by uncertainty
 // vsup = true  → VSUP Fan:  value columns also compressed toward mid-point at
 //                            high uncertainty (produces near-identical row-3 colours)
-export const buildColorMatrix = (colormapName, vsup = false, invertUncertainty = false) => {
+export const buildColorMatrix = (colormapName, vsup = false, invertUncertainty = false, N = 4) => {
   const colors  = COLORMAPS[colormapName].colors;
   const lerp    = (a, b, t) => Math.round(a + (b - a) * t);
   const toHex   = (r, g, b) =>
@@ -65,12 +65,14 @@ export const buildColorMatrix = (colormapName, vsup = false, invertUncertainty =
   };
   const neutral  = 185;
   const strength = vsup ? 0.92 : 0.60;
-  return Array.from({ length: 4 }, (_, row) => {
-    const uncert = invertUncertainty ? (1 - row / 3) : (row / 3);
-    return Array.from({ length: 4 }, (_, col) => {
+  const size     = N > 1 ? N : 4;
+  const maxIdx   = size - 1;
+  return Array.from({ length: size }, (_, row) => {
+    const uncert = invertUncertainty ? (1 - row / maxIdx) : (row / maxIdx);
+    return Array.from({ length: size }, (_, col) => {
       const t = vsup
-        ? (col / 3) * (1 - uncert * strength) + 0.5 * (uncert * strength)
-        : col / 3;
+        ? (col / maxIdx) * (1 - uncert * strength) + 0.5 * (uncert * strength)
+        : col / maxIdx;
       const [r, g, b] = cmapRgb(t);
       return toHex(
         lerp(r, neutral, uncert * strength * 0.80),
