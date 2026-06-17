@@ -52,9 +52,15 @@ function App() {
   const [showWindLines, setShowWindLines]       = useState(false);
 
   // ── Uncertainty overlay state (mutually exclusive) ───────────────────────────
-  const [uncertaintyMode, setUncertaintyMode]   = useState(null);  // null | 'vsup' | 'bivariate' | 'fan'
+  const [uncertaintyMode, setUncertaintyMode]   = useState(null);  // null | 'vsup' | 'bivariate' | 'fan' | 'texture'
   const [bivariateRanges, setBivariateRanges]   = useState(null);
   const [invertUncertainty, setInvertUncertainty] = useState(false);
+
+  // ── Map Chart controls ────────────────────────────────────────────────────────
+  const [numBuckets,   setNumBuckets]   = useState(0);
+  const [flipColormap, setFlipColormap] = useState(false);
+  const [gridOpacity,  setGridOpacity]  = useState(1.0);
+  const [textureStyle, setTextureStyle] = useState('Lines');
 
   // ── Data & stats state ───────────────────────────────────────────────────────
   const [showData, setShowData]     = useState(false);
@@ -505,6 +511,10 @@ function App() {
           showWindLines={showWindLines}   setShowWindLines={setShowWindLines}
           uncertaintyMode={uncertaintyMode} setUncertaintyMode={setUncertaintyMode}
           invertUncertainty={invertUncertainty} setInvertUncertainty={setInvertUncertainty}
+          numBuckets={numBuckets}     setNumBuckets={setNumBuckets}
+          flipColormap={flipColormap} setFlipColormap={setFlipColormap}
+          gridOpacity={gridOpacity}   setGridOpacity={setGridOpacity}
+          textureStyle={textureStyle} setTextureStyle={setTextureStyle}
         />
         <LeftPanel
           open={menuOpen}
