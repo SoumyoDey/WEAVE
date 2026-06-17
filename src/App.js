@@ -212,7 +212,7 @@ function App() {
       if (canvasRef.current) canvasRef.current.style.display = 'block';
       stopUncertainty(map, uncertaintyLayerRef, uncertaintyCanvasRef);
     }
-  }, [showUncertainty, selectedHour, selectedModel, selectedVariable]); // eslint-disable-line
+  }, [showUncertainty, selectedHour, selectedModel, selectedVariable, selectedColormap, invertUncertainty]); // eslint-disable-line
 
   // ── Bivariate / VSUP Fan overlay ──────────────────────────────────────────────
   useEffect(() => {
@@ -224,7 +224,7 @@ function App() {
       if (canvasRef.current) canvasRef.current.style.display = 'block';
       stopBivariate(map, bivariateLayerRef);
     }
-  }, [showBivariate, showFanChart, selectedHour, selectedModel, selectedVariable]); // eslint-disable-line
+  }, [showBivariate, showFanChart, selectedHour, selectedModel, selectedVariable, numBuckets, selectedColormap, invertUncertainty]); // eslint-disable-line
 
   // ── Texture overlay ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -236,7 +236,7 @@ function App() {
       if (canvasRef.current) canvasRef.current.style.display = 'block';
       stopTexture(map, textureLayerRef);
     }
-  }, [showTexture, selectedHour, selectedModel, selectedVariable, textureStyle]); // eslint-disable-line
+  }, [showTexture, selectedHour, selectedModel, selectedVariable, textureStyle, numBuckets, flipColormap, gridOpacity, invertUncertainty]); // eslint-disable-line
 
   // ── Data fetch ────────────────────────────────────────────────────────────────
   const loadDataForHour = async () => {
