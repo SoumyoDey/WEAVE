@@ -35,6 +35,54 @@ const continuousColor = (colormapName, normVal, normStd, vsup = false) => {
  * @param {Array}   colorMatrix   - 4×4 array of hex strings from buildColorMatrix()
  * @param {Function} onRanges     - called with { meanMax, stdMax } once computed
  */
+/**
+ * Render bivariate layer from already-fetched data.
+ * Call this when only display params change (numBuckets, colormap, invert).
+ */
+export const renderBivariateFromCache = (
+  map, bivariateLayerRef, cachedData,
+  colorMatrix, numBuckets, colormapName, vsup,
+) => {
+  if (!map?._loaded || !cachedData) return;
+  stopBivariate(map, bivariateLayerRef);
+
+  const { meanData, meanLookup, stdLookup, meanMax, stdMax, half } = cachedData;
+
+  const continuous = numBuckets === 0;
+  const N   = continuous ? 0 : Math.max(1, numBuckets);
+  const bin = (v, max) => Math.min(N - 1, Math.floor((Math.min(v, max) / max) * N));
+
+  const layerGroup = L.layerGroup();
+  for (const pt of meanData) {
+    const lat     = parseFloat(pt.lat);
+    const lon     = parseFloat(pt.lon);
+    const key     = `${pt.lat}_${pt.lon}`;
+    const meanVal = meanLookup[key] ?? 0;
+    const stdVal  = stdLookup[key]  ?? 0;
+
+    let color;
+    if (continuous) {
+      const normVal = Math.min(meanVal / meanMax, 1);
+      const normStd = Math.min(stdVal  / stdMax,  1);
+      color = continuousColor(colormapName, normVal, normStd, vsup);
+    } else {
+      const colIdx = Math.min(N - 1, bin(meanVal, meanMax));
+      const rowIdx = Math.min(N - 1, bin(stdVal,  stdMax));
+      color = colorMatrix?.[rowIdx]?.[colIdx] ?? '#ccc';
+    }
+    L.rectangle(
+      [[lat - half, lon - half], [lat + half, lon + half]],
+      { fillColor: color, color: 'transparent', fillOpacity: 0.85, weight: 0, interactive: false },
+    ).addTo(layerGroup);
+  }
+  layerGroup.addTo(map);
+  bivariateLayerRef.current = layerGroup;
+};
+
+/**
+ * Fetch data then render. Use when model/variable/hour changes.
+ * Returns the cached data object for reuse.
+ */
 export const drawBivariateLayer = async (
   map, bivariateLayerRef,
   modelName, variable, hour,
@@ -43,12 +91,12 @@ export const drawBivariateLayer = async (
   colormapName = 'Default',
   vsup = false,
 ) => {
-  if (!map?._loaded) return;
+  if (!map?._loaded) return null;
   stopBivariate(map, bivariateLayerRef);
 
   try {
     const { meanData, stdData } = await fetchUncertaintyPair(modelName, variable, hour);
-    if (!Array.isArray(meanData) || !Array.isArray(stdData)) return;
+    if (!Array.isArray(meanData) || !Array.isArray(stdData)) return null;
 
     const val = (pt) => parseFloat(variable === 'wind' ? pt.speed : pt.value);
 
@@ -58,51 +106,26 @@ export const drawBivariateLayer = async (
 
     const meanVals = Object.values(meanLookup).filter(v => !isNaN(v) && v >= 0);
     const stdVals  = Object.values(stdLookup).filter(v => !isNaN(v) && v >= 0);
-    if (!meanVals.length || !stdVals.length) return;
+    if (!meanVals.length || !stdVals.length) return null;
 
     const meanMax = Math.max(...meanVals) || 1;
     const stdMax  = Math.max(...stdVals)  || 1;
     onRanges?.({ meanMax, stdMax });
 
-    const continuous = numBuckets === 0;
-    const N   = continuous ? 0 : (numBuckets > 1 ? numBuckets : colorMatrix.length);
-    const bin = (v, max) => Math.min(N - 1, Math.floor((Math.min(v, max) / max) * N));
-
-    // Auto-detect grid spacing from data
+    // Auto-detect grid spacing
     const lats    = meanData.map(p => parseFloat(p.lat)).sort((a, b) => a - b);
     const unique  = [...new Set(lats.map(l => Math.round(l * 10) / 10))];
     const spacing = unique.length > 1 ? Math.abs(unique[1] - unique[0]) : 0.5;
     const half    = spacing * 0.5;
 
-    const layerGroup = L.layerGroup();
-    for (const pt of meanData) {
-      const lat     = parseFloat(pt.lat);
-      const lon     = parseFloat(pt.lon);
-      const key     = `${pt.lat}_${pt.lon}`;
-      const meanVal = meanLookup[key] ?? 0;
-      const stdVal  = stdLookup[key]  ?? 0;
+    const cachedData = { meanData, meanLookup, stdLookup, meanMax, stdMax, half };
 
-      let color;
-      if (continuous) {
-        // 0 buckets → compute colour directly from exact normalised values
-        const normVal = Math.min(meanVal / meanMax, 1);
-        const normStd = Math.min(stdVal  / stdMax,  1);
-        color = continuousColor(colormapName, normVal, normStd, vsup);
-      } else {
-        const colIdx = bin(meanVal, meanMax);
-        const rowIdx = bin(stdVal,  stdMax);
-        color = colorMatrix[rowIdx][colIdx];
-      }
-      L.rectangle(
-        [[lat - half, lon - half], [lat + half, lon + half]],
-        { fillColor: color, color: 'transparent', fillOpacity: 0.85, weight: 0, interactive: false },
-      ).addTo(layerGroup);
-    }
+    renderBivariateFromCache(map, bivariateLayerRef, cachedData, colorMatrix, numBuckets, colormapName, vsup);
 
-    layerGroup.addTo(map);
-    bivariateLayerRef.current = layerGroup;
+    return cachedData;
   } catch (err) {
     console.error('Bivariate error:', err);
+    return null;
   }
 };
 
