@@ -17,6 +17,7 @@ import { drawOnMap }            from './layers/idwLayer';
 import { drawWindArrows, startStreamlines, stopStreamlines } from './layers/windLayer';
 import { drawUncertaintyBoxes, stopUncertainty } from './layers/vsupLayer';
 import { drawBivariateLayer, stopBivariate }     from './layers/bivariateLayer';
+import { drawTextureLayer, stopTexture }         from './layers/textureLayer';
 import { renderMetricCanvas, clearMetricCanvas } from './layers/metricLayer';
 
 // ── UI Components ─────────────────────────────────────────────────────────────
@@ -32,6 +33,7 @@ import { IDWLegend }          from './components/legends/IDWLegend';
 import { BivariateLegend }    from './components/legends/BivariateLegend';
 import { VSUPFanLegend }      from './components/legends/VSUPFanLegend';
 import { VSUPBoxesLegend }    from './components/legends/VSUPBoxesLegend';
+import { TextureLegend }      from './components/legends/TextureLegend';
 
 const TAB_BAR_H = 48;
 
@@ -103,6 +105,7 @@ function App() {
   const uncertaintyCanvasRef  = useRef(null);
   const uncertaintyLayerRef   = useRef(null);
   const bivariateLayerRef     = useRef(null);
+  const textureLayerRef       = useRef(null);
   const clickMarkerRef        = useRef(null);
   const selectionLayerRef     = useRef(null);
   const selectionModeRef      = useRef(null);
@@ -115,10 +118,11 @@ function App() {
 
   const currentModel = MODELS[selectedModel];
 
-  // Derived booleans (kept for backwards compatibility with effects)
+  // Derived booleans
   const showUncertainty = uncertaintyMode === 'vsup';
   const showBivariate   = uncertaintyMode === 'bivariate';
   const showFanChart    = uncertaintyMode === 'fan';
+  const showTexture     = uncertaintyMode === 'texture';
 
   // ── Ref mirrors ──────────────────────────────────────────────────────────────
   useEffect(() => { selectionModeRef.current = selectionMode; }, [selectionMode]);
@@ -171,14 +175,17 @@ function App() {
         drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, false, invert), setBivariateRanges);
       } else if (showFanChart) {
         drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, true, invert), setBivariateRanges);
+      } else if (showTexture) {
+        drawTextureLayer(map, textureLayerRef, currentModel.name, selectedVariable, selectedHour, selectedColormap, textureStyle, numBuckets, flipColormap, gridOpacity, invert, setBivariateRanges);
       } else {
-        drawOnMap(map, dataRef.current, selectedColormap, selectedMember === 'std', dataRange, { canvasRef, drawFnRef, uncertaintyModeRef });
+        drawOnMap(map, dataRef.current, selectedColormap, selectedMember === 'std', dataRange, { canvasRef, drawFnRef, uncertaintyModeRef }, { flipColormap, gridOpacity, numBuckets });
       }
     }, 100);
   };
 
-  useEffect(() => { redrawUncertaintyOverlay(invertUncertainty); }, [selectedColormap]);    // eslint-disable-line
-  useEffect(() => { redrawUncertaintyOverlay(invertUncertainty); }, [invertUncertainty]);   // eslint-disable-line
+  useEffect(() => { redrawUncertaintyOverlay(invertUncertainty); }, [selectedColormap]);                    // eslint-disable-line
+  useEffect(() => { redrawUncertaintyOverlay(invertUncertainty); }, [invertUncertainty]);                   // eslint-disable-line
+  useEffect(() => { redrawUncertaintyOverlay(invertUncertainty); }, [numBuckets, flipColormap, gridOpacity, textureStyle]); // eslint-disable-line
 
   // ── Wind arrows / streamlines ─────────────────────────────────────────────────
   useEffect(() => {
@@ -218,6 +225,18 @@ function App() {
       stopBivariate(map, bivariateLayerRef);
     }
   }, [showBivariate, showFanChart, selectedHour, selectedModel, selectedVariable]); // eslint-disable-line
+
+  // ── Texture overlay ───────────────────────────────────────────────────────────
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (showTexture && map) {
+      if (canvasRef.current) canvasRef.current.style.display = 'none';
+      drawTextureLayer(map, textureLayerRef, currentModel.name, selectedVariable, selectedHour, selectedColormap, textureStyle, numBuckets, flipColormap, gridOpacity, invertUncertainty, setBivariateRanges);
+    } else {
+      if (canvasRef.current) canvasRef.current.style.display = 'block';
+      stopTexture(map, textureLayerRef);
+    }
+  }, [showTexture, selectedHour, selectedModel, selectedVariable, textureStyle]); // eslint-disable-line
 
   // ── Data fetch ────────────────────────────────────────────────────────────────
   const loadDataForHour = async () => {
@@ -545,6 +564,7 @@ function App() {
                 selectedVariable={selectedVariable}
                 buildColorMatrix={buildColorMatrix}
                 invertUncertainty={invertUncertainty}
+                numBuckets={numBuckets}
               />
             )}
             {showFanChart && (
@@ -559,13 +579,26 @@ function App() {
             {showUncertainty && stats && (
               <VSUPBoxesLegend stats={stats} selectedVariable={selectedVariable} invertUncertainty={invertUncertainty} />
             )}
-            {!showBivariate && !showFanChart && (
+            {showTexture && (
+              <TextureLegend
+                bivariateRanges={bivariateRanges}
+                selectedColormap={selectedColormap}
+                selectedVariable={selectedVariable}
+                textureStyle={textureStyle}
+                numBuckets={numBuckets}
+                flipColormap={flipColormap}
+                invertUncertainty={invertUncertainty}
+              />
+            )}
+            {!showBivariate && !showFanChart && !showUncertainty && !showTexture && (
               <IDWLegend
                 selectedColormap={selectedColormap}
                 stats={stats}
                 selectedVariable={selectedVariable}
                 selectedMember={selectedMember}
                 getLegendGradient={getLegendGradient}
+                numBuckets={numBuckets}
+                flipColormap={flipColormap}
               />
             )}
           </div>
