@@ -79,9 +79,8 @@ export function RightPanel({
             <input type="range" min="0" max="1" step="0.05" value={gridOpacity ?? 1} onChange={e => setGridOpacity(parseFloat(e.target.value))} style={{ width: '100%', accentColor: '#3498db', cursor: 'pointer' }} />
           </div>
 
-          {/* Number of Buckets — only when an uncertainty overlay is active */}
-          {uncertaintyMode !== null && (
-            <div style={row}>
+          {/* Number of Buckets */}
+          <div style={row}>
               <div>
                 <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.7)' }}>Number of Buckets</span>
                 <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)' }}>0 = continuous</div>
@@ -91,8 +90,7 @@ export function RightPanel({
                 <span style={{ fontSize: '13px', minWidth: '22px', textAlign: 'center', fontWeight: '600' }}>{numBuckets ?? 0}</span>
                 <button onClick={() => setNumBuckets(v => Math.min(20, v + 1))} style={{ width: '24px', height: '24px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(255,255,255,0.07)', color: 'white', cursor: 'pointer', fontSize: '16px', lineHeight: '22px', textAlign: 'center' }}>+</button>
               </div>
-            </div>
-          )}
+          </div>
         </div>
 
         {/* ── Wind overlays ─────────────────────────────────────────────── */}
