@@ -1,5 +1,28 @@
 import L from 'leaflet';
 import { fetchUncertaintyPair } from '../api/forecastApi';
+import { COLORMAPS } from '../constants';
+
+/** Compute a continuous bivariate colour directly from normVal + normStd (no matrix lookup) */
+const continuousColor = (colormapName, normVal, normStd, vsup = false) => {
+  const colors   = COLORMAPS[colormapName]?.colors ?? COLORMAPS['Default'].colors;
+  const neutral  = 185;
+  const strength = vsup ? 0.92 : 0.60;
+  const lerp = (a, b, t) => Math.round(a + (b - a) * t);
+  const t = vsup
+    ? normVal * (1 - normStd * strength) + 0.5 * (normStd * strength)
+    : normVal;
+  const seg = colors.length - 1;
+  const si  = Math.min(Math.floor(Math.min(t, 0.9999) * seg), seg - 1);
+  const lt  = t * seg - si;
+  const c1  = colors[si], c2 = colors[si + 1];
+  const r0  = lerp(parseInt(c1.slice(1,3),16), parseInt(c2.slice(1,3),16), lt);
+  const g0  = lerp(parseInt(c1.slice(3,5),16), parseInt(c2.slice(3,5),16), lt);
+  const b0  = lerp(parseInt(c1.slice(5,7),16), parseInt(c2.slice(5,7),16), lt);
+  const r   = lerp(r0, neutral, normStd * strength * 0.80);
+  const g   = lerp(g0, neutral, normStd * strength * 0.80);
+  const b   = lerp(b0, neutral, normStd * strength * 0.80);
+  return `rgb(${r},${g},${b})`;
+};
 
 /**
  * Fetches mean + std fields and renders a bivariate (or VSUP Fan) choropleth.
@@ -17,6 +40,8 @@ export const drawBivariateLayer = async (
   modelName, variable, hour,
   colorMatrix, onRanges,
   numBuckets = 0,
+  colormapName = 'Default',
+  vsup = false,
 ) => {
   if (!map?._loaded) return;
   stopBivariate(map, bivariateLayerRef);
@@ -39,7 +64,8 @@ export const drawBivariateLayer = async (
     const stdMax  = Math.max(...stdVals)  || 1;
     onRanges?.({ meanMax, stdMax });
 
-    const N   = numBuckets > 1 ? numBuckets : colorMatrix.length;
+    const continuous = numBuckets === 0;
+    const N   = continuous ? 0 : (numBuckets > 1 ? numBuckets : colorMatrix.length);
     const bin = (v, max) => Math.min(N - 1, Math.floor((Math.min(v, max) / max) * N));
 
     // Auto-detect grid spacing from data
@@ -55,9 +81,18 @@ export const drawBivariateLayer = async (
       const key     = `${pt.lat}_${pt.lon}`;
       const meanVal = meanLookup[key] ?? 0;
       const stdVal  = stdLookup[key]  ?? 0;
-      const colIdx  = bin(meanVal, meanMax);  // X = mean value
-      const rowIdx  = bin(stdVal,  stdMax);   // Y = uncertainty
-      const color   = colorMatrix[rowIdx][colIdx];
+
+      let color;
+      if (continuous) {
+        // 0 buckets → compute colour directly from exact normalised values
+        const normVal = Math.min(meanVal / meanMax, 1);
+        const normStd = Math.min(stdVal  / stdMax,  1);
+        color = continuousColor(colormapName, normVal, normStd, vsup);
+      } else {
+        const colIdx = bin(meanVal, meanMax);
+        const rowIdx = bin(stdVal,  stdMax);
+        color = colorMatrix[rowIdx][colIdx];
+      }
       L.rectangle(
         [[lat - half, lon - half], [lat + half, lon + half]],
         { fillColor: color, color: 'transparent', fillOpacity: 0.85, weight: 0, interactive: false },

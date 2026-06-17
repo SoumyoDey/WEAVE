@@ -172,9 +172,9 @@ function App() {
       if (showUncertainty) {
         drawUncertaintyBoxes(map, uncertaintyLayerRef, uncertaintyCanvasRef, currentModel.name, selectedVariable, selectedHour, selectedColormap, invert);
       } else if (showBivariate) {
-        drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, false, invert, numBuckets > 1 ? numBuckets : 4), setBivariateRanges, numBuckets);
+        drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, false, invert, numBuckets > 1 ? numBuckets : 4), setBivariateRanges, numBuckets, selectedColormap, false);
       } else if (showFanChart) {
-        drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, true, invert, numBuckets > 1 ? numBuckets : 4), setBivariateRanges, numBuckets);
+        drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, true, invert, numBuckets > 1 ? numBuckets : 4), setBivariateRanges, numBuckets, selectedColormap, true);
       } else if (showTexture) {
         drawTextureLayer(map, textureLayerRef, currentModel.name, selectedVariable, selectedHour, selectedColormap, textureStyle, numBuckets, flipColormap, gridOpacity, invert, setBivariateRanges);
       } else {
@@ -219,7 +219,7 @@ function App() {
     const map = mapInstanceRef.current;
     if ((showBivariate || showFanChart) && map) {
       if (canvasRef.current) canvasRef.current.style.display = 'none';
-      drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, showFanChart, invertUncertainty, numBuckets > 1 ? numBuckets : 4), setBivariateRanges, numBuckets);
+      drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, showFanChart, invertUncertainty, numBuckets > 1 ? numBuckets : 4), setBivariateRanges, numBuckets, selectedColormap, showFanChart);
     } else {
       if (canvasRef.current) canvasRef.current.style.display = 'block';
       stopBivariate(map, bivariateLayerRef);
@@ -267,9 +267,9 @@ function App() {
         if (uncertaintyModeRef.current === 'vsup')
           drawUncertaintyBoxes(map, uncertaintyLayerRef, uncertaintyCanvasRef, currentModel.name, selectedVariable, selectedHour, selectedColormap, invertUncertaintyRef.current);
         if (uncertaintyModeRef.current === 'bivariate')
-          drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, false, invertUncertaintyRef.current, numBuckets > 1 ? numBuckets : 4), setBivariateRanges, numBuckets);
+          drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, false, invertUncertaintyRef.current, numBuckets > 1 ? numBuckets : 4), setBivariateRanges, numBuckets, selectedColormap, false);
         if (uncertaintyModeRef.current === 'fan')
-          drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, true, invertUncertaintyRef.current, numBuckets > 1 ? numBuckets : 4), setBivariateRanges, numBuckets);
+          drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, true, invertUncertaintyRef.current, numBuckets > 1 ? numBuckets : 4), setBivariateRanges, numBuckets, selectedColormap, true);
       }, 300);
     } catch (err) {
       console.error('Load error:', err);
