@@ -164,29 +164,27 @@ function App() {
     if (mapInstanceRef.current) loadDataForHour();
   }, [selectedHour, selectedModel, selectedMember, selectedVariable]); // eslint-disable-line
 
-  // ── Shared redraw helper for colormap / invert changes ────────────────────────
-  const redrawUncertaintyOverlay = (invert) => {
-    if (!dataRef.current?.length) return;
+  // ── Redraw IDW / VSup when colormap or invert changes ────────────────────────
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !dataRef.current?.length) return;
     setTimeout(() => {
-      const map = mapInstanceRef.current;
-      if (!map) return;
       if (showUncertainty) {
-        drawUncertaintyBoxes(map, uncertaintyLayerRef, uncertaintyCanvasRef, currentModel.name, selectedVariable, selectedHour, selectedColormap, invert);
-      } else if (showBivariate) {
-        drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, false, invert, numBuckets > 1 ? numBuckets : 4), setBivariateRanges, numBuckets, selectedColormap, false);
-      } else if (showFanChart) {
-        drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, true, invert, numBuckets > 1 ? numBuckets : 4), setBivariateRanges, numBuckets, selectedColormap, true);
-      } else if (showTexture) {
-        drawTextureLayer(map, textureLayerRef, currentModel.name, selectedVariable, selectedHour, selectedColormap, textureStyle, numBuckets, flipColormap, gridOpacity, invert, setBivariateRanges);
-      } else {
+        drawUncertaintyBoxes(map, uncertaintyLayerRef, uncertaintyCanvasRef, currentModel.name, selectedVariable, selectedHour, selectedColormap, invertUncertainty);
+      } else if (!showBivariate && !showFanChart && !showTexture) {
         drawOnMap(map, dataRef.current, selectedColormap, selectedMember === 'std', dataRange, { canvasRef, drawFnRef, uncertaintyModeRef }, { flipColormap, gridOpacity, numBuckets });
       }
     }, 100);
-  };
+  }, [selectedColormap, invertUncertainty]); // eslint-disable-line
 
-  useEffect(() => { redrawUncertaintyOverlay(invertUncertainty); }, [selectedColormap]);                    // eslint-disable-line
-  useEffect(() => { redrawUncertaintyOverlay(invertUncertainty); }, [invertUncertainty]);                   // eslint-disable-line
-  useEffect(() => { redrawUncertaintyOverlay(invertUncertainty); }, [numBuckets, flipColormap, gridOpacity, textureStyle]); // eslint-disable-line
+  // ── Redraw IDW when numBuckets / flipColormap / gridOpacity changes ───────────
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !dataRef.current?.length) return;
+    if (!showBivariate && !showFanChart && !showTexture) {
+      drawOnMap(map, dataRef.current, selectedColormap, selectedMember === 'std', dataRange, { canvasRef, drawFnRef, uncertaintyModeRef }, { flipColormap, gridOpacity, numBuckets });
+    }
+  }, [numBuckets, flipColormap, gridOpacity]); // eslint-disable-line
 
   // ── Wind arrows / streamlines ─────────────────────────────────────────────────
   useEffect(() => {
