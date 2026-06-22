@@ -17,6 +17,7 @@ import { drawOnMap }            from './layers/idwLayer';
 import { drawWindArrows, startStreamlines, stopStreamlines } from './layers/windLayer';
 import { drawUncertaintyBoxes, stopUncertainty } from './layers/vsupLayer';
 import { drawBivariateLayer, stopBivariate }     from './layers/bivariateLayer';
+import { drawTextureLayer, stopTexture }         from './layers/textureLayer';
 import { renderMetricCanvas, clearMetricCanvas } from './layers/metricLayer';
 
 // ── UI Components ─────────────────────────────────────────────────────────────
@@ -52,9 +53,15 @@ function App() {
   const [showWindLines, setShowWindLines]       = useState(false);
 
   // ── Uncertainty overlay state (mutually exclusive) ───────────────────────────
-  const [uncertaintyMode, setUncertaintyMode]   = useState(null);  // null | 'vsup' | 'bivariate' | 'fan'
+  const [uncertaintyMode, setUncertaintyMode]   = useState(null);  // null|'vsup'|'bivariate'|'fan'|'texture'
   const [bivariateRanges, setBivariateRanges]   = useState(null);
   const [invertUncertainty, setInvertUncertainty] = useState(false);
+
+  // ── Map chart controls ────────────────────────────────────────────────────────
+  const [numBuckets,   setNumBuckets]   = useState(0);      // 0 = continuous
+  const [flipColormap, setFlipColormap] = useState(false);
+  const [gridOpacity,  setGridOpacity]  = useState(1.0);
+  const [textureStyle, setTextureStyle] = useState('Lines');
 
   // ── Data & stats state ───────────────────────────────────────────────────────
   const [showData, setShowData]     = useState(false);
@@ -97,6 +104,7 @@ function App() {
   const uncertaintyCanvasRef  = useRef(null);
   const uncertaintyLayerRef   = useRef(null);
   const bivariateLayerRef     = useRef(null);
+  const textureLayerRef       = useRef(null);
   const clickMarkerRef        = useRef(null);
   const selectionLayerRef     = useRef(null);
   const selectionModeRef      = useRef(null);
@@ -113,6 +121,7 @@ function App() {
   const showUncertainty = uncertaintyMode === 'vsup';
   const showBivariate   = uncertaintyMode === 'bivariate';
   const showFanChart    = uncertaintyMode === 'fan';
+  const showTexture     = uncertaintyMode === 'texture';
 
   // ── Ref mirrors ──────────────────────────────────────────────────────────────
   useEffect(() => { selectionModeRef.current = selectionMode; }, [selectionMode]);
@@ -153,26 +162,17 @@ function App() {
     if (mapInstanceRef.current) loadDataForHour();
   }, [selectedHour, selectedModel, selectedMember, selectedVariable]); // eslint-disable-line
 
-  // ── Shared redraw helper for colormap / invert changes ────────────────────────
-  const redrawUncertaintyOverlay = (invert) => {
-    if (!dataRef.current?.length) return;
-    setTimeout(() => {
-      const map = mapInstanceRef.current;
-      if (!map) return;
-      if (showUncertainty) {
-        drawUncertaintyBoxes(map, uncertaintyLayerRef, uncertaintyCanvasRef, currentModel.name, selectedVariable, selectedHour, selectedColormap, invert);
-      } else if (showBivariate) {
-        drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, false, invert), setBivariateRanges);
-      } else if (showFanChart) {
-        drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, true, invert), setBivariateRanges);
-      } else {
-        drawOnMap(map, dataRef.current, selectedColormap, selectedMember === 'std', dataRange, { canvasRef, drawFnRef, uncertaintyModeRef });
-      }
-    }, 100);
-  };
-
-  useEffect(() => { redrawUncertaintyOverlay(invertUncertainty); }, [selectedColormap]);    // eslint-disable-line
-  useEffect(() => { redrawUncertaintyOverlay(invertUncertainty); }, [invertUncertainty]);   // eslint-disable-line
+  // ── Redraw IDW when colormap/flip/opacity/buckets changes (None mode) ─────────
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !dataRef.current?.length) return;
+    if (!showBivariate && !showFanChart && !showTexture && !showUncertainty) {
+      drawOnMap(map, dataRef.current, selectedColormap, selectedMember === 'std', dataRange, { canvasRef, drawFnRef, uncertaintyModeRef }, { flipColormap, gridOpacity, numBuckets });
+    }
+    if (showUncertainty) {
+      drawUncertaintyBoxes(map, uncertaintyLayerRef, uncertaintyCanvasRef, currentModel.name, selectedVariable, selectedHour, selectedColormap, invertUncertainty);
+    }
+  }, [selectedColormap, invertUncertainty, flipColormap, gridOpacity, numBuckets]); // eslint-disable-line
 
   // ── Wind arrows / streamlines ─────────────────────────────────────────────────
   useEffect(() => {
@@ -206,12 +206,27 @@ function App() {
     const map = mapInstanceRef.current;
     if ((showBivariate || showFanChart) && map) {
       if (canvasRef.current) canvasRef.current.style.display = 'none';
-      drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, showFanChart, invertUncertainty), setBivariateRanges);
+      drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour,
+        buildColorMatrix(selectedColormap, showFanChart, invertUncertainty),
+        setBivariateRanges, numBuckets, selectedColormap, showFanChart);
     } else {
       if (canvasRef.current) canvasRef.current.style.display = 'block';
       stopBivariate(map, bivariateLayerRef);
     }
-  }, [showBivariate, showFanChart, selectedHour, selectedModel, selectedVariable]); // eslint-disable-line
+  }, [showBivariate, showFanChart, selectedHour, selectedModel, selectedVariable, numBuckets, selectedColormap, invertUncertainty]); // eslint-disable-line
+
+  // ── Texture overlay ───────────────────────────────────────────────────────────
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (showTexture && map) {
+      if (canvasRef.current) canvasRef.current.style.display = 'none';
+      drawTextureLayer(map, textureLayerRef, currentModel.name, selectedVariable, selectedHour,
+        selectedColormap, textureStyle, numBuckets, flipColormap, gridOpacity, invertUncertainty, setBivariateRanges);
+    } else {
+      if (canvasRef.current) canvasRef.current.style.display = 'block';
+      stopTexture(map, textureLayerRef);
+    }
+  }, [showTexture, selectedHour, selectedModel, selectedVariable, textureStyle, numBuckets, selectedColormap, flipColormap, gridOpacity, invertUncertainty]); // eslint-disable-line
 
   // ── Data fetch ────────────────────────────────────────────────────────────────
   const loadDataForHour = async () => {
@@ -242,9 +257,11 @@ function App() {
         if (uncertaintyModeRef.current === 'vsup')
           drawUncertaintyBoxes(map, uncertaintyLayerRef, uncertaintyCanvasRef, currentModel.name, selectedVariable, selectedHour, selectedColormap, invertUncertaintyRef.current);
         if (uncertaintyModeRef.current === 'bivariate')
-          drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, false, invertUncertaintyRef.current), setBivariateRanges);
+          drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, false, invertUncertaintyRef.current), setBivariateRanges, numBuckets, selectedColormap, false);
         if (uncertaintyModeRef.current === 'fan')
-          drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, true, invertUncertaintyRef.current), setBivariateRanges);
+          drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, true, invertUncertaintyRef.current), setBivariateRanges, numBuckets, selectedColormap, true);
+        if (uncertaintyModeRef.current === 'texture')
+          drawTextureLayer(map, textureLayerRef, currentModel.name, selectedVariable, selectedHour, selectedColormap, textureStyle, numBuckets, flipColormap, gridOpacity, invertUncertaintyRef.current, setBivariateRanges);
       }, 300);
     } catch (err) {
       console.error('Load error:', err);
@@ -505,6 +522,10 @@ function App() {
           showWindLines={showWindLines}   setShowWindLines={setShowWindLines}
           uncertaintyMode={uncertaintyMode} setUncertaintyMode={setUncertaintyMode}
           invertUncertainty={invertUncertainty} setInvertUncertainty={setInvertUncertainty}
+          numBuckets={numBuckets}     setNumBuckets={setNumBuckets}
+          flipColormap={flipColormap} setFlipColormap={setFlipColormap}
+          gridOpacity={gridOpacity}   setGridOpacity={setGridOpacity}
+          textureStyle={textureStyle} setTextureStyle={setTextureStyle}
         />
         <LeftPanel
           open={menuOpen}
