@@ -65,8 +65,8 @@ export const buildColorMatrix = (colormapName, vsup = false, invertUncertainty =
   };
   const neutral  = 185;
   const strength = vsup ? 0.92 : 0.60;
-  const size     = N > 1 ? N : 4;
-  const maxIdx   = size - 1;
+  const size     = N >= 1 ? N : 4;
+  const maxIdx   = Math.max(1, size - 1); // prevent division by zero when size=1
   return Array.from({ length: size }, (_, row) => {
     const uncert = invertUncertainty ? (1 - row / maxIdx) : (row / maxIdx);
     return Array.from({ length: size }, (_, col) => {
