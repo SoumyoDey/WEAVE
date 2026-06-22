@@ -218,10 +218,15 @@ function App() {
     const map = mapInstanceRef.current;
     if ((showBivariate || showFanChart) && map) {
       if (canvasRef.current) canvasRef.current.style.display = 'none';
-      drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour,
-        buildColorMatrix(selectedColormap, showFanChart, invertUncertainty, numBuckets || 4),
-        setBivariateRanges, numBuckets, selectedColormap, showFanChart)
-        .then(cached => { bivariateDataRef.current = cached; });
+      bivariateDataRef.current = null; // clear stale cache immediately
+      (async () => {
+        const cached = await drawBivariateLayer(
+          map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour,
+          buildColorMatrix(selectedColormap, showFanChart, invertUncertainty, numBuckets || 4),
+          setBivariateRanges, numBuckets, selectedColormap, showFanChart,
+        );
+        bivariateDataRef.current = cached;
+      })();
     } else {
       if (canvasRef.current) canvasRef.current.style.display = 'block';
       stopBivariate(map, bivariateLayerRef);
@@ -229,17 +234,27 @@ function App() {
     }
   }, [showBivariate, showFanChart, selectedHour, selectedModel, selectedVariable]); // eslint-disable-line
 
-  // ── Bivariate — re-render from cache when display params change ──────────────
+  // ── Bivariate — re-render when numBuckets / colormap / invert changes ────────
   useEffect(() => {
     const map = mapInstanceRef.current;
-    if (!(showBivariate || showFanChart) || !map || !bivariateDataRef.current) return;
+    if (!(showBivariate || showFanChart) || !map) return;
     const N = numBuckets || 4;
-    renderBivariateFromCache(
-      map, bivariateLayerRef, bivariateDataRef.current,
-      buildColorMatrix(selectedColormap, showFanChart, invertUncertainty, N),
-      numBuckets, selectedColormap, showFanChart,
-    );
-    setBivariateRanges({ meanMax: bivariateDataRef.current.meanMax, stdMax: bivariateDataRef.current.stdMax });
+    const matrix = buildColorMatrix(selectedColormap, showFanChart, invertUncertainty, N);
+
+    if (bivariateDataRef.current) {
+      // Cache ready — instant synchronous re-render, no network request
+      renderBivariateFromCache(
+        map, bivariateLayerRef, bivariateDataRef.current,
+        matrix, numBuckets, selectedColormap, showFanChart,
+      );
+      setBivariateRanges({ meanMax: bivariateDataRef.current.meanMax, stdMax: bivariateDataRef.current.stdMax });
+    } else {
+      // Cache not ready yet — fetch and render with correct numBuckets
+      drawBivariateLayer(
+        map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour,
+        matrix, setBivariateRanges, numBuckets, selectedColormap, showFanChart,
+      ).then(cached => { bivariateDataRef.current = cached; });
+    }
   }, [numBuckets, selectedColormap, invertUncertainty]); // eslint-disable-line
 
   // ── Texture overlay ───────────────────────────────────────────────────────────
