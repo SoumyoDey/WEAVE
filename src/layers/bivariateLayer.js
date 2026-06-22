@@ -48,9 +48,12 @@ export const renderBivariateFromCache = (
 
   const { meanData, meanLookup, stdLookup, meanMax, stdMax, half } = cachedData;
 
-  const continuous = numBuckets === 0;
-  const N   = continuous ? 0 : Math.max(1, numBuckets);
-  const bin = (v, max) => Math.min(N - 1, Math.floor((Math.min(v, max) / max) * N));
+  // snap: 0 = continuous (exact value), N > 0 = snap to bucket centre (same as Texture)
+  const snap = (norm, N) => {
+    if (!N || N <= 0) return Math.min(Math.max(norm, 0), 1);
+    const clamped = Math.min(Math.max(norm, 0), 0.9999);
+    return (Math.floor(clamped * N) + 0.5) / N;
+  };
 
   const layerGroup = L.layerGroup();
   for (const pt of meanData) {
@@ -60,16 +63,9 @@ export const renderBivariateFromCache = (
     const meanVal = meanLookup[key] ?? 0;
     const stdVal  = stdLookup[key]  ?? 0;
 
-    let color;
-    if (continuous) {
-      const normVal = Math.min(meanVal / meanMax, 1);
-      const normStd = Math.min(stdVal  / stdMax,  1);
-      color = continuousColor(colormapName, normVal, normStd, vsup);
-    } else {
-      const colIdx = Math.min(N - 1, bin(meanVal, meanMax));
-      const rowIdx = Math.min(N - 1, bin(stdVal,  stdMax));
-      color = colorMatrix?.[rowIdx]?.[colIdx] ?? '#ccc';
-    }
+    const normVal = snap(Math.min(meanVal / meanMax, 1), numBuckets);
+    const normStd = snap(Math.min(stdVal  / stdMax,  1), numBuckets);
+    const color   = continuousColor(colormapName, normVal, normStd, vsup);
     L.rectangle(
       [[lat - half, lon - half], [lat + half, lon + half]],
       { fillColor: color, color: 'transparent', fillOpacity: 0.85, weight: 0, interactive: false },
