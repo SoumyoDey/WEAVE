@@ -1,20 +1,21 @@
-import React from 'react';
-import { Droplet, Wind } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Play, Pause, SkipBack, SkipForward } from 'lucide-react';
 
 /**
- * Bottom timeline scrubber.
+ * Bottom timeline scrubber with transport controls.
  *
  * Props:
- *   currentModel   {object}  — { name, color, hours, ... }
- *   selectedHour   {number}
- *   setSelectedHour {fn}
+ *   currentModel     {object}  — { name, color, hours, ... }
+ *   selectedHour     {number}
+ *   setSelectedHour  {fn}
  *   selectedVariable {string}
  */
-export function Timeline({ currentModel, selectedHour, setSelectedHour, selectedVariable }) {
-  const currentIdx = currentModel.hours.indexOf(selectedHour);
-  const maxIdx     = currentModel.hours.length - 1;
+export function Timeline({ currentModel, selectedHour, setSelectedHour }) {
+  const hours      = currentModel.hours;
+  const currentIdx = hours.indexOf(selectedHour);
+  const maxIdx     = hours.length - 1;
   const pct        = maxIdx > 0 ? (currentIdx / maxIdx) * 100 : 0;
-  const maxHour    = currentModel.hours[maxIdx] || 360;
+  const maxHour    = hours[maxIdx] || 360;
 
   const baseDate  = new Date('2025-09-08T00:00:00Z');
   const validDate = new Date(baseDate.getTime() + selectedHour * 3600000);
@@ -26,85 +27,116 @@ export function Timeline({ currentModel, selectedHour, setSelectedHour, selected
   const dayTicks = Array.from({ length: Math.floor(maxHour / 24) + 1 }, (_, d) => d * 24)
     .filter(h => h <= maxHour);
 
+  const [playing, setPlaying] = useState(false);
+
+  // Step by index, clamped; used by buttons and keyboard.
+  const step = (dir) => {
+    const idx = hours.indexOf(selectedHour);
+    const n = Math.min(Math.max(idx + dir, 0), maxIdx);
+    setSelectedHour(hours[n]);
+  };
+
+  // Latest values for the play interval (avoids stale closures).
+  const ref = useRef({ hours, selectedHour });
+  ref.current = { hours, selectedHour };
+  useEffect(() => {
+    if (!playing) return;
+    const id = setInterval(() => {
+      const { hours: hrs, selectedHour: h } = ref.current;
+      const idx = hrs.indexOf(h);
+      setSelectedHour(idx >= hrs.length - 1 ? hrs[0] : hrs[idx + 1]);
+    }, 700);
+    return () => clearInterval(id);
+  }, [playing, setSelectedHour]);
+
+  // ← / → step through lead times (ignored while typing in a field).
+  useEffect(() => {
+    const onKey = (e) => {
+      const tag = e.target?.tagName;
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+      if (e.key === 'ArrowLeft')  { e.preventDefault(); step(-1); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); step(1); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }); // re-bind each render so step() sees current values
+
+  const btn = (extra = {}) => ({
+    width: '30px', height: '30px', borderRadius: '7px', border: '1px solid rgba(255,255,255,0.12)',
+    background: 'rgba(255,255,255,0.06)', color: '#cdd8e3', cursor: 'pointer',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, ...extra,
+  });
+
   return (
     <div style={{
       position: 'absolute', bottom: 0, left: 0, right: 0,
-      background: 'rgba(10,18,28,0.97)',
-      backdropFilter: 'blur(12px)',
-      borderTop: '1px solid rgba(255,255,255,0.07)',
-      zIndex: 900,
-      boxShadow: '0 -4px 24px rgba(0,0,0,0.4)',
-      padding: '6px 20px 0',
+      background: 'rgba(10,18,28,0.97)', backdropFilter: 'blur(12px)',
+      borderTop: '1px solid rgba(255,255,255,0.07)', zIndex: 900,
+      boxShadow: '0 -4px 24px rgba(0,0,0,0.4)', padding: '10px 20px 0',
     }}>
-      {/* Info row */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '5px' }}>
-        <span style={{ fontSize: '10px', fontWeight: '700', color: currentModel.color, background: `${currentModel.color}22`, border: `1px solid ${currentModel.color}55`, padding: '1px 7px', borderRadius: '8px', whiteSpace: 'nowrap' }}>
-          {currentModel.name}
-        </span>
-        <span style={{ fontSize: '10px', fontWeight: '600', color: 'rgba(255,255,255,0.4)', background: 'rgba(255,255,255,0.06)', padding: '2px 8px', borderRadius: '8px', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-          {selectedVariable === 'precipitation' ? <><Droplet size={11} /> Precip</> : <><Wind size={11} /> Wind</>}
-        </span>
-        <div style={{ flex: 1, textAlign: 'center' }}>
-          <span style={{ fontSize: '17px', fontWeight: '800', color: 'white', letterSpacing: '-0.5px' }}>+{selectedHour}h</span>
-          <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.38)', marginLeft: '5px' }}>({(selectedHour / 24).toFixed(1)}d)</span>
-          <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.5)', marginLeft: '10px' }}>
-            <span style={{ color: 'rgba(255,255,255,0.28)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Valid </span>
-            {validStr}
-          </span>
-        </div>
-      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
 
-      {/* Slider + day ticks */}
-      <div style={{ position: 'relative', paddingBottom: '28px' }}>
-        <input
-          type="range"
-          min="0"
-          max={maxIdx}
-          value={currentIdx}
-          onChange={e => setSelectedHour(currentModel.hours[parseInt(e.target.value)])}
-          style={{
-            width: '100%', height: '4px', borderRadius: '2px',
-            outline: 'none', cursor: 'pointer',
-            appearance: 'none', WebkitAppearance: 'none',
-            background: `linear-gradient(to right, #3498db 0%, #3498db ${pct}%, rgba(255,255,255,0.15) ${pct}%, rgba(255,255,255,0.15) 100%)`,
-            display: 'block',
-          }}
-        />
-        <div style={{ position: 'absolute', top: '10px', left: 0, right: 0, pointerEvents: 'none' }}>
-          {dayTicks.map(h => {
-            const pos    = maxHour > 0 ? (h / maxHour) * 100 : 0;
-            const dayNum = h / 24;
-            return (
-              <div key={h} style={{ position: 'absolute', left: `${pos}%`, transform: 'translateX(-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
-                <div style={{ width: '1px', height: dayNum % 2 === 0 ? '6px' : '4px', background: dayNum % 2 === 0 ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.18)' }} />
-                {dayNum % 2 === 0 && (
-                  <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)', whiteSpace: 'nowrap', fontWeight: h === selectedHour ? '700' : '400' }}>
-                    {h === 0 ? 'Now' : `+${dayNum}d`}
-                  </span>
-                )}
-              </div>
-            );
-          })}
+        {/* Transport controls */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <button onClick={() => step(-1)} title="Previous lead time (←)" aria-label="Previous lead time" style={btn()}>
+            <SkipBack size={15} />
+          </button>
+          <button onClick={() => setPlaying(p => !p)} title={playing ? 'Pause' : 'Play'} aria-label={playing ? 'Pause' : 'Play'}
+            style={btn({ width: '34px', height: '34px', borderRadius: '50%', background: '#3aa0ff', border: 'none', color: '#04213a' })}>
+            {playing ? <Pause size={16} /> : <Play size={16} />}
+          </button>
+          <button onClick={() => step(1)} title="Next lead time (→)" aria-label="Next lead time" style={btn()}>
+            <SkipForward size={15} />
+          </button>
+        </div>
+
+        {/* Scrubber + day ticks */}
+        <div style={{ flex: 1, position: 'relative', paddingBottom: '26px' }}>
+          <input
+            type="range" min="0" max={maxIdx} value={currentIdx < 0 ? 0 : currentIdx}
+            onChange={e => setSelectedHour(hours[parseInt(e.target.value)])}
+            aria-label="Forecast lead time"
+            style={{
+              width: '100%', height: '4px', borderRadius: '2px', outline: 'none', cursor: 'pointer',
+              appearance: 'none', WebkitAppearance: 'none', display: 'block',
+              background: `linear-gradient(to right, #3498db 0%, #3498db ${pct}%, rgba(255,255,255,0.15) ${pct}%, rgba(255,255,255,0.15) 100%)`,
+            }}
+          />
+          <div style={{ position: 'absolute', top: '10px', left: 0, right: 0, pointerEvents: 'none' }}>
+            {dayTicks.map(h => {
+              const pos    = maxHour > 0 ? (h / maxHour) * 100 : 0;
+              const dayNum = h / 24;
+              return (
+                <div key={h} style={{ position: 'absolute', left: `${pos}%`, transform: 'translateX(-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
+                  <div style={{ width: '1px', height: dayNum % 2 === 0 ? '6px' : '4px', background: dayNum % 2 === 0 ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.18)' }} />
+                  {dayNum % 2 === 0 && (
+                    <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)', whiteSpace: 'nowrap' }}>
+                      {h === 0 ? 'Now' : `+${dayNum}d`}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Valid time */}
+        <div style={{ textAlign: 'right', whiteSpace: 'nowrap', flexShrink: 0, minWidth: '150px' }}>
+          <div>
+            <span style={{ fontSize: '17px', fontWeight: '800', color: 'white', letterSpacing: '-0.5px' }}>+{selectedHour}h</span>
+            <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.38)', marginLeft: '5px' }}>({(selectedHour / 24).toFixed(1)}d)</span>
+          </div>
+          <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.5)' }}>
+            <span style={{ color: 'rgba(255,255,255,0.28)', fontSize: '9px', letterSpacing: '0.05em' }}>Valid </span>{validStr}
+          </div>
         </div>
       </div>
 
       {/* Copyright footer */}
-      <div style={{
-        borderTop: '1px solid rgba(255,255,255,0.06)',
-        marginLeft: '-20px', marginRight: '-20px',
-        padding: '3px 20px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: '6px',
-      }}>
-        <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.2)', letterSpacing: '0.03em' }}>
-          © {new Date().getFullYear()} Northeastern University
-        </span>
+      <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', marginLeft: '-20px', marginRight: '-20px', padding: '3px 20px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', marginTop: '6px' }}>
+        <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.2)', letterSpacing: '0.03em' }}>© {new Date().getFullYear()} Northeastern University</span>
         <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.1)' }}>·</span>
-        <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.15)', letterSpacing: '0.05em', fontWeight: 600 }}>
-          WEAVE
-        </span>
+        <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.15)', letterSpacing: '0.05em', fontWeight: 600 }}>WEAVE</span>
       </div>
     </div>
   );
