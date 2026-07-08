@@ -464,6 +464,18 @@ export function AnalysisTab({
                           ))}
                         </div>
 
+                        {/* Plain-language readout */}
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', marginBottom: '20px', padding: '10px 14px', background: `${meanSSRColor}22`, border: `1px solid ${meanSSRColor}55`, borderRadius: '8px', fontSize: '13px', color: 'rgba(255,255,255,0.85)', lineHeight: 1.5 }}>
+                          <span style={{ fontSize: '15px', lineHeight: 1.2 }}>ℹ️</span>
+                          <span>
+                            {meanSSR >= 0.8 && meanSSR <= 1.2
+                              ? "The ensemble spread here looks about right — its uncertainty roughly matches its actual errors."
+                              : meanSSR < 0.8
+                                ? "The forecast looks overconfident here — the members agree more closely than the model's real errors would justify."
+                                : "The forecast looks underconfident here — the members disagree more than the model's real errors would justify."}
+                          </span>
+                        </div>
+
                         {/* Two charts */}
                         <div ref={ssrChartRef} style={{ display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
                           {/* Chart A: SSR per hour */}

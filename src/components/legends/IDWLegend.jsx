@@ -60,6 +60,10 @@ export function IDWLegend({ selectedColormap, stats, selectedVariable, selectedM
           </div>
         ))}
       </div>
+
+      <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: '10px', marginTop: '8px' }}>
+        Darker = {isWind ? 'faster wind' : isStd ? 'more uncertainty' : 'more rain'}.
+      </div>
     </div>
   );
 }

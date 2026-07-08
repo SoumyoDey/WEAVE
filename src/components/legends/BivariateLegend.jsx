@@ -36,7 +36,7 @@ export function BivariateLegend({ bivariateRanges, selectedColormap, selectedVar
   return (
     <div style={cardStyle}>
       <div style={{ color: 'white', fontSize: '12px', fontWeight: 600, marginBottom: '8px' }}>
-        🟦 Bivariate — {xLabel}
+        Grid — {xLabel}
       </div>
 
       {/* X-tick row — sits only above the grid, no right-block interference */}
@@ -110,6 +110,9 @@ export function BivariateLegend({ bivariateRanges, selectedColormap, selectedVar
       {/* X-axis label */}
       <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: '10px', textAlign: 'center', marginTop: '4px' }}>
         {xLabel} ({unit}) →
+      </div>
+      <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '10px', textAlign: 'center', marginTop: '6px' }}>
+        Right = more · down = less certain.
       </div>
     </div>
   );

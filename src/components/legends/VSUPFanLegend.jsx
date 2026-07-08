@@ -104,7 +104,7 @@ export function VSUPFanLegend({ bivariateRanges, selectedColormap, colormaps, se
   return (
     <div style={cardStyle}>
       <div style={{ color: 'white', fontSize: '12px', fontWeight: 600, marginBottom: '8px' }}>
-        🌀 VSUP Fan — {title}
+        Fan — {title}
       </div>
 
       <svg width="330" height="255" style={{ overflow: 'visible' }}>
@@ -188,6 +188,9 @@ export function VSUPFanLegend({ bivariateRanges, selectedColormap, colormaps, se
         </text>
 
       </svg>
+      <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '10px', textAlign: 'center', marginTop: '2px' }}>
+        Fewer shades where the forecast is less certain.
+      </div>
     </div>
   );
 }

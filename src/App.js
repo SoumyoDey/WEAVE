@@ -495,6 +495,10 @@ function App() {
             {label}
           </button>
         ))}
+        {/* Persistent context: what you're currently looking at */}
+        <span style={{ marginLeft: 'auto', marginRight: '16px', display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 12px', borderRadius: '20px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.75)', fontSize: '12px', whiteSpace: 'nowrap' }}>
+          {currentModel.name} · {selectedVariable === 'wind' ? 'Wind' : 'Precipitation'} · +{selectedHour}h
+        </span>
       </div>
 
       {/* ══ VISUALIZATION TAB ══ */}

@@ -24,7 +24,7 @@ export function VSUPBoxesLegend({ stats, selectedVariable, invertUncertainty = f
   return (
     <div style={cardStyle}>
       <div style={{ color: 'white', fontSize: '12px', fontWeight: 600, marginBottom: '8px' }}>
-        ⬛ VSup — Spread
+        Boxes — spread
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
