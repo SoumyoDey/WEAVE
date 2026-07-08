@@ -212,6 +212,7 @@ export function ComparisonTab({
   selectedVariable,
   selectedRegion,
   onJumpToComparison,
+  active = true,
 }) {
   // Controls
   const [lat, setLat] = useState(defaultLocation ? String(defaultLocation.lat) : '');
@@ -361,6 +362,11 @@ export function ComparisonTab({
   // After the accum conversion the ratio should be much smaller than the raw ratio
   const scaleRatio = tsData ? computeScaleRatio(tsData, selectedModels, selectedVariable) : 1;
   const hasScaleMismatch = scaleRatio > 5; // still >5× after unit fix → warn
+
+  // Skip rendering (incl. Recharts charts) while this tab is hidden — avoids the
+  // "width(0)/height(0)" warnings. Hooks above run unconditionally, so form
+  // inputs and comparison results are preserved across tab switches.
+  if (!active) return null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: 1 }}>

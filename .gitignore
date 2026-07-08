@@ -4,3 +4,9 @@ build/
 .env
 Data/.env
 *_backup.sql
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/

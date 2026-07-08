@@ -665,6 +665,7 @@ function App() {
           ssrLoading={ssrLoading} ssrData={ssrData}
           onCompare={() => setActiveTab('comparison')}
           selectedRegion={selectedRegion}
+          active={activeTab === 'analysis'}
         />
       </div>
 
@@ -676,6 +677,7 @@ function App() {
           selectedVariable={selectedVariable}
           selectedRegion={selectedRegion}
           onJumpToComparison={(lat, lon) => setActiveTab('comparison')}
+          active={activeTab === 'comparison'}
         />
       </div>
 
