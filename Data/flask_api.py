@@ -41,9 +41,38 @@ def _err_bad_request(e):
 def _err_too_large(e):
     return jsonify({'error': 'Payload too large'}), 413
 
+@app.errorhandler(429)
+def _err_rate(e):
+    return jsonify({'error': 'Too many requests — slow down.'}), 429
+
 @app.errorhandler(500)
 def _err_internal(e):
     return jsonify({'error': 'Internal server error'}), 500
+
+
+# ── Rate limiting ─────────────────────────────────────────────────────────────
+# Best-effort DoS protection; no-op if flask-limiter isn't installed. With multiple
+# gunicorn workers the in-memory limit is per-worker — use a shared store
+# (RATE_LIMIT_STORAGE=redis://…) for a global limit in production.
+try:
+    from flask_limiter import Limiter
+    from flask_limiter.util import get_remote_address
+    Limiter(
+        key_func=get_remote_address, app=app,
+        default_limits=[os.environ.get('RATE_LIMIT', '300 per minute')],
+        storage_uri=os.environ.get('RATE_LIMIT_STORAGE', 'memory://'),
+    )
+except Exception as _e:  # pragma: no cover
+    print(f"⚠️  Rate limiting disabled: {_e}")
+
+
+# ── Lightweight input allowlist ───────────────────────────────────────────────
+# Queries are parameterised (injection-safe); this is defence-in-depth + a clean
+# 400 for obviously-malformed model/variable tokens instead of an empty result.
+import re
+_TOKEN_RE = re.compile(r'^[A-Za-z0-9_]{1,40}$')
+def _bad_token(*vals):
+    return any(v is not None and not _TOKEN_RE.match(str(v)) for v in vals)
 
 DB_CONFIG = {
     'dbname':   os.environ.get('DB_NAME',     'weave_weather'),
@@ -61,7 +90,7 @@ import psycopg2.pool
 # concurrent requests).
 connection_pool = psycopg2.pool.ThreadedConnectionPool(
     int(os.environ.get('DB_POOL_MIN', 5)),
-    int(os.environ.get('DB_POOL_MAX', 20)),
+    int(os.environ.get('DB_POOL_MAX', 30)),
     **DB_CONFIG
 )
 
@@ -714,6 +743,8 @@ SPATIAL_METRIC_REGISTRY = {
 def get_forecast_data():
     model_name    = request.args.get('model', 'AIFS')
     variable_name = request.args.get('variable', 'precipitation')
+    if _bad_token(model_name, variable_name):
+        return jsonify({'error': 'Invalid model or variable'}), 400
     forecast_hour = int(request.args.get('hour', 6))
     member        = request.args.get('member', 'mean')
 
@@ -782,6 +813,8 @@ def get_forecast_data():
 @app.route('/api/wind-data', methods=['GET'])
 def get_wind_data():
     model_name    = request.args.get('model', 'AIFS')
+    if _bad_token(model_name):
+        return jsonify({'error': 'Invalid model'}), 400
     forecast_hour = int(request.args.get('hour', 6))
     member        = request.args.get('member', 'mean')
 
@@ -886,6 +919,8 @@ def point_timeseries():
     """
     model_name = request.args.get('model', 'AIFS')
     variable   = request.args.get('variable', 'precipitation')
+    if _bad_token(model_name, variable):
+        return jsonify({'error': 'Invalid model or variable'}), 400
     try:
         lat    = float(request.args.get('lat'))
         lon    = float(request.args.get('lon'))
@@ -1004,6 +1039,8 @@ def get_spread_skill():
     """
     model_name = request.args.get('model', 'AIFS')
     variable   = request.args.get('variable', 'precipitation')
+    if _bad_token(model_name, variable):
+        return jsonify({'error': 'Invalid model or variable'}), 400
     try:
         lat    = float(request.args.get('lat'))
         lon    = float(request.args.get('lon'))
@@ -1156,6 +1193,8 @@ def get_spatial_metric():
     metric     = request.args.get('metric', 'ssr')
     model_name = request.args.get('model', 'AIFS')
     variable   = request.args.get('variable', 'precipitation')
+    if _bad_token(model_name, variable):
+        return jsonify({'error': 'Invalid model or variable'}), 400
     min_lat    = float(request.args.get('min_lat',  25))
     max_lat    = float(request.args.get('max_lat',  45))
     min_lon    = float(request.args.get('min_lon', -85))

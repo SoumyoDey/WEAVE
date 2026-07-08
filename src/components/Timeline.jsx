@@ -1,4 +1,5 @@
 import React from 'react';
+import { Droplet, Wind } from 'lucide-react';
 
 /**
  * Bottom timeline scrubber.
@@ -40,8 +41,8 @@ export function Timeline({ currentModel, selectedHour, setSelectedHour, selected
         <span style={{ fontSize: '10px', fontWeight: '700', color: currentModel.color, background: `${currentModel.color}22`, border: `1px solid ${currentModel.color}55`, padding: '1px 7px', borderRadius: '8px', whiteSpace: 'nowrap' }}>
           {currentModel.name}
         </span>
-        <span style={{ fontSize: '10px', fontWeight: '600', color: 'rgba(255,255,255,0.4)', background: 'rgba(255,255,255,0.06)', padding: '1px 7px', borderRadius: '8px', whiteSpace: 'nowrap' }}>
-          {selectedVariable === 'precipitation' ? '💧 Precip' : '🌬️ Wind'}
+        <span style={{ fontSize: '10px', fontWeight: '600', color: 'rgba(255,255,255,0.4)', background: 'rgba(255,255,255,0.06)', padding: '2px 8px', borderRadius: '8px', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+          {selectedVariable === 'precipitation' ? <><Droplet size={11} /> Precip</> : <><Wind size={11} /> Wind</>}
         </span>
         <div style={{ flex: 1, textAlign: 'center' }}>
           <span style={{ fontSize: '17px', fontWeight: '800', color: 'white', letterSpacing: '-0.5px' }}>+{selectedHour}h</span>

@@ -4,6 +4,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine, ComposedChart, Line,
 } from 'recharts';
+import { BarChart3, MapPin, Map as MapIcon } from 'lucide-react';
 import { fetchCategoricalMetrics, fetchRegionCategoricalMetrics } from '../api/analysisApi';
 import { fetchSpatialMetric, fetchSpatialMetricPlot } from '../api/spatialApi';
 import { METRIC_CONFIG } from '../constants';
@@ -257,17 +258,25 @@ export function AnalysisTab({
     ? 'Verified against GPM IMERG V07B observations'
     : 'Verified against ERA5 reanalysis (10-m wind)';
 
-  // Skip rendering (incl. Recharts charts) while this tab is hidden — avoids
-  // the "width(0)/height(0)" warnings from measuring a display:none container.
-  // Hooks above run unconditionally, so state is preserved across tab switches.
-  if (!active) return null;
+  // Defer chart mount one frame after the tab becomes active so Recharts measures
+  // a laid-out container (no width(0)/(-1) warnings). Skipping render while hidden
+  // also avoids measuring a display:none container. Hooks run unconditionally above
+  // the early return, so state is preserved across tab switches.
+  const [chartsReady, setChartsReady] = useState(false);
+  useEffect(() => {
+    if (!active) { setChartsReady(false); return; }
+    const id = requestAnimationFrame(() => setChartsReady(true));
+    return () => cancelAnimationFrame(id);
+  }, [active]);
+
+  if (!active || !chartsReady) return null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: 1 }}>
       {/* ── Header with mode toggle ── */}
       <div style={{ padding: '12px 30px 10px', borderBottom: '1px solid rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
         <div>
-          <h2 style={{ color: 'white', margin: '0 0 3px 0', fontSize: '18px', fontWeight: '600' }}>📊 Forecast Analysis</h2>
+          <h2 style={{ color: 'white', margin: '0 0 3px 0', fontSize: '18px', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '8px' }}><BarChart3 size={18} />Forecast Analysis</h2>
           <p style={{ color: 'rgba(255,255,255,0.4)', margin: 0, fontSize: '12px' }}>
             {analysisMode === 'point'
               ? (clickedPoint ? `Point: ${clickedPoint.lat}°N, ${clickedPoint.lon}°E — ${currentModel?.name} — ${selectedVariable}` : 'Click anywhere on the map to analyse a location')
@@ -276,12 +285,13 @@ export function AnalysisTab({
         </div>
         {/* Point / Region toggle */}
         <div style={{ display: 'flex', borderRadius: '8px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.15)', flexShrink: 0 }}>
-          {[{ id: 'point', icon: '📍', label: 'Point' }, { id: 'region', icon: '🗺', label: 'Region' }].map(({ id, icon, label }) => (
+          {[{ id: 'point', icon: MapPin, label: 'Point' }, { id: 'region', icon: MapIcon, label: 'Region' }].map(({ id, icon: Icon, label }) => (
             <button key={id} onClick={() => setAnalysisMode(id)}
               style={{ padding: '6px 18px', fontSize: '12px', fontWeight: '600', cursor: 'pointer', border: 'none', outline: 'none',
+                display: 'inline-flex', alignItems: 'center', gap: '6px',
                 background: analysisMode === id ? 'rgba(52,152,219,0.25)' : 'rgba(255,255,255,0.04)',
                 color:      analysisMode === id ? 'rgba(52,152,219,0.95)' : 'rgba(255,255,255,0.45)' }}>
-              {icon} {label}
+              <Icon size={14} /> {label}
             </button>
           ))}
         </div>
@@ -296,7 +306,7 @@ export function AnalysisTab({
             {!clickedPoint && (
               <div style={{ height: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', color: 'rgba(255,255,255,0.25)' }}>
                 <div>
-                  <div style={{ fontSize: '64px', marginBottom: '16px' }}>🖱️</div>
+                  <div style={{ marginBottom: '16px', color: 'rgba(255,255,255,0.3)' }}><MapPin size={48} /></div>
                   <p style={{ fontSize: '16px', margin: 0 }}>Click a point on the map</p>
                   <p style={{ fontSize: '13px', margin: '8px 0 0 0' }}>Switch to Visualization tab, click anywhere, then come back here</p>
                 </div>
@@ -308,7 +318,7 @@ export function AnalysisTab({
                 {/* ── Section 1: Cone of Uncertainty ── */}
                 <div style={{ marginBottom: '32px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '12px', flexWrap: 'wrap' }}>
-                    <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: '14px', fontWeight: '600', margin: 0, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                    <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: '14px', fontWeight: '600', margin: 0, letterSpacing: '0.02em' }}>
                       Cone of Uncertainty
                     </h3>
                     {/* Gaussian / Empirical toggle */}
@@ -420,7 +430,7 @@ export function AnalysisTab({
                 {/* ── Section 2: Spread-Skill Analysis ── */}
                 <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '24px' }}>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: '16px', marginBottom: '12px', flexWrap: 'wrap' }}>
-                    <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: '14px', fontWeight: '600', margin: 0, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                    <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: '14px', fontWeight: '600', margin: 0, letterSpacing: '0.02em' }}>
                       Spread-Skill Analysis
                     </h3>
                     <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: '12px' }}>
@@ -546,8 +556,8 @@ export function AnalysisTab({
                 {/* ── Section 3: Verification Metrics ── */}
                 <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '24px', marginTop: '32px' }}>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: '16px', marginBottom: '14px', flexWrap: 'wrap' }}>
-                    <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: '14px', fontWeight: '600', margin: 0, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                      🎯 Verification Metrics
+                    <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: '14px', fontWeight: '600', margin: 0, letterSpacing: '0.02em' }}>
+                      Verification metrics
                     </h3>
                     <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: '12px' }}>
                       CSI · POD · FAR · FBI · Brier Score · Composite Confidence
@@ -582,7 +592,7 @@ export function AnalysisTab({
                             border: 'none', outline: 'none',
                           }}
                         >
-                          {mode === 'point' ? '📍 Point' : '🗺 Region'}
+                          {mode === 'point' ? 'Point' : 'Region'}
                         </button>
                       ))}
                     </div>
@@ -937,7 +947,7 @@ export function AnalysisTab({
                     onClick={onCompare}
                     style={{ background: 'rgba(52,152,219,0.12)', border: '1px solid rgba(52,152,219,0.3)', color: 'rgba(52,152,219,0.9)', fontSize: '12px', fontWeight: '600', padding: '6px 14px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
                   >
-                    ⚖️ Compare models at this point →
+                    Compare models at this point →
                   </button>
                 </div>
               </>
@@ -952,7 +962,7 @@ export function AnalysisTab({
             {!selectedRegion?.bounds && (
               <div style={{ height: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', color: 'rgba(255,255,255,0.25)' }}>
                 <div>
-                  <div style={{ fontSize: '64px', marginBottom: '16px' }}>🗺</div>
+                  <div style={{ marginBottom: '16px', color: 'rgba(255,255,255,0.3)' }}><MapIcon size={48} /></div>
                   <p style={{ fontSize: '16px', margin: 0 }}>Draw a region on the map</p>
                   <p style={{ fontSize: '13px', margin: '8px 0 0 0' }}>Use the rectangle or polygon selection tool in the Visualization tab</p>
                 </div>
@@ -1007,7 +1017,7 @@ export function AnalysisTab({
                 ].map(group => (
                   <div key={group.id} style={{ marginBottom: '32px' }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: '12px', marginBottom: '14px' }}>
-                      <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: '13px', fontWeight: '700', margin: 0, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{group.label}</h3>
+                      <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: '13px', fontWeight: '700', margin: 0, letterSpacing: '0.02em' }}>{group.label}</h3>
                       <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px' }}>{group.hint}</span>
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(420px, 1fr))', gap: '16px' }}>
@@ -1075,7 +1085,7 @@ export function AnalysisTab({
                   onClick={onCompare}
                   style={{ background: 'rgba(52,152,219,0.12)', border: '1px solid rgba(52,152,219,0.3)', color: 'rgba(52,152,219,0.9)', fontSize: '12px', fontWeight: '600', padding: '6px 14px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
                 >
-                  ⚖️ Compare models for this region →
+                  Compare models for this region →
                 </button>
               </div>
             )}

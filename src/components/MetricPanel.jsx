@@ -1,4 +1,5 @@
 import React from 'react';
+import { Square, Hexagon, X } from 'lucide-react';
 import { METRIC_CONFIG } from '../constants';
 
 /**
@@ -55,7 +56,7 @@ export function MetricPanel({
         style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 12px', cursor: 'grab', borderBottom: panelMinimized ? 'none' : '1px solid rgba(255,255,255,0.08)', borderRadius: panelMinimized ? '10px' : '10px 10px 0 0', background: 'rgba(52,152,219,0.15)' }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-          <span style={{ fontSize: '13px' }}>{selectedRegion.type === 'rectangle' ? '⬜' : '🔷'}</span>
+          <span style={{ display: 'inline-flex' }}>{selectedRegion.type === 'rectangle' ? <Square size={14} /> : <Hexagon size={14} />}</span>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: '12px', fontWeight: '700', color: 'rgba(255,255,255,0.9)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {selectedRegion.type === 'rectangle' ? 'Rectangle Region' : 'Polygon Region'}
@@ -78,8 +79,8 @@ export function MetricPanel({
             onMouseDown={e => e.stopPropagation()}
             onClick={clearSelection}
             title="Close"
-            style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.7)', cursor: 'pointer', borderRadius: '4px', width: '22px', height: '22px', fontSize: '14px', lineHeight: '20px', textAlign: 'center', padding: 0 }}>
-            ✕
+            style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.7)', cursor: 'pointer', borderRadius: '4px', width: '22px', height: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>
+            <X size={14} />
           </button>
         </div>
       </div>

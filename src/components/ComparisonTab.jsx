@@ -4,6 +4,7 @@ import {
   Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine,
 } from 'recharts';
+import { Scale, MapPin } from 'lucide-react';
 import { fetchComparisonTimeseries, fetchComparisonSkill, fetchSpatialAgreement } from '../api/comparisonApi';
 
 const MODEL_COLORS = { AIFS: '#3498db', GEFS: '#e74c3c', UKMO: '#2ecc71' };
@@ -29,17 +30,15 @@ const SECTION_TITLE = {
   color: 'rgba(255,255,255,0.85)',
   fontSize: '14px',
   fontWeight: '600',
-  textTransform: 'uppercase',
-  letterSpacing: '0.08em',
+  letterSpacing: '0.02em',
   margin: '0 0 14px 0',
 };
 
 const LABEL = {
   fontSize: '11px',
-  fontWeight: '600',
-  letterSpacing: '0.06em',
-  color: 'rgba(255,255,255,0.4)',
-  textTransform: 'uppercase',
+  fontWeight: '500',
+  letterSpacing: '0.02em',
+  color: 'rgba(255,255,255,0.5)',
   marginBottom: '6px',
 };
 
@@ -363,17 +362,24 @@ export function ComparisonTab({
   const scaleRatio = tsData ? computeScaleRatio(tsData, selectedModels, selectedVariable) : 1;
   const hasScaleMismatch = scaleRatio > 5; // still >5× after unit fix → warn
 
-  // Skip rendering (incl. Recharts charts) while this tab is hidden — avoids the
-  // "width(0)/height(0)" warnings. Hooks above run unconditionally, so form
-  // inputs and comparison results are preserved across tab switches.
-  if (!active) return null;
+  // Defer chart mount one frame after the tab becomes active so Recharts measures
+  // a laid-out container (no width(0)/(-1) warnings). Hooks run unconditionally
+  // above the early return, so form inputs and results survive tab switches.
+  const [chartsReady, setChartsReady] = useState(false);
+  useEffect(() => {
+    if (!active) { setChartsReady(false); return; }
+    const id = requestAnimationFrame(() => setChartsReady(true));
+    return () => cancelAnimationFrame(id);
+  }, [active]);
+
+  if (!active || !chartsReady) return null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: 1 }}>
       {/* ── Header ── */}
       <div style={{ padding: '16px 30px 10px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-        <h2 style={{ color: 'white', margin: '0 0 4px 0', fontSize: '18px', fontWeight: '600' }}>
-          ⚖️ Model Comparison
+        <h2 style={{ color: 'white', margin: '0 0 4px 0', fontSize: '18px', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <Scale size={18} />Model comparison
         </h2>
         <p style={{ color: 'rgba(255,255,255,0.4)', margin: '0 0 8px 0', fontSize: '13px' }}>
           Configure models, location and lead times then click Run.
@@ -494,7 +500,7 @@ export function ComparisonTab({
 
           {/* LEAD TIMES */}
           <div style={{ marginBottom: '24px' }}>
-            <div style={LABEL}>Lead Times</div>
+            <div style={LABEL}>Lead times</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: '12px' }}>Min</span>
@@ -571,7 +577,7 @@ export function ComparisonTab({
             padding: '60px 20px',
           }}>
             <div>
-              <div style={{ fontSize: '64px', marginBottom: '16px', lineHeight: 1 }}>⚖️</div>
+              <div style={{ marginBottom: '16px', lineHeight: 1, color: 'rgba(255,255,255,0.3)' }}><Scale size={52} /></div>
               <p style={{ fontSize: '16px', margin: '0 0 8px 0', color: 'rgba(255,255,255,0.4)' }}>
                 Configure the comparison above and click Run
               </p>
@@ -1061,12 +1067,12 @@ export function ComparisonTab({
                 background: 'none', border: 'none', cursor: 'pointer',
                 display: 'flex', alignItems: 'center', gap: '8px',
                 color: 'rgba(255,255,255,0.7)', fontSize: '14px', fontWeight: '600',
-                textTransform: 'uppercase', letterSpacing: '0.08em',
+                letterSpacing: '0.02em',
                 padding: '0 0 12px 0',
               }}
             >
               <span style={{ fontSize: '11px' }}>{showAdvanced ? '▼' : '▶'}</span>
-              Advanced Metrics
+              Advanced metrics
             </button>
 
             {showAdvanced && (
@@ -1141,7 +1147,7 @@ export function ComparisonTab({
                 fontSize: '13px',
                 lineHeight: 1.6,
               }}>
-                <span style={{ fontSize: '20px', lineHeight: 1 }}>🗺️</span>
+                <span style={{ lineHeight: 1, display: 'inline-flex' }}><MapPin size={18} /></span>
                 <div>
                   <div style={{ fontWeight: '600', color: 'rgba(255,255,255,0.5)', marginBottom: '4px' }}>
                     No region selected
