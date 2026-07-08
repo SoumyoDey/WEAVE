@@ -14,7 +14,7 @@ import { getDynamicColorRGB } from '../utils/colorUtils';
  */
 export const drawOnMap = (map, data, colormapName, isStdDev, range, refs, options = {}) => {
   const { canvasRef, drawFnRef, uncertaintyModeRef } = refs;
-  const { flipColormap = false, gridOpacity = 1 } = options;
+  const { flipColormap = false, gridOpacity = 1, numBuckets = 0 } = options;
 
   if (!map || !map._loaded) {
     setTimeout(() => drawOnMap(map, data, colormapName, isStdDev, range, refs, options), 200);
@@ -100,8 +100,16 @@ export const drawOnMap = (map, data, colormapName, isStdDev, range, refs, option
         }
 
         if (totalWeight > 0) {
-          const interpolated = weightedSum / totalWeight;
-          const { r, g, b, a } = getDynamicColorRGB(Math.max(interpolated, 0), range, colormapName, flipColormap);
+          let interpolated = Math.max(weightedSum / totalWeight, 0);
+          // Discretise into N colour steps when bucketing is on. Values below the
+          // visibility threshold stay untouched so near-zero areas remain transparent.
+          if (numBuckets > 0 && range.max > 0) {
+            const norm = Math.min(interpolated / range.max, 1);
+            if (norm >= 0.01) {
+              interpolated = ((Math.floor(Math.min(norm, 0.9999) * numBuckets) + 0.5) / numBuckets) * range.max;
+            }
+          }
+          const { r, g, b, a } = getDynamicColorRGB(interpolated, range, colormapName, flipColormap);
           const idx = (py * tempCanvas.width + px) * 4;
           buf[idx]   = r;
           buf[idx+1] = g;
