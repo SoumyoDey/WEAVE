@@ -1,0 +1,19 @@
+# WEAVE Flask API — Python dependencies
+# Install into a fresh venv or conda env:
+#   pip install -r requirements.txt
+#
+# Note: cartopy needs system libraries GEOS and PROJ present on the host
+# (e.g. `apt-get install libgeos-dev libproj-dev proj-data proj-bin`, or
+# `conda install -c conda-forge cartopy`).
+
+flask==3.1.3
+flask-cors==6.0.2
+psycopg2-binary==2.9.11
+python-dotenv==1.1.0
+scipy==1.17.1
+matplotlib==3.10.9
+numpy==2.4.6
+cartopy==0.25.0
+
+# Production WSGI server (do NOT use Flask's app.run() in beta/prod)
+gunicorn>=21.2

@@ -27,6 +27,24 @@ app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_CONTENT_LENGTH', 16 * 1024 * 1024))
 CORS(app, origins=os.environ.get('CORS_ORIGIN', 'http://localhost:3000'))
 
+
+# ── JSON error responses ──────────────────────────────────────────────────────
+# API clients always expect JSON. These ensure a malformed request or an
+# uncaught exception returns a clean JSON body (not Werkzeug's HTML page /
+# stack trace) in production. In debug mode the interactive debugger still
+# takes precedence for uncaught 500s, which is what local dev wants.
+@app.errorhandler(400)
+def _err_bad_request(e):
+    return jsonify({'error': 'Bad request'}), 400
+
+@app.errorhandler(413)
+def _err_too_large(e):
+    return jsonify({'error': 'Payload too large'}), 413
+
+@app.errorhandler(500)
+def _err_internal(e):
+    return jsonify({'error': 'Internal server error'}), 500
+
 DB_CONFIG = {
     'dbname':   os.environ.get('DB_NAME',     'weave_weather'),
     'user':     os.environ.get('DB_USER',     'k.aggarwal'),

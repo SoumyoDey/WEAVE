@@ -68,6 +68,7 @@ export function AnalysisTab({
   ssrLoading, ssrData,
   onCompare,
   selectedRegion,
+  active = true,
 }) {
   // ── Cone of Uncertainty mode ────────────────────────────────────────────────
   const [coneMode, setConeMode] = useState('gaussian');  // 'gaussian' | 'empirical'
@@ -255,6 +256,11 @@ export function AnalysisTab({
   const verifiedAgainst = selectedVariable === 'precipitation'
     ? 'Verified against GPM IMERG V07B observations'
     : 'Verified against ERA5 reanalysis (10-m wind)';
+
+  // Skip rendering (incl. Recharts charts) while this tab is hidden — avoids
+  // the "width(0)/height(0)" warnings from measuring a display:none container.
+  // Hooks above run unconditionally, so state is preserved across tab switches.
+  if (!active) return null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: 1 }}>
