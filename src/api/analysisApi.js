@@ -38,18 +38,14 @@ export async function fetchCategoricalMetrics({
   hourMin,
   hourMax,
 }) {
+  const thresholdField = variable === 'wind'
+    ? { threshold_ms: thresholdMm6h }
+    : { threshold_mm_6h: thresholdMm6h };
+
   const response = await fetch(`${API_BASE}/categorical-metrics`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model,
-      variable,
-      lat,
-      lon,
-      threshold_mm_6h: thresholdMm6h,
-      hour_min: hourMin,
-      hour_max: hourMax,
-    }),
+    body: JSON.stringify({ model, variable, lat, lon, hour_min: hourMin, hour_max: hourMax, ...thresholdField }),
   });
 
   if (!response.ok) {
@@ -77,6 +73,10 @@ export async function fetchRegionCategoricalMetrics({
   minLat, maxLat, minLon, maxLon,
   thresholdMm6h, hourMin, hourMax,
 }) {
+  const thresholdField = variable === 'wind'
+    ? { threshold_ms: thresholdMm6h }
+    : { threshold_mm_6h: thresholdMm6h };
+
   const response = await fetch(`${API_BASE}/region-categorical-metrics`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -84,8 +84,8 @@ export async function fetchRegionCategoricalMetrics({
       model, variable,
       min_lat: minLat, max_lat: maxLat,
       min_lon: minLon, max_lon: maxLon,
-      threshold_mm_6h: thresholdMm6h,
       hour_min: hourMin, hour_max: hourMax,
+      ...thresholdField,
     }),
   });
   if (!response.ok) {

@@ -44,7 +44,7 @@ export function RightPanel({
       zIndex: 1000, overflowY: 'auto', display: 'flex', flexDirection: 'column',
     }}>
       {/* Header */}
-      <div style={{ padding: '16px 18px 14px', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingTop: '68px', flexShrink: 0 }}>
+      <div style={{ padding: '16px 18px 14px', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingTop: '20px', flexShrink: 0 }}>
         <div style={label}>Display Settings</div>
       </div>
 

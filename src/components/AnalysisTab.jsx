@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   AreaChart, Area, BarChart, Bar, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip,
@@ -21,6 +21,30 @@ const REGION_METRICS = [
   { key: 'far',         group: 'categorical',  label: 'FAR',                        requiresHour: false, requiresThreshold: true  },
   { key: 'brier',       group: 'categorical',  label: 'Brier Score',                requiresHour: false, requiresThreshold: true  },
 ];
+
+// Downloads the first SVG found inside a container div as a PNG.
+function downloadChartAsPng(containerRef, filename) {
+  if (!containerRef.current) return;
+  const svg = containerRef.current.querySelector('svg');
+  if (!svg) return;
+  const svgData = new XMLSerializer().serializeToString(svg);
+  const canvas  = document.createElement('canvas');
+  const bbox    = svg.getBoundingClientRect();
+  canvas.width  = bbox.width  || 800;
+  canvas.height = bbox.height || 400;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#0f1923';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const img = new Image();
+  img.onload = () => {
+    ctx.drawImage(img, 0, 0);
+    const a = document.createElement('a');
+    a.href     = canvas.toDataURL('image/png');
+    a.download = filename;
+    a.click();
+  };
+  img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
+}
 
 /**
  * Full Analysis tab content.
@@ -45,10 +69,21 @@ export function AnalysisTab({
   onCompare,
   selectedRegion,
 }) {
+  // ── Cone of Uncertainty mode ────────────────────────────────────────────────
+  const [coneMode, setConeMode] = useState('gaussian');  // 'gaussian' | 'empirical'
+
+  // ── Chart download refs ──────────────────────────────────────────────────────
+  const coneChartRef  = useRef(null);
+  const ssrChartRef   = useRef(null);
+  const catChartRef   = useRef(null);
+
   // ── Verification Metrics state ──────────────────────────────────────────────
-  const [catThreshold, setCatThreshold]   = useState(25);    // mm/6h
+  // Default threshold: 25 mm/6h for precip, 10 m/s for wind
+  const defaultThreshold = selectedVariable === 'wind' ? 10 : 25;
+  const [catThreshold, setCatThreshold]   = useState(defaultThreshold);
   const [catHourMin,   setCatHourMin]     = useState(0);
   const [catHourMax,   setCatHourMax]     = useState(240);
+
   const [catLoading,   setCatLoading]     = useState(false);
   const [catData,      setCatData]        = useState(null);  // full API response
   const [catError,     setCatError]       = useState(null);
@@ -61,11 +96,23 @@ export function AnalysisTab({
   const [regCatError,    setRegCatError]    = useState(null);
   const [regCatHasRun,   setRegCatHasRun]   = useState(false);
 
+  // Reset thresholds to variable-appropriate defaults and clear stale results on variable switch.
+  useEffect(() => {
+    const def = selectedVariable === 'wind' ? 10 : 25;
+    setCatThreshold(def);
+    setRegionThreshold(def);
+    setCatData(null);
+    setCatHasRun(false);
+    setRegCatData(null);
+    setRegCatHasRun(false);
+    setSpatialMaps({});
+  }, [selectedVariable]); // eslint-disable-line
+
   // ── Region mode state ────────────────────────────────────────────────────────
   const [analysisMode,       setAnalysisMode]       = useState('point');
   const [regionHourMin,      setRegionHourMin]      = useState(0);
   const [regionHourMax,      setRegionHourMax]      = useState(168);
-  const [regionThreshold,    setRegionThreshold]    = useState(25);
+  const [regionThreshold,    setRegionThreshold]    = useState(selectedVariable === 'wind' ? 10 : 25);
   const [spatialMaps,        setSpatialMaps]        = useState({});
   const [regionRunning,      setRegionRunning]      = useState(false);
   // per-card share feedback: { [key]: 'idle' | 'copied' }
@@ -156,7 +203,7 @@ export function AnalysisTab({
 
     const bounds = selectedRegion.bounds;
 
-    REGION_METRICS.forEach(async (m) => {
+    await Promise.all(REGION_METRICS.map(async (m) => {
       try {
         const pts = await fetchSpatialMetric({
           metric:    m.key,
@@ -191,7 +238,7 @@ export function AnalysisTab({
           [m.key]: { loading: false, url: null, error: err.message },
         }));
       }
-    });
+    }));
 
     setRegionRunning(false);
   };
@@ -203,19 +250,11 @@ export function AnalysisTab({
     return '#f39c12';
   };
 
-  const yAxisUnit = selectedVariable === 'wind' ? 'm/s'
-    : selectedVariable === 'temperature_2m' ? 'K'
-    : 'mm/hr';
+  const yAxisUnit = selectedVariable === 'wind' ? 'm/s' : 'mm/hr';
 
   const verifiedAgainst = selectedVariable === 'precipitation'
     ? 'Verified against GPM IMERG V07B observations'
-    : selectedVariable === 'wind'
-    ? 'Verified against ERA5 reanalysis (10-m wind)'
-    : selectedVariable === 'temperature_2m'
-    ? 'Verified against ERA5 reanalysis (2-m temperature)'
-    : selectedVariable === 'pressure_msl'
-    ? 'Verified against ERA5 reanalysis (MSLP)'
-    : 'Verified against reanalysis observations';
+    : 'Verified against ERA5 reanalysis (10-m wind)';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: 1 }}>
@@ -262,28 +301,59 @@ export function AnalysisTab({
               <>
                 {/* ── Section 1: Cone of Uncertainty ── */}
                 <div style={{ marginBottom: '32px' }}>
-                  <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: '14px', fontWeight: '600', margin: '0 0 12px 0', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                    Cone of Uncertainty
-                  </h3>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '12px', flexWrap: 'wrap' }}>
+                    <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: '14px', fontWeight: '600', margin: 0, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                      Cone of Uncertainty
+                    </h3>
+                    {/* Gaussian / Empirical toggle */}
+                    <div style={{ display: 'flex', borderRadius: '6px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.12)' }}>
+                      {[{ id: 'gaussian', label: 'Gaussian ±σ' }, { id: 'empirical', label: 'Empirical P10–P90' }].map(({ id, label }) => (
+                        <button key={id} onClick={() => setConeMode(id)}
+                          style={{ padding: '4px 12px', fontSize: '11px', fontWeight: '600', cursor: 'pointer', border: 'none', outline: 'none',
+                            background: coneMode === id ? 'rgba(52,152,219,0.22)' : 'rgba(255,255,255,0.04)',
+                            color:      coneMode === id ? 'rgba(52,152,219,0.95)' : 'rgba(255,255,255,0.4)' }}>
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    {coneMode === 'gaussian' && selectedVariable === 'precipitation' && (
+                      <span style={{ fontSize: '11px', color: 'rgba(243,156,18,0.7)' }} title="Gaussian bands can go negative for skewed precipitation distributions">⚠ Gaussian bands may go negative for precip — try Empirical</span>
+                    )}
+                    {timeseriesData && (
+                      <button onClick={() => downloadChartAsPng(coneChartRef, `WEAVE-cone-${currentModel?.name}.png`)}
+                        style={{ marginLeft: 'auto', fontSize: '13px', color: 'rgba(255,255,255,0.45)', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '5px', cursor: 'pointer', padding: '2px 8px' }}
+                        title="Download chart as PNG">⬇</button>
+                    )}
+                  </div>
 
                   {timeseriesLoading && (
                     <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: '14px', padding: '40px 0' }}>⏳ Loading forecast data…</div>
                   )}
 
                   {!timeseriesLoading && timeseriesData && (
-                    <div style={{ height: '320px' }}>
-                      <div style={{ display: 'flex', gap: '20px', marginBottom: '10px', flexWrap: 'wrap' }}>
-                        {[
-                          { color: '#7ec8f7',             label: 'Ensemble Mean', solid: true },
-                          { color: 'rgba(52,152,219,0.4)', label: '±1σ (68%)',    solid: false },
-                          { color: 'rgba(52,152,219,0.15)',label: '±2σ (95%)',    solid: false },
-                        ].map(({ color, label, solid }) => (
-                          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <div style={{ width: '24px', height: solid ? '3px' : '12px', background: color, borderRadius: '2px' }} />
-                            <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px' }}>{label}</span>
+                    <div ref={coneChartRef} style={{ height: '320px' }}>
+                      {/* Legend */}
+                      {(() => {
+                        const legendItems = coneMode === 'gaussian' ? [
+                          { color: '#7ec8f7',              label: 'Ensemble Mean', solid: true },
+                          { color: 'rgba(52,152,219,0.4)', label: '±1σ (68%)',     solid: false },
+                          { color: 'rgba(52,152,219,0.15)',label: '±2σ (95%)',     solid: false },
+                        ] : [
+                          { color: '#7ec8f7',              label: 'Ensemble Mean', solid: true },
+                          { color: 'rgba(52,152,219,0.45)',label: 'P25–P75 (IQR)', solid: false },
+                          { color: 'rgba(52,152,219,0.18)',label: 'P10–P90',       solid: false },
+                        ];
+                        return (
+                          <div style={{ display: 'flex', gap: '20px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                            {legendItems.map(({ color, label, solid }) => (
+                              <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <div style={{ width: '24px', height: solid ? '3px' : '12px', background: color, borderRadius: '2px' }} />
+                                <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px' }}>{label}</span>
+                              </div>
+                            ))}
                           </div>
-                        ))}
-                      </div>
+                        );
+                      })()}
                       <ResponsiveContainer width="100%" height="90%">
                         <AreaChart data={timeseriesData} margin={{ top: 10, right: 30, left: 10, bottom: 30 }}>
                           <defs>
@@ -309,14 +379,23 @@ export function AnalysisTab({
                             contentStyle={{ background: '#1a2535', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: 'white', fontSize: '12px' }}
                             formatter={(value, name) => {
                               if (value == null) return null;
-                              const labels = { mean: 'Mean', band2Hi: '+2σ', band2Lo: '-2σ', band1Hi: '+1σ', band1Lo: '-1σ' };
+                              const labels = coneMode === 'gaussian'
+                                ? { mean: 'Mean', band2Hi: '+2σ', band2Lo: '-2σ', band1Hi: '+1σ', band1Lo: '-1σ' }
+                                : { mean: 'Mean', p90: 'P90', p10: 'P10', p75: 'P75', p25: 'P25' };
                               return [typeof value === 'number' ? value.toFixed(3) : value, labels[name] || name];
                             }}
                             labelFormatter={hour => `Forecast +${hour}h (Day ${(hour/24).toFixed(1)})`} />
-                          <Area type="monotone" dataKey="band2Hi" stroke="none" fill="url(#cone2grad)" fillOpacity={1} legendType="none" name="band2Hi" />
-                          <Area type="monotone" dataKey="band2Lo" stroke="none" fill="#0f1923"         fillOpacity={1} legendType="none" name="band2Lo" />
-                          <Area type="monotone" dataKey="band1Hi" stroke="none" fill="url(#cone1grad)" fillOpacity={1} legendType="none" name="band1Hi" />
-                          <Area type="monotone" dataKey="band1Lo" stroke="none" fill="#0f1923"         fillOpacity={1} legendType="none" name="band1Lo" />
+                          {coneMode === 'gaussian' ? <>
+                            <Area type="monotone" dataKey="band2Hi" stroke="none" fill="url(#cone2grad)" fillOpacity={1} legendType="none" name="band2Hi" />
+                            <Area type="monotone" dataKey="band2Lo" stroke="none" fill="#0f1923"         fillOpacity={1} legendType="none" name="band2Lo" />
+                            <Area type="monotone" dataKey="band1Hi" stroke="none" fill="url(#cone1grad)" fillOpacity={1} legendType="none" name="band1Hi" />
+                            <Area type="monotone" dataKey="band1Lo" stroke="none" fill="#0f1923"         fillOpacity={1} legendType="none" name="band1Lo" />
+                          </> : <>
+                            <Area type="monotone" dataKey="p90" stroke="none" fill="url(#cone2grad)" fillOpacity={1} legendType="none" name="p90" />
+                            <Area type="monotone" dataKey="p10" stroke="none" fill="#0f1923"         fillOpacity={1} legendType="none" name="p10" />
+                            <Area type="monotone" dataKey="p75" stroke="none" fill="url(#cone1grad)" fillOpacity={1} legendType="none" name="p75" />
+                            <Area type="monotone" dataKey="p25" stroke="none" fill="#0f1923"         fillOpacity={1} legendType="none" name="p25" />
+                          </>}
                           <Area type="monotone" dataKey="mean" stroke="#7ec8f7" strokeWidth={2.5} fill="none" dot={false} name="mean" />
                           {[24,48,72,96,120,144,168,192,216,240,264,288,312,336].map(h => (
                             <ReferenceLine key={h} x={h} stroke="rgba(255,255,255,0.07)" strokeDasharray="4 4"
@@ -341,6 +420,11 @@ export function AnalysisTab({
                     <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: '12px' }}>
                       {verifiedAgainst}{' · Lead times with obs shown'}
                     </span>
+                    {ssrData && ssrData.n_cases > 0 && (
+                      <button onClick={() => downloadChartAsPng(ssrChartRef, `WEAVE-ssr-${currentModel?.name}.png`)}
+                        style={{ marginLeft: 'auto', fontSize: '13px', color: 'rgba(255,255,255,0.45)', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '5px', cursor: 'pointer', padding: '2px 8px' }}
+                        title="Download chart as PNG">⬇</button>
+                    )}
                   </div>
 
                   {ssrLoading && (
@@ -375,7 +459,7 @@ export function AnalysisTab({
                         </div>
 
                         {/* Two charts */}
-                        <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
+                        <div ref={ssrChartRef} style={{ display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
                           {/* Chart A: SSR per hour */}
                           <div style={{ flex: '1 1 340px', minWidth: 0 }}>
                             <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', marginBottom: '6px' }}>
@@ -450,7 +534,19 @@ export function AnalysisTab({
                     <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: '12px' }}>
                       CSI · POD · FAR · FBI · Brier Score · Composite Confidence
                     </span>
+                    {(catMode === 'point' ? catData : regCatData) && (
+                      <button onClick={() => downloadChartAsPng(catChartRef, `WEAVE-verification-${currentModel?.name}.png`)}
+                        style={{ marginLeft: 'auto', fontSize: '13px', color: 'rgba(255,255,255,0.45)', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '5px', cursor: 'pointer', padding: '2px 8px' }}
+                        title="Download chart as PNG">⬇</button>
+                    )}
                   </div>
+
+                  {/* Non-precipitation warning */}
+                  {selectedVariable !== 'precipitation' && (
+                    <div style={{ background: 'rgba(243,156,18,0.10)', border: '1px solid rgba(243,156,18,0.3)', borderRadius: '8px', padding: '8px 14px', marginBottom: '14px', color: '#f39c12', fontSize: '12px' }}>
+                      ⚠️ Categorical metrics (CSI, POD, FAR, Brier) are defined for precipitation exceedance thresholds. Results for <strong>{selectedVariable}</strong> may be unreliable — switch the variable to <em>precipitation</em> for meaningful scores.
+                    </div>
+                  )}
 
                   {/* Controls row */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
@@ -494,13 +590,15 @@ export function AnalysisTab({
 
                     {/* Threshold */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', whiteSpace: 'nowrap' }}>Threshold</span>
+                      <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', whiteSpace: 'nowrap' }} title="Separate from the Region spatial-maps threshold above">Threshold</span>
                       <input
-                        type="number" min="0" step="1" value={catThreshold}
+                        type="number" min="0" step={selectedVariable === 'wind' ? '1' : '1'} value={catThreshold}
                         onChange={e => setCatThreshold(e.target.value)}
                         style={{ width: '72px', padding: '4px 8px', fontSize: '13px', fontWeight: '600', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'white', textAlign: 'right', outline: 'none' }}
                       />
-                      <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px' }}>mm/6h</span>
+                      <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px' }}>
+                        {selectedVariable === 'wind' ? 'm/s' : 'mm/6h'}
+                      </span>
                     </div>
 
                     {/* Hour range */}
@@ -533,18 +631,27 @@ export function AnalysisTab({
                     </button>
 
                     {/* Active result label */}
-                    {catMode === 'point' && catData && !catLoading && (
-                      <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>
-                        {currentModel.name} · &gt;{catData.threshold_info?.threshold_mm_6h ?? catThreshold} mm/6h
-                        {' '}(≡ {catData.threshold_info?.threshold_rate?.toFixed(3) ?? '—'} mm/h)
-                      </span>
-                    )}
-                    {catMode === 'region' && regCatData && !regCatLoading && (
-                      <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>
-                        {currentModel.name} · &gt;{regCatData.threshold_info?.threshold_mm_6h ?? catThreshold} mm/6h
-                        {' '}· {regCatData.summary?.n_grid_pts ?? '?'} grid pts
-                      </span>
-                    )}
+                    {catMode === 'point' && catData && !catLoading && (() => {
+                      const ti = catData.threshold_info ?? {};
+                      const thr = ti.threshold_ms ?? ti.threshold_mm_6h ?? catThreshold;
+                      const unit = ti.unit ?? (selectedVariable === 'wind' ? 'm/s' : 'mm/6h');
+                      const rateLabel = ti.unit === 'm/s' ? '' : ` (≡ ${ti.threshold_rate?.toFixed(3) ?? '—'} mm/h)`;
+                      return (
+                        <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>
+                          {currentModel.name} · &gt;{thr} {unit}{rateLabel}
+                        </span>
+                      );
+                    })()}
+                    {catMode === 'region' && regCatData && !regCatLoading && (() => {
+                      const ti = regCatData.threshold_info ?? {};
+                      const thr = ti.threshold_ms ?? ti.threshold_mm_6h ?? catThreshold;
+                      const unit = ti.unit ?? (selectedVariable === 'wind' ? 'm/s' : 'mm/6h');
+                      return (
+                        <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>
+                          {currentModel.name} · &gt;{thr} {unit} · {regCatData.summary?.n_grid_pts ?? '?'} grid pts
+                        </span>
+                      );
+                    })()}
                   </div>
 
                   {/* Error banner */}
@@ -660,9 +767,10 @@ export function AnalysisTab({
 
                         {/* Chart — different per mode */}
                         {catMode === 'point' && (
-                          <div>
+                          <>
+                          <div ref={catChartRef}>
                             <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
-                              <span>Event Probability per Lead Time (threshold &gt; {activeData.threshold_info?.threshold_mm_6h ?? catThreshold} mm/6h)</span>
+                              <span>Event Probability per Lead Time (threshold &gt; {activeData.threshold_info?.threshold_ms ?? activeData.threshold_info?.threshold_mm_6h ?? catThreshold} {activeData.threshold_info?.unit ?? (selectedVariable === 'wind' ? 'm/s' : 'mm/6h')})</span>
                               <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ display: 'inline-block', width: '10px', height: '10px', background: 'rgba(52,152,219,0.6)', borderRadius: '2px' }} />P(event) — Gaussian</span>
                               <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ display: 'inline-block', width: '14px', height: '3px', background: '#2ecc71', borderRadius: '1px' }} />Observed event</span>
                               <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ display: 'inline-block', width: '14px', height: '2px', background: '#e74c3c' }} />Forecast event (det.)</span>
@@ -688,6 +796,51 @@ export function AnalysisTab({
                               </ComposedChart>
                             </ResponsiveContainer>
                           </div>
+
+                          {/* Cumulative CSI / POD / FAR by lead time */}
+                          {(() => {
+                            let hits = 0, misses = 0, fas = 0;
+                            const cumData = activeData.hours.map(r => {
+                              if (r.is_fcst && r.is_obs)       hits++;
+                              else if (r.is_fcst && !r.is_obs) fas++;
+                              else if (!r.is_fcst && r.is_obs) misses++;
+                              const denom = hits + misses + fas;
+                              const fcstYes = hits + fas;
+                              return {
+                                hour: r.hour,
+                                csi: denom > 0 ? +(hits / denom).toFixed(3) : null,
+                                pod: (hits + misses) > 0 ? +(hits / (hits + misses)).toFixed(3) : null,
+                                far: fcstYes > 0 ? +(fas / fcstYes).toFixed(3) : null,
+                              };
+                            });
+                            return (
+                              <div style={{ marginTop: '18px' }}>
+                                <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+                                  <span>Cumulative Skill Scores by Lead Time</span>
+                                  <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ display: 'inline-block', width: '14px', height: '3px', background: '#3498db' }} />CSI</span>
+                                  <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ display: 'inline-block', width: '14px', height: '3px', background: '#2ecc71' }} />POD</span>
+                                  <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ display: 'inline-block', width: '14px', background: '#e74c3c', borderTop: '2px dashed #e74c3c', height: '0' }} />FAR</span>
+                                </div>
+                                <ResponsiveContainer width="100%" height={200}>
+                                  <ComposedChart data={cumData} margin={{ top: 8, right: 20, left: 0, bottom: 20 }}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false} />
+                                    <XAxis dataKey="hour" stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }} tickFormatter={h => `+${h}h`} label={{ value: 'Forecast Hour', position: 'insideBottom', offset: -12, fill: 'rgba(255,255,255,0.4)', fontSize: 11 }} />
+                                    <YAxis domain={[0, 1]} stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }} label={{ value: 'Score', angle: -90, position: 'insideLeft', fill: 'rgba(255,255,255,0.4)', fontSize: 11 }} />
+                                    <Tooltip
+                                      contentStyle={{ background: '#1a2535', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: 'white', fontSize: '12px' }}
+                                      formatter={(v, n) => [v != null ? v.toFixed(3) : 'N/A', n]}
+                                      labelFormatter={h => `Cumulative through +${h}h`}
+                                    />
+                                    <ReferenceLine y={0.5} stroke="rgba(255,255,255,0.10)" strokeDasharray="4 4" />
+                                    <Line type="monotone" dataKey="csi" name="CSI" stroke="#3498db" strokeWidth={2} dot={false} isAnimationActive={false} connectNulls />
+                                    <Line type="monotone" dataKey="pod" name="POD" stroke="#2ecc71" strokeWidth={2} dot={false} isAnimationActive={false} connectNulls />
+                                    <Line type="monotone" dataKey="far" name="FAR" stroke="#e74c3c" strokeWidth={1.5} strokeDasharray="5 3" dot={false} isAnimationActive={false} connectNulls />
+                                  </ComposedChart>
+                                </ResponsiveContainer>
+                              </div>
+                            );
+                          })()}
+                          </>
                         )}
 
                         {catMode === 'region' && (
@@ -807,11 +960,13 @@ export function AnalysisTab({
 
                   {/* Threshold */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '11px', whiteSpace: 'nowrap' }}>Threshold</span>
+                    <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '11px', whiteSpace: 'nowrap' }} title="For spatial metric maps only. Verification Metrics below uses its own threshold setting.">Threshold (maps)</span>
                     <input type="number" min="0" step="1" value={regionThreshold}
-                      onChange={e => setRegionThreshold(parseFloat(e.target.value) || 25)}
+                      onChange={e => setRegionThreshold(parseFloat(e.target.value) || (selectedVariable === 'wind' ? 10 : 25))}
                       style={{ width: '60px', padding: '4px 6px', fontSize: '12px', fontWeight: '600', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'white', textAlign: 'right', outline: 'none' }} />
-                    <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px' }}>mm/6h</span>
+                    <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px' }}>
+                      {selectedVariable === 'wind' ? 'm/s' : 'mm/6h'}
+                    </span>
                   </div>
 
                   {/* Compute button */}
@@ -830,7 +985,7 @@ export function AnalysisTab({
                 {[
                   { id: 'calibration', label: 'Calibration', hint: 'Is the ensemble spread reliable?', keys: ['ssr_agg', 'correlation'] },
                   { id: 'accuracy',    label: 'Accuracy vs Observations', hint: 'How close is the ensemble mean to obs?', keys: ['bias', 'mae', 'rmse', 'crps'] },
-                  { id: 'categorical', label: `Categorical  (threshold > ${regionThreshold} mm/6h)`, hint: 'Event-based skill for threshold exceedances', keys: ['csi', 'pod', 'far', 'brier'] },
+                  { id: 'categorical', label: `Categorical  (threshold > ${regionThreshold} ${selectedVariable === 'wind' ? 'm/s' : 'mm/6h'})`, hint: 'Event-based skill for threshold exceedances', keys: ['csi', 'pod', 'far', 'brier'] },
                 ].map(group => (
                   <div key={group.id} style={{ marginBottom: '32px' }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: '12px', marginBottom: '14px' }}>
@@ -893,6 +1048,18 @@ export function AnalysisTab({
                   </div>
                 ))}
               </>
+            )}
+
+            {/* Compare shortcut — region mode */}
+            {selectedRegion?.bounds && (
+              <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', padding: '14px 0 4px', display: 'flex', justifyContent: 'flex-end' }}>
+                <button
+                  onClick={onCompare}
+                  style={{ background: 'rgba(52,152,219,0.12)', border: '1px solid rgba(52,152,219,0.3)', color: 'rgba(52,152,219,0.9)', fontSize: '12px', fontWeight: '600', padding: '6px 14px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+                >
+                  ⚖️ Compare models for this region →
+                </button>
+              </div>
             )}
           </>
         )}

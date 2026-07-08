@@ -1,24 +1,26 @@
 import React from 'react';
 
-export function BivariateLegend({ bivariateRanges, selectedColormap, selectedVariable, buildColorMatrix, invertUncertainty = false }) {
+export function BivariateLegend({ bivariateRanges, selectedColormap, selectedVariable, buildColorMatrix, invertUncertainty = false, numBuckets = 0, flipColormap = false }) {
   if (!bivariateRanges) return null;
 
   const { meanMax, stdMax } = bivariateRanges;
-  const cols = 4;
-  const rows = 4;
-  const cellSize = 36;
+  // Grid size follows the Number of Buckets control (0/1 → default 4×4 preview).
+  const size = numBuckets > 1 ? numBuckets : 4;
+  const cols = size;
+  const rows = size;
+  const cellSize = size <= 4 ? 36 : Math.max(12, Math.round(144 / size));
 
-  const xTicks = Array.from({ length: 5 }, (_, i) => +(meanMax * i / cols).toFixed(2));
+  const xTicks = Array.from({ length: cols + 1 }, (_, i) => +(meanMax * i / cols).toFixed(2));
   // Normal:   top row = row 0 (vivid, low σ) → tick 0 at top, stdMax at bottom
   // Inverted: top row = row 0 (now muted, high σ) → tick stdMax at top, 0 at bottom
-  const yTicks = Array.from({ length: 5 }, (_, i) =>
+  const yTicks = Array.from({ length: rows + 1 }, (_, i) =>
     +(stdMax * (invertUncertainty ? (rows - i) / rows : i / rows)).toFixed(2)
   );
 
   const xLabel = selectedVariable === 'wind' ? 'Wind Speed' : 'Precipitation';
   const unit   = selectedVariable === 'wind' ? 'm/s' : 'mm/hr';
 
-  const colorMatrix = buildColorMatrix(selectedColormap, false); // grid colours never change
+  const colorMatrix = buildColorMatrix(selectedColormap, false, invertUncertainty, size, flipColormap);
 
   const cardStyle = {
     background: 'rgba(10,18,28,0.92)',

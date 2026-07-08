@@ -1,6 +1,7 @@
 import React from 'react';
+import { buildVsupLevels } from '../../constants';
 
-export function VSUPFanLegend({ bivariateRanges, selectedColormap, colormaps, selectedVariable, invertUncertainty = false }) {
+export function VSUPFanLegend({ bivariateRanges, selectedColormap, colormaps, selectedVariable, invertUncertainty = false, numBuckets = 0, flipColormap = false }) {
   if (!bivariateRanges) return null;
 
   const { meanMax, stdMax } = bivariateRanges;
@@ -8,7 +9,12 @@ export function VSUPFanLegend({ bivariateRanges, selectedColormap, colormaps, se
   const totalSpan = fanLeft - fanRight; // 120
   const cx = 150, cy = 220;
   const rInner = 22, rOuter = 140;
-  const ROWS = 4;
+  // Fan geometry is derived from the SAME helper the map uses, so legend and
+  // overlay always agree. segCounts low→high uncertainty ([W…1]); reverse for
+  // rings drawn inner (ri=0, high uncertainty, narrowest) → outer (low, widest).
+  const vsupLevels = buildVsupLevels(numBuckets);
+  const ROWS = vsupLevels.rings;
+  const segCounts = [...vsupLevels.segCounts].reverse();
   const dR = (rOuter - rInner) / ROWS;
   const toRad = d => d * Math.PI / 180;
   const px = (r, d) => cx + r * Math.cos(toRad(d));
@@ -19,7 +25,8 @@ export function VSUPFanLegend({ bivariateRanges, selectedColormap, colormaps, se
     `L${px(r2,a2d).toFixed(2)} ${py(r2,a2d).toFixed(2)} ` +
     `A${r2} ${r2} 0 0 0 ${px(r2,a1d).toFixed(2)} ${py(r2,a1d).toFixed(2)}Z`;
 
-  const cmapColor = (t) => {
+  const cmapColor = (tRaw) => {
+    const t = flipColormap ? 1 - tRaw : tRaw;   // reverse hue when colormap is flipped
     const cols = colormaps[selectedColormap].colors;
     const seg = cols.length - 1;
     const si  = Math.min(Math.floor(t * seg), seg - 1);
@@ -31,10 +38,9 @@ export function VSUPFanLegend({ bivariateRanges, selectedColormap, colormaps, se
   };
 
   const neutral = [180, 175, 185];
-  const segCounts = [1, 2, 4, 8];
   const vsupRows = segCounts.map((segs, ri) => {
     // Colours never change with inversion — only the σ axis tick labels flip
-    const uncertFrac = 1 - ri / (ROWS - 1);   // inner ring (ri=0) = most suppressed
+    const uncertFrac = 1 - ri / Math.max(1, ROWS - 1);   // inner ring (ri=0) = most suppressed
     const suppress   = uncertFrac * 0.72;
     const colors = Array.from({ length: segs }, (_, ci) => {
       const t = segs === 1 ? 0.5 : ci / (segs - 1);
@@ -71,11 +77,11 @@ export function VSUPFanLegend({ bivariateRanges, selectedColormap, colormaps, se
   // All 5 ring boundaries labeled — 45° spine gives ~21px y-spacing, enough for 11px font
   // When inverted: tick labels flip direction (outer ring relabeled as stdMax, inner as 0)
   // so the legend stays visually identical but the σ scale is read in reverse
-  const stdTickData = Array.from({ length: 5 }, (_, j) => {
+  const stdTickData = Array.from({ length: ROWS + 1 }, (_, j) => {
     const r = rOuter - j * dR;
     const tickVal = invertUncertainty
-      ? (stdMax * (4 - j) / 4)   // outer (j=0) → stdMax, inner (j=4) → 0
-      : (stdMax * j / 4);         // outer (j=0) → 0,      inner (j=4) → stdMax
+      ? (stdMax * (ROWS - j) / ROWS)   // outer (j=0) → stdMax, inner (j=ROWS) → 0
+      : (stdMax * j / ROWS);            // outer (j=0) → 0,      inner (j=ROWS) → stdMax
     return {
       bx: px(r, fanRight), by: py(r, fanRight),
       lx: px(r + 20, fanRight), ly: py(r + 20, fanRight),
@@ -174,7 +180,7 @@ export function VSUPFanLegend({ bivariateRanges, selectedColormap, colormaps, se
         {/* Std dev axis label — vertically centered on right side */}
         <text
           x={(stdTickData[0].lx + 4).toFixed(1)}
-          y={((stdTickData[0].ly + stdTickData[4].ly) / 2).toFixed(1)}
+          y={((stdTickData[0].ly + stdTickData[ROWS].ly) / 2).toFixed(1)}
           fontSize="10" fill="rgba(255,255,255,0.7)" fontWeight="600"
           textAnchor="start" dominantBaseline="middle"
         >
