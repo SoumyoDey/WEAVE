@@ -47,7 +47,7 @@ export function LeftPanel({
 
         {/* Model selector */}
         <div style={{ marginBottom: '20px' }}>
-          <div style={{ fontSize: '10px', fontWeight: '700', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '8px' }}>Model</div>
+          <div style={{ fontSize: '11px', fontWeight: 500, color: 'rgba(255,255,255,0.5)', letterSpacing: '0.01em', marginBottom: '8px' }}>Model</div>
           <div style={{ display: 'flex', gap: '6px' }}>
             {Object.entries(models).map(([key, model]) => (
               <button key={key} onClick={() => setSelectedModel(key)}
@@ -69,7 +69,7 @@ export function LeftPanel({
 
         {/* Variable selector */}
         <div style={{ marginBottom: '20px' }}>
-          <div style={{ fontSize: '10px', fontWeight: '700', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '8px' }}>Variable</div>
+          <div style={{ fontSize: '11px', fontWeight: 500, color: 'rgba(255,255,255,0.5)', letterSpacing: '0.01em', marginBottom: '8px' }}>Variable</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             {[
               { val: 'precipitation', icon: '💧', label: 'Precipitation', unit: 'mm/hr' },
@@ -102,7 +102,7 @@ export function LeftPanel({
         {/* Ensemble member */}
         {currentModel.hasEnsemble && (
           <div style={{ marginBottom: '20px' }}>
-            <div style={{ fontSize: '10px', fontWeight: '700', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '8px' }}>Ensemble Member</div>
+            <div style={{ fontSize: '11px', fontWeight: 500, color: 'rgba(255,255,255,0.5)', letterSpacing: '0.01em', marginBottom: '8px' }}>Ensemble Member</div>
             <select value={selectedMember} onChange={e => setSelectedMember(e.target.value)}
               style={{ width: '100%', padding: '9px 10px', fontSize: '13px', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '7px', background: 'rgba(255,255,255,0.07)', color: 'white', cursor: 'pointer', outline: 'none' }}>
               {getMemberOptions().map(opt => <option key={opt.value} value={opt.value} style={{ background: '#0f1923' }}>{opt.label}</option>)}
@@ -127,7 +127,7 @@ export function LeftPanel({
         {/* Active overlay pill */}
         {uncertaintyMode && (
           <div style={{ marginTop: '8px', padding: '8px 12px', background: 'rgba(52,152,219,0.1)', border: '1px solid rgba(52,152,219,0.25)', borderRadius: '8px' }}>
-            <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.35)', marginBottom: '3px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Active overlay</div>
+            <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.35)', marginBottom: '3px', letterSpacing: '0.02em' }}>Active overlay</div>
             <div style={{ fontSize: '12px', color: '#7ec8f7', fontWeight: '600' }}>
               {{ vsup: '⬛ VSup Boxes', bivariate: '🟦 Bivariate Map', fan: '🌀 VSUP Fan' }[uncertaintyMode]}
             </div>

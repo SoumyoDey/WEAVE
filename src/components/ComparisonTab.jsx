@@ -618,8 +618,8 @@ export function ComparisonTab({
                 {/* Scale mismatch warning banner */}
                 {hasScaleMismatch && !normalizeScales && (
                   <div style={{
-                    background: 'rgba(243,156,18,0.08)',
-                    border: '1px solid rgba(243,156,18,0.25)',
+                    background: 'rgba(52,152,219,0.10)',
+                    border: '1px solid rgba(52,152,219,0.3)',
                     borderRadius: '8px',
                     padding: '9px 14px',
                     marginBottom: '12px',
@@ -629,17 +629,16 @@ export function ComparisonTab({
                     gap: '12px',
                     flexWrap: 'wrap',
                   }}>
-                    <span style={{ color: '#f39c12', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      ⚠ Models differ by <strong>{scaleRatio.toFixed(0)}×</strong> in magnitude — one or more lines may be invisible.
-                      Tooltip hover still shows exact values.
+                    <span style={{ color: '#bcd8f2', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      These models report at different scales ({scaleRatio.toFixed(0)}× apart), so one line may look flat. Turn on normalise to compare their shapes.
                     </span>
                     <button
                       onClick={() => setNormalizeScales(true)}
                       style={{
-                        background: 'rgba(243,156,18,0.15)',
-                        border: '1px solid rgba(243,156,18,0.4)',
+                        background: 'rgba(52,152,219,0.18)',
+                        border: '1px solid rgba(52,152,219,0.45)',
                         borderRadius: '6px',
-                        color: '#f39c12',
+                        color: '#7ec8f7',
                         fontSize: '12px',
                         fontWeight: '600',
                         padding: '4px 12px',
@@ -647,7 +646,7 @@ export function ComparisonTab({
                         whiteSpace: 'nowrap',
                       }}
                     >
-                      Enable normalise
+                      Normalise scales
                     </button>
                   </div>
                 )}

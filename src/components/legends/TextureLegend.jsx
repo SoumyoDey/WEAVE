@@ -101,7 +101,7 @@ export function TextureLegend({
   return (
     <div style={cardStyle}>
       <div style={{ color: 'white', fontSize: '12px', fontWeight: 600, marginBottom: '10px' }}>
-        ▦ Texture
+        Texture
         {numBuckets > 0 && (
           <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.4)', marginLeft: '6px' }}>
             {N} bins
@@ -157,6 +157,9 @@ export function TextureLegend({
             {invertUncertainty ? '0' : maxStd.toFixed(1)} {unit}
           </span>
         </div>
+      </div>
+      <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '10px', marginTop: '8px' }}>
+        Colour = value · denser hatching = less certain.
       </div>
     </div>
   );
