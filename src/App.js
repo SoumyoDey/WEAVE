@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { ChevronLeft, Info, Menu, SlidersHorizontal } from 'lucide-react';
+import { ChevronLeft, Info, Menu, SlidersHorizontal, CloudRain, Map as MapIcon, BarChart3, Scale } from 'lucide-react';
 
 // ── Constants & utilities ─────────────────────────────────────────────────────
 import { MODELS, COLORMAPS, METRIC_CONFIG, buildColorMatrix } from './constants';
@@ -474,8 +474,8 @@ function App() {
   const getMemberOptions = () => {
     if (!currentModel.hasEnsemble) return [];
     const opts = [
-      { value: 'mean', label: '📊 Ensemble Mean' },
-      { value: 'std',  label: '📈 Uncertainty (Std Dev)' },
+      { value: 'mean', label: 'Ensemble Mean' },
+      { value: 'std',  label: 'Uncertainty (Std Dev)' },
     ];
     for (let i = 0; i < currentModel.ensembleCount; i++)
       opts.push({ value: i.toString(), label: `Member ${i + 1}` });
@@ -488,11 +488,11 @@ function App() {
 
       {/* Tab bar */}
       <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: TAB_BAR_H, background: 'rgba(22,33,44,0.98)', display: 'flex', alignItems: 'center', zIndex: 1100, boxShadow: '0 2px 8px rgba(0,0,0,0.35)', paddingLeft: '16px', gap: '4px' }}>
-        <span style={{ color: 'white', fontWeight: '700', fontSize: '16px', marginRight: '16px', letterSpacing: '1px' }}>🌧️ WEAVE</span>
-        {[['visualization','🗺 Visualization'], ['analysis','📊 Analysis'], ['comparison','⚖️ Comparison']].map(([id, label]) => (
+        <span style={{ color: 'white', fontWeight: '700', fontSize: '16px', marginRight: '16px', letterSpacing: '1px', display: 'inline-flex', alignItems: 'center', gap: '7px' }}><CloudRain size={18} style={{ color: '#3aa0ff' }} />WEAVE</span>
+        {[['visualization', MapIcon, 'Visualization'], ['analysis', BarChart3, 'Analysis'], ['comparison', Scale, 'Comparison']].map(([id, Icon, label]) => (
           <button key={id} onClick={() => setActiveTab(id)}
-            style={{ padding: '6px 22px', fontSize: '13px', fontWeight: '600', border: 'none', borderRadius: '6px', cursor: 'pointer', transition: 'all 0.2s', background: activeTab === id ? 'rgba(255,255,255,0.15)' : 'transparent', color: activeTab === id ? 'white' : 'rgba(255,255,255,0.45)', borderBottom: activeTab === id ? '2px solid #3498db' : '2px solid transparent' }}>
-            {label}
+            style={{ padding: '6px 20px', fontSize: '13px', fontWeight: '600', border: 'none', borderRadius: '6px', cursor: 'pointer', transition: 'all 0.2s', background: activeTab === id ? 'rgba(255,255,255,0.15)' : 'transparent', color: activeTab === id ? 'white' : 'rgba(255,255,255,0.45)', borderBottom: activeTab === id ? '2px solid #3498db' : '2px solid transparent', display: 'inline-flex', alignItems: 'center', gap: '7px' }}>
+            <Icon size={15} />{label}
           </button>
         ))}
         {/* Persistent context: what you're currently looking at */}
@@ -527,17 +527,18 @@ function App() {
           {menuOpen ? <ChevronLeft size={22} /> : <Menu size={22} />}
         </button>
 
-        {/* About button */}
-        <button onClick={() => setShowAbout(!showAbout)}
-          style={{ position: 'absolute', top: '12px', right: rightPanelOpen ? '282px' : '12px', width: '44px', height: '44px', background: showAbout ? 'rgba(231,76,60,0.95)' : 'rgba(52,152,219,0.95)', border: 'none', borderRadius: '8px', color: 'white', cursor: 'pointer', zIndex: 1001, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.3)', transition: 'all 0.3s ease' }}>
-          <Info size={22} />
-        </button>
-
-        {/* Settings toggle */}
-        <button onClick={() => setRightPanelOpen(!rightPanelOpen)}
-          style={{ position: 'absolute', top: '68px', right: rightPanelOpen ? '282px' : '12px', width: '44px', height: '44px', background: rightPanelOpen ? 'rgba(46,204,113,0.95)' : 'rgba(44,62,80,0.95)', border: 'none', borderRadius: '8px', color: 'white', cursor: 'pointer', zIndex: 1001, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.3)', transition: 'all 0.3s ease' }}>
-          <SlidersHorizontal size={20} />
-        </button>
+        {/* Tool cluster: about + display settings */}
+        <div style={{ position: 'absolute', top: '12px', right: rightPanelOpen ? '282px' : '12px', zIndex: 1001, display: 'flex', flexDirection: 'column', background: 'rgba(15,25,35,0.95)', borderRadius: '10px', overflow: 'hidden', boxShadow: '0 4px 12px rgba(0,0,0,0.3)', transition: 'right 0.3s ease' }}>
+          <button onClick={() => setShowAbout(!showAbout)} title="About WEAVE"
+            style={{ width: '44px', height: '44px', background: showAbout ? 'rgba(231,76,60,0.95)' : 'transparent', border: 'none', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.2s' }}>
+            <Info size={20} />
+          </button>
+          <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)' }} />
+          <button onClick={() => setRightPanelOpen(!rightPanelOpen)} title="Display settings"
+            style={{ width: '44px', height: '44px', background: rightPanelOpen ? 'rgba(46,204,113,0.95)' : 'transparent', border: 'none', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.2s' }}>
+            <SlidersHorizontal size={19} />
+          </button>
+        </div>
 
         {/* Panels */}
         <RightPanel

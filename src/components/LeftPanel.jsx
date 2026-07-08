@@ -1,4 +1,5 @@
 import React from 'react';
+import { Droplet, Wind } from 'lucide-react';
 
 /**
  * Slide-in left panel — Forecast Controls.
@@ -72,9 +73,9 @@ export function LeftPanel({
           <div style={{ fontSize: '11px', fontWeight: 500, color: 'rgba(255,255,255,0.5)', letterSpacing: '0.01em', marginBottom: '8px' }}>Variable</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             {[
-              { val: 'precipitation', icon: '💧', label: 'Precipitation', unit: 'mm/hr' },
-              { val: 'wind',          icon: '🌬️', label: 'Wind Speed',    unit: 'm/s'   },
-            ].map(({ val, icon, label, unit }) => {
+              { val: 'precipitation', icon: Droplet, label: 'Precipitation', unit: 'mm/hr' },
+              { val: 'wind',          icon: Wind,    label: 'Wind speed',    unit: 'm/s'   },
+            ].map(({ val, icon: Icon, label, unit }) => {
               const active = selectedVariable === val;
               return (
                 <button key={val} onClick={() => setSelectedVariable(val)}
@@ -85,7 +86,7 @@ export function LeftPanel({
                     color: active ? '#7ec8f7' : 'rgba(255,255,255,0.55)',
                     cursor: 'pointer', transition: 'all 0.15s', textAlign: 'left', width: '100%',
                   }}>
-                  <span style={{ fontSize: '18px', flexShrink: 0 }}>{icon}</span>
+                  <Icon size={18} style={{ flexShrink: 0 }} />
                   <div>
                     <div style={{ fontSize: '13px', fontWeight: '600' }}>{label}</div>
                     <div style={{ fontSize: '10px', color: active ? 'rgba(126,200,247,0.6)' : 'rgba(255,255,255,0.3)', marginTop: '1px' }}>{unit}</div>
@@ -129,7 +130,7 @@ export function LeftPanel({
           <div style={{ marginTop: '8px', padding: '8px 12px', background: 'rgba(52,152,219,0.1)', border: '1px solid rgba(52,152,219,0.25)', borderRadius: '8px' }}>
             <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.35)', marginBottom: '3px', letterSpacing: '0.02em' }}>Active overlay</div>
             <div style={{ fontSize: '12px', color: '#7ec8f7', fontWeight: '600' }}>
-              {{ vsup: '⬛ VSup Boxes', bivariate: '🟦 Bivariate Map', fan: '🌀 VSUP Fan' }[uncertaintyMode]}
+              {{ vsup: 'Boxes', bivariate: 'Grid', fan: 'Fan', texture: 'Texture' }[uncertaintyMode]}
             </div>
           </div>
         )}

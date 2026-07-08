@@ -25,31 +25,35 @@ export function VSUPFanLegend({ bivariateRanges, selectedColormap, colormaps, se
     `L${px(r2,a2d).toFixed(2)} ${py(r2,a2d).toFixed(2)} ` +
     `A${r2} ${r2} 0 0 0 ${px(r2,a1d).toFixed(2)} ${py(r2,a1d).toFixed(2)}Z`;
 
-  const cmapColor = (tRaw) => {
-    const t = flipColormap ? 1 - tRaw : tRaw;   // reverse hue when colormap is flipped
+  // Mirror the map's continuousColor(vsup=true) so the legend matches the overlay:
+  // value-suppressing hue compression + mute toward neutral 185, strength 0.92.
+  const STRENGTH = 0.92, NEUTRAL = 185;
+  const ringColor = (normVal, normStd) => {
     const cols = colormaps[selectedColormap].colors;
+    const t0 = normVal * (1 - normStd * STRENGTH) + 0.5 * (normStd * STRENGTH);
+    const t  = flipColormap ? 1 - t0 : t0;
     const seg = cols.length - 1;
-    const si  = Math.min(Math.floor(t * seg), seg - 1);
+    const si  = Math.min(Math.floor(Math.min(t, 0.9999) * seg), seg - 1);
     const st  = t * seg - si;
+    const lerp = (a, b) => Math.round(a + (b - a) * st);
     const c1 = cols[si], c2 = cols[si + 1];
-    const ri = parseInt(c1.slice(1,3),16), gi = parseInt(c1.slice(3,5),16), bi = parseInt(c1.slice(5,7),16);
-    const ro = parseInt(c2.slice(1,3),16), go = parseInt(c2.slice(3,5),16), bo = parseInt(c2.slice(5,7),16);
-    return [Math.round(ri+(ro-ri)*st), Math.round(gi+(go-gi)*st), Math.round(bi+(bo-bi)*st)];
+    let r = lerp(parseInt(c1.slice(1,3),16), parseInt(c2.slice(1,3),16));
+    let g = lerp(parseInt(c1.slice(3,5),16), parseInt(c2.slice(3,5),16));
+    let b = lerp(parseInt(c1.slice(5,7),16), parseInt(c2.slice(5,7),16));
+    const mute = normStd * STRENGTH * 0.80;
+    r = Math.round(r + (NEUTRAL - r) * mute);
+    g = Math.round(g + (NEUTRAL - g) * mute);
+    b = Math.round(b + (NEUTRAL - b) * mute);
+    return `rgb(${r},${g},${b})`;
   };
 
-  const neutral = [180, 175, 185];
   const vsupRows = segCounts.map((segs, ri) => {
-    // Colours never change with inversion — only the σ axis tick labels flip
-    const uncertFrac = 1 - ri / Math.max(1, ROWS - 1);   // inner ring (ri=0) = most suppressed
-    const suppress   = uncertFrac * 0.72;
-    const colors = Array.from({ length: segs }, (_, ci) => {
-      const t = segs === 1 ? 0.5 : ci / (segs - 1);
-      const [r, g, b] = cmapColor(Math.min(t, 0.999));
-      const fr = Math.round(r * (1-suppress) + neutral[0] * suppress);
-      const fg = Math.round(g * (1-suppress) + neutral[1] * suppress);
-      const fb = Math.round(b * (1-suppress) + neutral[2] * suppress);
-      return `rgb(${fr},${fg},${fb})`;
-    });
+    // Suppression tracks the σ-axis labels: inner = high σ normally, outer = high σ when inverted.
+    const uncertFrac = invertUncertainty
+      ? (ri / Math.max(1, ROWS - 1))
+      : (1 - ri / Math.max(1, ROWS - 1));
+    const colors = Array.from({ length: segs }, (_, ci) =>
+      ringColor(segs === 1 ? 0.5 : ci / (segs - 1), uncertFrac));
     return { segs, colors };
   });
 

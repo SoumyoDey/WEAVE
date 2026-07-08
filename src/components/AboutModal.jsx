@@ -1,4 +1,5 @@
 import React from 'react';
+import { CloudRain, X } from 'lucide-react';
 
 /**
  * Full-screen About / info modal.
@@ -21,11 +22,11 @@ export function AboutModal({ onClose, stats, selectedVariable, currentModel }) {
       >
         <button
           onClick={onClose}
-          style={{ position: 'absolute', top: '16px', right: '16px', width: '32px', height: '32px', background: 'rgba(0,0,0,0.08)', border: 'none', borderRadius: '8px', fontSize: '18px', cursor: 'pointer', color: '#555', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          style={{ position: 'absolute', top: '16px', right: '16px', width: '32px', height: '32px', background: 'rgba(0,0,0,0.08)', border: 'none', borderRadius: '8px', cursor: 'pointer', color: '#555', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
           title="Close"
-        >✕</button>
+        ><X size={18} /></button>
 
-        <h1 style={{ fontSize: '32px', marginBottom: '20px', color: '#2c3e50' }}>🌧️ WEAVE</h1>
+        <h1 style={{ fontSize: '32px', marginBottom: '20px', color: '#2c3e50', display: 'flex', alignItems: 'center', gap: '10px' }}><CloudRain size={30} style={{ color: '#3498db' }} />WEAVE</h1>
         <p style={{ fontSize: '16px', lineHeight: '1.8', color: '#34495e', marginBottom: '30px' }}>
           WEAVE is an advanced visualization platform that displays ensemble forecast data from multiple weather models. Our system provides real-time visualization of precipitation and wind speed data, enabling better understanding of forecast uncertainty and model agreement.
         </p>

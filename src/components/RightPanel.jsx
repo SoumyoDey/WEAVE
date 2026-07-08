@@ -1,5 +1,5 @@
 import React from 'react';
-import { HelpCircle } from 'lucide-react';
+import { HelpCircle, Minus, Square, Grid3x3, Fan, AlignJustify, Navigation, Waves, RefreshCw, BarChart3, LayoutGrid } from 'lucide-react';
 
 /**
  * Slide-in right panel — Display Settings.
@@ -106,9 +106,9 @@ export function RightPanel({
             <div style={label}>Wind overlay</div>
             <div style={{ display: 'flex', gap: '6px' }}>
               {[
-                { key: 'arrows',      state: showWindArrows, setter: () => { setShowWindArrows(v => !v); if (showWindLines)  setShowWindLines(false);  }, icon: '↗', btnLabel: 'Arrows' },
-                { key: 'streamlines', state: showWindLines,  setter: () => { setShowWindLines(v => !v);  if (showWindArrows) setShowWindArrows(false); }, icon: '〰', btnLabel: 'Streamlines' },
-              ].map(({ key, state, setter, icon, btnLabel }) => (
+                { key: 'arrows',      state: showWindArrows, setter: () => { setShowWindArrows(v => !v); if (showWindLines)  setShowWindLines(false);  }, icon: Navigation, btnLabel: 'Arrows' },
+                { key: 'streamlines', state: showWindLines,  setter: () => { setShowWindLines(v => !v);  if (showWindArrows) setShowWindArrows(false); }, icon: Waves, btnLabel: 'Streamlines' },
+              ].map(({ key, state, setter, icon: Icon, btnLabel }) => (
                 <button key={key} onClick={setter}
                   style={{ flex: 1, padding: '8px 6px', fontSize: '12px', fontWeight: '600',
                     border: state ? '1.5px solid rgba(52,152,219,0.8)' : '1.5px solid rgba(255,255,255,0.1)',
@@ -117,7 +117,7 @@ export function RightPanel({
                     color: state ? '#7ec8f7' : 'rgba(255,255,255,0.5)',
                     cursor: 'pointer', transition: 'all 0.15s', textAlign: 'center',
                   }}>
-                  <div style={{ fontSize: '16px', marginBottom: '2px' }}>{icon}</div>
+                  <div style={{ marginBottom: '2px', display: 'flex', justifyContent: 'center' }}><Icon size={16} /></div>
                   <div>{btnLabel}</div>
                 </button>
               ))}
@@ -130,12 +130,12 @@ export function RightPanel({
           <div style={label}>Uncertainty style<Hint text="How the ensemble's spread — the model's uncertainty — is drawn over the forecast." /></div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             {[
-              { mode: null,        icon: '—',  label: 'None',    tech: '',          desc: 'Standard forecast colours' },
-              { mode: 'vsup',      icon: '⬛', label: 'Boxes',   tech: 'VSUP',      desc: 'Box size shows spread' },
-              { mode: 'bivariate', icon: '🟦', label: 'Grid',    tech: 'bivariate', desc: 'Value × uncertainty' },
-              { mode: 'fan',       icon: '🌀', label: 'Fan',     tech: 'VSUP fan',  desc: 'Detail fades as spread grows' },
-              { mode: 'texture',   icon: '▦',  label: 'Texture', tech: '',          desc: 'Hatching shows spread' },
-            ].map(({ mode, icon, label: modeLabel, tech, desc }) => {
+              { mode: null,        icon: Minus,        label: 'None',    tech: '',          desc: 'Standard forecast colours' },
+              { mode: 'vsup',      icon: Square,       label: 'Boxes',   tech: 'VSUP',      desc: 'Box size shows spread' },
+              { mode: 'bivariate', icon: Grid3x3,      label: 'Grid',    tech: 'bivariate', desc: 'Value × uncertainty' },
+              { mode: 'fan',       icon: Fan,          label: 'Fan',     tech: 'VSUP fan',  desc: 'Detail fades as spread grows' },
+              { mode: 'texture',   icon: AlignJustify, label: 'Texture', tech: '',          desc: 'Hatching shows spread' },
+            ].map(({ mode, icon: Icon, label: modeLabel, tech, desc }) => {
               const active = uncertaintyMode === mode;
               return (
                 <button key={String(mode)} onClick={() => setUncertaintyMode(mode)}
@@ -146,7 +146,7 @@ export function RightPanel({
                     cursor: 'pointer', transition: 'all 0.15s',
                   }}>
                   <div style={{ width: '14px', height: '14px', borderRadius: '50%', border: active ? '4px solid #3498db' : '2px solid rgba(255,255,255,0.3)', flexShrink: 0, background: active ? 'white' : 'transparent', transition: 'all 0.15s' }} />
-                  <span style={{ fontSize: '16px', flexShrink: 0 }}>{icon}</span>
+                  <Icon size={17} style={{ flexShrink: 0, color: active ? '#7ec8f7' : 'rgba(255,255,255,0.6)' }} />
                   <div>
                     <div style={{ fontSize: '12px', fontWeight: '600', color: active ? '#7ec8f7' : 'rgba(255,255,255,0.75)', lineHeight: 1.2 }}>{modeLabel}{tech && <span style={{ fontWeight: 400, color: 'rgba(255,255,255,0.35)' }}> · {tech}</span>}</div>
                     <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)', marginTop: '2px', lineHeight: 1.3 }}>{desc}</div>
@@ -167,7 +167,7 @@ export function RightPanel({
                 return (
                   <button key={s} onClick={() => setTextureStyle(s)}
                     style={{ flex: 1, padding: '9px 8px', fontSize: '12px', fontWeight: '600', border: active ? '1.5px solid rgba(52,152,219,0.8)' : '1.5px solid rgba(255,255,255,0.1)', borderRadius: '7px', background: active ? 'rgba(52,152,219,0.18)' : 'rgba(255,255,255,0.04)', color: active ? '#7ec8f7' : 'rgba(255,255,255,0.5)', cursor: 'pointer', transition: 'all 0.15s', textAlign: 'center' }}>
-                    <div style={{ fontSize: '18px', marginBottom: '3px' }}>{s === 'Lines' ? '╱╱╱' : '⊡'}</div>
+                    <div style={{ marginBottom: '3px', display: 'flex', justifyContent: 'center' }}>{s === 'Lines' ? <AlignJustify size={18} /> : <LayoutGrid size={18} />}</div>
                     {s}
                   </button>
                 );
@@ -195,7 +195,7 @@ export function RightPanel({
                 cursor: 'pointer', transition: 'all 0.15s', color: 'white',
               }}
             >
-              <span style={{ fontSize: '18px' }}>{invertUncertainty ? '🔄' : '📊'}</span>
+              <span style={{ display: 'inline-flex' }}>{invertUncertainty ? <RefreshCw size={18} /> : <BarChart3 size={18} />}</span>
               <div>
                 <div style={{ fontSize: '12px', fontWeight: '600', color: invertUncertainty ? '#f1948a' : 'rgba(255,255,255,0.75)', lineHeight: 1.2 }}>
                   {invertUncertainty ? 'Inverted' : 'Normal'}
