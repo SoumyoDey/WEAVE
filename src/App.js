@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { ChevronLeft, Info, Menu, SlidersHorizontal, CloudRain, Map as MapIcon, BarChart3, Scale } from 'lucide-react';
+import { ChevronLeft, Info, Menu, CloudRain, Map as MapIcon, BarChart3, Scale } from 'lucide-react';
 
 // ── Constants & utilities ─────────────────────────────────────────────────────
 import { MODELS, COLORMAPS, METRIC_CONFIG, buildColorMatrix } from './constants';
@@ -21,8 +21,7 @@ import { drawTextureLayer, stopTexture }         from './layers/textureLayer';
 import { renderMetricCanvas, clearMetricCanvas } from './layers/metricLayer';
 
 // ── UI Components ─────────────────────────────────────────────────────────────
-import { LeftPanel }          from './components/LeftPanel';
-import { RightPanel }         from './components/RightPanel';
+import { ControlsSidebar }    from './components/ControlsSidebar';
 import { Timeline }           from './components/Timeline';
 import { AboutModal }         from './components/AboutModal';
 import { SelectionToolbar }   from './components/SelectionToolbar';
@@ -41,7 +40,6 @@ function App() {
   // ── UI state ────────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab]               = useState('visualization');
   const [menuOpen, setMenuOpen]                 = useState(false);
-  const [rightPanelOpen, setRightPanelOpen]     = useState(false);
   const [showAbout, setShowAbout]               = useState(false);
 
   // ── Forecast controls state ──────────────────────────────────────────────────
@@ -513,58 +511,45 @@ function App() {
         {/* Map canvas */}
         <div ref={mapRef} style={{ width: '100%', height: '100%', background: '#f5f5f5' }} />
 
-        {/* Click-away backdrop — closes open panels when user clicks the map */}
-        {(menuOpen || rightPanelOpen) && (
+        {/* Click-away backdrop — closes the sidebar when user clicks the map */}
+        {menuOpen && (
           <div
-            onClick={() => { setMenuOpen(false); setRightPanelOpen(false); }}
+            onClick={() => setMenuOpen(false)}
             style={{ position: 'absolute', inset: 0, zIndex: 999, cursor: 'default' }}
           />
         )}
 
-        {/* Menu toggle */}
-        <button onClick={() => setMenuOpen(!menuOpen)}
+        {/* Controls toggle */}
+        <button onClick={() => setMenuOpen(!menuOpen)} title="Controls"
           style={{ position: 'absolute', top: '12px', left: menuOpen ? '312px' : '12px', width: '44px', height: '44px', background: 'rgba(15,25,35,0.95)', border: 'none', borderRadius: '8px', color: 'white', cursor: 'pointer', zIndex: 1002, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.3)', transition: 'left 0.3s ease' }}>
           {menuOpen ? <ChevronLeft size={22} /> : <Menu size={22} />}
         </button>
 
-        {/* Tool cluster: about + display settings */}
-        <div style={{ position: 'absolute', top: '12px', right: rightPanelOpen ? '282px' : '12px', zIndex: 1001, display: 'flex', flexDirection: 'column', background: 'rgba(15,25,35,0.95)', borderRadius: '10px', overflow: 'hidden', boxShadow: '0 4px 12px rgba(0,0,0,0.3)', transition: 'right 0.3s ease' }}>
-          <button onClick={() => setShowAbout(!showAbout)} title="About WEAVE"
-            style={{ width: '44px', height: '44px', background: showAbout ? 'rgba(231,76,60,0.95)' : 'transparent', border: 'none', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.2s' }}>
-            <Info size={20} />
-          </button>
-          <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)' }} />
-          <button onClick={() => setRightPanelOpen(!rightPanelOpen)} title="Display settings"
-            style={{ width: '44px', height: '44px', background: rightPanelOpen ? 'rgba(46,204,113,0.95)' : 'transparent', border: 'none', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.2s' }}>
-            <SlidersHorizontal size={19} />
-          </button>
-        </div>
+        {/* About button */}
+        <button onClick={() => setShowAbout(!showAbout)} title="About WEAVE"
+          style={{ position: 'absolute', top: '12px', right: '12px', width: '44px', height: '44px', background: showAbout ? 'rgba(231,76,60,0.95)' : 'rgba(15,25,35,0.95)', border: 'none', borderRadius: '8px', color: 'white', cursor: 'pointer', zIndex: 1001, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.3)', transition: 'background 0.2s' }}>
+          <Info size={20} />
+        </button>
 
-        {/* Panels */}
-        <RightPanel
-          open={rightPanelOpen}
-          colormaps={COLORMAPS}
-          selectedColormap={selectedColormap} setSelectedColormap={setSelectedColormap}
-          selectedVariable={selectedVariable}
-          showWindArrows={showWindArrows} setShowWindArrows={setShowWindArrows}
-          showWindLines={showWindLines}   setShowWindLines={setShowWindLines}
-          uncertaintyMode={uncertaintyMode} setUncertaintyMode={setUncertaintyMode}
-          invertUncertainty={invertUncertainty} setInvertUncertainty={setInvertUncertainty}
-          numBuckets={numBuckets}     setNumBuckets={setNumBuckets}
-          flipColormap={flipColormap} setFlipColormap={setFlipColormap}
-          gridOpacity={gridOpacity}   setGridOpacity={setGridOpacity}
-          textureStyle={textureStyle} setTextureStyle={setTextureStyle}
-        />
-        <LeftPanel
+        {/* Unified controls sidebar (Data · Display · Advanced) */}
+        <ControlsSidebar
           open={menuOpen}
           models={MODELS}
           selectedModel={selectedModel} setSelectedModel={setSelectedModel}
           selectedVariable={selectedVariable} setSelectedVariable={setSelectedVariable}
           currentModel={currentModel}
-          getMemberOptions={getMemberOptions}
-          selectedMember={selectedMember} setSelectedMember={setSelectedMember}
+          getMemberOptions={getMemberOptions} selectedMember={selectedMember} setSelectedMember={setSelectedMember}
           loading={loading} error={error}
-          uncertaintyMode={uncertaintyMode}
+          colormaps={COLORMAPS}
+          selectedColormap={selectedColormap} setSelectedColormap={setSelectedColormap}
+          uncertaintyMode={uncertaintyMode} setUncertaintyMode={setUncertaintyMode}
+          invertUncertainty={invertUncertainty} setInvertUncertainty={setInvertUncertainty}
+          numBuckets={numBuckets} setNumBuckets={setNumBuckets}
+          flipColormap={flipColormap} setFlipColormap={setFlipColormap}
+          gridOpacity={gridOpacity} setGridOpacity={setGridOpacity}
+          textureStyle={textureStyle} setTextureStyle={setTextureStyle}
+          showWindArrows={showWindArrows} setShowWindArrows={setShowWindArrows}
+          showWindLines={showWindLines} setShowWindLines={setShowWindLines}
         />
 
         {/* Timeline */}
@@ -631,7 +616,6 @@ function App() {
         <SelectionToolbar
           selectionMode={selectionMode} setSelectionMode={setSelectionMode}
           selectedRegion={selectedRegion} clearSelection={clearSelection}
-          rightPanelOpen={rightPanelOpen}
         />
         {showMetricPanel && selectedRegion && !selectionMode && (
           <MetricPanel
