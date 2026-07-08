@@ -5,21 +5,33 @@ import { COLORMAPS } from '../constants';
  * colormap on a light basemap (pre-composited against white, same as the
  * IDW canvas renderer's getDynamicColor formula).
  */
-export const getLegendGradient = (colormapName, flip = false) => {
+export const getLegendGradient = (colormapName, flip = false, numBuckets = 0) => {
   const base = COLORMAPS[colormapName].colors;
   const colors = flip ? [...base].reverse() : base;
-  const stops = colors.map((hex, i) => {
-    const normalized = i / (colors.length - 1);
-    const opacity = 0.5 + normalized * 0.3;
-    const r = parseInt(hex.slice(1, 3), 16);
-    const g = parseInt(hex.slice(3, 5), 16);
-    const b = parseInt(hex.slice(5, 7), 16);
-    // Pre-composite against white — same result as rendering on the CartoDB light basemap
-    const cr = Math.round(r * opacity + 255 * (1 - opacity));
-    const cg = Math.round(g * opacity + 255 * (1 - opacity));
-    const cb = Math.round(b * opacity + 255 * (1 - opacity));
-    return `rgb(${cr},${cg},${cb})`;
-  });
+  // Sample + white-composite the colormap at position t ∈ [0,1] (matches the map renderer).
+  const sample = (t) => {
+    const seg = colors.length - 1;
+    const si  = Math.min(Math.floor(t * seg), seg - 1);
+    const lt  = t * seg - si;
+    const lerp = (a, b) => Math.round(a + (b - a) * lt);
+    const c1 = colors[si], c2 = colors[si + 1];
+    const r = lerp(parseInt(c1.slice(1, 3), 16), parseInt(c2.slice(1, 3), 16));
+    const g = lerp(parseInt(c1.slice(3, 5), 16), parseInt(c2.slice(3, 5), 16));
+    const b = lerp(parseInt(c1.slice(5, 7), 16), parseInt(c2.slice(5, 7), 16));
+    const op = 0.5 + t * 0.3;
+    return `rgb(${Math.round(r * op + 255 * (1 - op))},${Math.round(g * op + 255 * (1 - op))},${Math.round(b * op + 255 * (1 - op))})`;
+  };
+  // Bucketed: hard-edged bands so the legend matches the discretised map.
+  if (numBuckets > 1) {
+    const parts = [];
+    for (let i = 0; i < numBuckets; i++) {
+      const col = sample((i + 0.5) / numBuckets);
+      parts.push(`${col} ${(i / numBuckets * 100).toFixed(2)}%`, `${col} ${((i + 1) / numBuckets * 100).toFixed(2)}%`);
+    }
+    return `linear-gradient(to right, ${parts.join(', ')})`;
+  }
+  // Continuous: one smooth stop per colormap colour.
+  const stops = colors.map((hex, i) => sample(i / (colors.length - 1)));
   return `linear-gradient(to right, ${stops.join(', ')})`;
 };
 
