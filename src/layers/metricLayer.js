@@ -20,9 +20,20 @@ export const renderMetricCanvas = (map, points, metricKey, metricConfig) => {
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // Tile size based on a representative lat/lon step of 0.25°
-  const p1 = map.latLngToContainerPoint([35, -80]);
-  const p2 = map.latLngToContainerPoint([35.25, -79.75]);
+  // Derive tile size from the actual data grid spacing rather than a hardcoded
+  // 0.25° assumption — if the data is on a coarser grid the tiles would otherwise
+  // leave visible gaps between them.
+  let gridStep = 0.25; // fallback
+  if (points.length >= 2) {
+    const lats = [...new Set(points.map(p => Math.round(parseFloat(p.lat) * 1000) / 1000))].sort((a, b) => a - b);
+    const lons = [...new Set(points.map(p => Math.round(parseFloat(p.lon) * 1000) / 1000))].sort((a, b) => a - b);
+    const latStep = lats.length >= 2 ? lats[1] - lats[0] : gridStep;
+    const lonStep = lons.length >= 2 ? lons[1] - lons[0] : gridStep;
+    gridStep = Math.max(latStep, lonStep);
+  }
+  const refLat = 35, refLon = -80;
+  const p1 = map.latLngToContainerPoint([refLat, refLon]);
+  const p2 = map.latLngToContainerPoint([refLat + gridStep, refLon + gridStep]);
   const tileW = Math.max(3, Math.abs(p2.x - p1.x));
   const tileH = Math.max(3, Math.abs(p2.y - p1.y));
 

@@ -1,6 +1,6 @@
 import React from 'react';
 
-export function IDWLegend({ selectedColormap, stats, selectedVariable, selectedMember, getLegendGradient }) {
+export function IDWLegend({ selectedColormap, stats, selectedVariable, selectedMember, getLegendGradient, flipColormap = false }) {
   const isWind = selectedVariable === 'wind';
   const isStd = selectedMember === 'std';
 
@@ -34,7 +34,7 @@ export function IDWLegend({ selectedColormap, stats, selectedVariable, selectedM
           style={{
             height: '14px',
             borderRadius: '6px',
-            background: getLegendGradient(selectedColormap),
+            background: getLegendGradient(selectedColormap, flipColormap),
           }}
         />
         {/* Tick lines */}

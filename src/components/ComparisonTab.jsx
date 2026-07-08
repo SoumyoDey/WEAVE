@@ -86,20 +86,22 @@ function corrColor(c) {
 }
 
 // ── Custom Tooltip for Forecast Comparison chart ─────────────────────────────
-// Always reads raw values from the data row so the tooltip shows actual
-// stored values (mm/6h, mm/3h, mm/h) alongside the converted mm/h rate.
-function ForecastTooltip({ active, payload, label, selectedModels, normalized }) {
+// For precipitation: divides raw accumulated values by MODEL_ACCUM_HOURS to get
+// mm/h rate, and shows both the converted rate and the raw stored value.
+// For wind/temperature/pressure: values are instantaneous — raw = displayed.
+function ForecastTooltip({ active, payload, label, selectedModels, normalized, variable = 'precipitation', displayUnit = 'mm/h' }) {
   if (!active || !payload || !payload.length) return null;
   const row = payload[0]?.payload || {};
+  const isPrecip = variable === 'precipitation';
 
   const means = selectedModels
     .map(m => {
       const rawMean = row[`${m}_raw_mean`];
       const rawStd  = row[`${m}_raw_std`];
       if (rawMean == null) return null;
-      const accumH  = MODEL_ACCUM_HOURS[m] || 1;
+      const accumH   = isPrecip ? (MODEL_ACCUM_HOURS[m] || 1) : 1;
       const rateMean = rawMean / accumH;
-      const rateStd  = rawStd  != null ? rawStd  / accumH : null;
+      const rateStd  = rawStd != null ? rawStd / accumH : null;
       return { model: m, rateMean, rateStd, rawMean, rawStd, accumH };
     })
     .filter(Boolean);
@@ -119,16 +121,18 @@ function ForecastTooltip({ active, payload, label, selectedModels, normalized })
             <span style={{ color: 'rgba(255,255,255,0.85)', fontWeight: '600', minWidth: '44px' }}>{model}</span>
             <span style={{ color: 'rgba(255,255,255,0.85)', fontWeight: '700' }}>
               {rateMean.toFixed(3)}
-              <span style={{ color: 'rgba(255,255,255,0.5)', fontWeight: '400', fontSize: '10px', marginLeft: '2px' }}>mm/h</span>
+              <span style={{ color: 'rgba(255,255,255,0.5)', fontWeight: '400', fontSize: '10px', marginLeft: '2px' }}>{displayUnit}</span>
             </span>
             {rateStd != null && (
               <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '11px' }}>±{rateStd.toFixed(3)}</span>
             )}
           </div>
-          {/* Raw stored value for reference */}
-          <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '10px', marginLeft: '18px', marginTop: '1px' }}>
-            raw: {rawMean.toFixed(3)} mm/{accumH}h
-          </div>
+          {/* Raw stored value — only informative for precipitation (accum > 1) */}
+          {isPrecip && accumH > 1 && (
+            <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '10px', marginLeft: '18px', marginTop: '1px' }}>
+              raw: {rawMean.toFixed(3)} mm/{accumH}h
+            </div>
+          )}
         </div>
       ))}
     </div>
@@ -136,21 +140,21 @@ function ForecastTooltip({ active, payload, label, selectedModels, normalized })
 }
 
 // ── Build merged timeseries dataset ─────────────────────────────────────────
-// Step 1 (always): divide each model's values by MODEL_ACCUM_HOURS[m] to
-//   convert to mm/h rate. This is the scientific normalisation that makes
-//   AIFS (6h accum), GEFS (3h accum) and UKMO (hourly) directly comparable.
-// Step 2 (optional, normalize=true): further divide by each model's peak
-//   rate so all curves sit in [0, 1]. Useful when models genuinely forecast
-//   different magnitudes even after the unit conversion.
-// Raw values are always stored alongside for the tooltip.
-function buildMergedTimeseries(tsData, selectedModels, normalize = false) {
+// For precipitation: divide by MODEL_ACCUM_HOURS[m] to convert from the
+//   model's accumulated total (mm/6h, mm/3h, mm/h) to a common mm/h rate so
+//   AIFS, GEFS, and UKMO are directly comparable.
+// For wind, temperature, and pressure: values are instantaneous (m/s / K / hPa)
+//   and identical across models — no accumulation division is applied.
+// Optionally (normalize=true) further scale each model to [0,1] peak.
+function buildMergedTimeseries(tsData, selectedModels, normalize = false, variable = 'precipitation') {
   if (!tsData) return [];
+  const isPrecip = variable === 'precipitation';
 
-  // Per-model peak RATE (after accum conversion) for optional normalisation
+  // Per-model peak for optional normalisation
   const modelPeaks = {};
   if (normalize) {
     selectedModels.forEach(m => {
-      const ah = MODEL_ACCUM_HOURS[m] || 1;
+      const ah = isPrecip ? (MODEL_ACCUM_HOURS[m] || 1) : 1;
       if (tsData[m]) {
         const peak = Math.max(...tsData[m].map(r => ((r.mean || 0) + (r.std || 0)) / ah));
         modelPeaks[m] = peak > 1e-9 ? peak : 1;
@@ -169,15 +173,14 @@ function buildMergedTimeseries(tsData, selectedModels, normalize = false) {
     selectedModels.forEach(m => {
       const entry  = tsData[m]?.find(r => r.hour === hour);
       if (entry) {
-        const ah   = MODEL_ACCUM_HOURS[m] || 1;
+        const ah   = isPrecip ? (MODEL_ACCUM_HOURS[m] || 1) : 1;
         const norm = normalize ? (modelPeaks[m] || 1) : 1;
         const mean = entry.mean != null ? entry.mean : null;
         const std  = entry.std  != null ? entry.std  : 0;
-        // Display values (mm/h, optionally normalised)
         row[`${m}_mean`] = mean != null ? (mean / ah) / norm : null;
         row[`${m}_hi`]   = mean != null ? ((mean + std) / ah) / norm : null;
         row[`${m}_lo`]   = mean != null ? Math.max(0, (mean - std) / ah) / norm : null;
-        // Raw values always kept for tooltip display
+        // Raw values always kept for tooltip
         row[`${m}_raw_mean`] = mean;
         row[`${m}_raw_std`]  = entry.std;
       }
@@ -186,13 +189,13 @@ function buildMergedTimeseries(tsData, selectedModels, normalize = false) {
   });
 }
 
-// Computes ratio of max-to-min peak RATE across models.
-// After the accum conversion this should be small; a large ratio still
-// indicates a genuine magnitude difference (not just a units issue).
-function computeScaleRatio(tsData, models) {
+// Computes ratio of max-to-min peak across models.
+// For precipitation: uses the accum-corrected rate. For other variables: raw value.
+function computeScaleRatio(tsData, models, variable = 'precipitation') {
+  const isPrecip = variable === 'precipitation';
   const peaks = models
     .map(m => {
-      const ah = MODEL_ACCUM_HOURS[m] || 1;
+      const ah = isPrecip ? (MODEL_ACCUM_HOURS[m] || 1) : 1;
       return tsData[m]
         ? Math.max(...tsData[m].map(r => ((r.mean || 0) + (r.std || 0)) / ah))
         : 0;
@@ -351,12 +354,12 @@ export function ComparisonTab({
   };
 
   // Derived chart data
-  const mergedTs = buildMergedTimeseries(tsData, selectedModels, normalizeScales);
+  const mergedTs = buildMergedTimeseries(tsData, selectedModels, normalizeScales, selectedVariable);
   // For precipitation, all display values are in mm/h (rate) after accum conversion
   const yAxisUnit     = selectedVariable === 'wind' ? 'm/s' : 'mm/h';
   const thresholdUnit = selectedVariable === 'wind' ? 'm/s' : 'mm/6h';
   // After the accum conversion the ratio should be much smaller than the raw ratio
-  const scaleRatio = tsData ? computeScaleRatio(tsData, selectedModels) : 1;
+  const scaleRatio = tsData ? computeScaleRatio(tsData, selectedModels, selectedVariable) : 1;
   const hasScaleMismatch = scaleRatio > 5; // still >5× after unit fix → warn
 
   return (
@@ -720,7 +723,7 @@ export function ComparisonTab({
                         tickFormatter={normalizeScales ? v => v.toFixed(1) : undefined}
                       />
                       <Tooltip
-                        content={<ForecastTooltip selectedModels={selectedModels} normalized={normalizeScales} yAxisUnit={yAxisUnit} />}
+                        content={<ForecastTooltip selectedModels={selectedModels} normalized={normalizeScales} variable={selectedVariable} displayUnit={yAxisUnit} />}
                       />
                       {/* 24h boundary reference lines */}
                       {[24, 48, 72, 96, 120, 144, 168].filter(h => h >= hourMin && h <= hourMax).map(h => (

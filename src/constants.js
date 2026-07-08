@@ -47,7 +47,7 @@ export const VSUP_COLORS = [
 // vsup = false → Bivariate: value hue preserved, muted by uncertainty
 // vsup = true  → VSUP Fan:  value columns also compressed toward mid-point at
 //                            high uncertainty (produces near-identical row-3 colours)
-export const buildColorMatrix = (colormapName, vsup = false, invertUncertainty = false, N = 4) => {
+export const buildColorMatrix = (colormapName, vsup = false, invertUncertainty = false, N = 4, flip = false) => {
   const colors  = COLORMAPS[colormapName].colors;
   const lerp    = (a, b, t) => Math.round(a + (b - a) * t);
   const toHex   = (r, g, b) =>
@@ -70,10 +70,10 @@ export const buildColorMatrix = (colormapName, vsup = false, invertUncertainty =
   return Array.from({ length: size }, (_, row) => {
     const uncert = invertUncertainty ? (1 - row / maxIdx) : (row / maxIdx);
     return Array.from({ length: size }, (_, col) => {
-      const t = vsup
+      const t0 = vsup
         ? (col / maxIdx) * (1 - uncert * strength) + 0.5 * (uncert * strength)
         : col / maxIdx;
-      const [r, g, b] = cmapRgb(t);
+      const [r, g, b] = cmapRgb(flip ? 1 - t0 : t0);
       return toHex(
         lerp(r, neutral, uncert * strength * 0.80),
         lerp(g, neutral, uncert * strength * 0.80),
@@ -81,6 +81,24 @@ export const buildColorMatrix = (colormapName, vsup = false, invertUncertainty =
       );
     });
   });
+};
+
+// ── VSUP fan levels ───────────────────────────────────────────────────────────
+// True Value-Suppressing Uncertainty Palette: the number of distinguishable
+// VALUE buckets shrinks as uncertainty rises (a halving tree). `numBuckets` is
+// the max fan width (value buckets at the lowest-uncertainty level); 0/1 falls
+// back to the classic 8-wide fan. Returns segCounts ordered LOW→HIGH uncertainty
+// ([W, W/2, …, 1]); `rings` is the number of uncertainty levels (tree depth).
+// Both the map renderer and the fan legend derive their geometry from this so
+// they can never disagree.
+export const buildVsupLevels = (numBuckets) => {
+  const W = numBuckets >= 2 ? numBuckets : 8;
+  const segCounts = [];
+  for (let w = W; w >= 1; w = Math.floor(w / 2)) {
+    segCounts.push(w);
+    if (w === 1) break;
+  }
+  return { segCounts, rings: segCounts.length };
 };
 
 // ── Spatial metric registry ───────────────────────────────────────────────────

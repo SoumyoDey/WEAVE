@@ -1,16 +1,17 @@
 import L from 'leaflet';
 import { fetchUncertaintyPair } from '../api/forecastApi';
-import { COLORMAPS } from '../constants';
+import { COLORMAPS, buildVsupLevels } from '../constants';
 
 /** Compute a continuous bivariate colour directly from normVal + normStd (no matrix lookup) */
-const continuousColor = (colormapName, normVal, normStd, vsup = false) => {
+const continuousColor = (colormapName, normVal, normStd, vsup = false, flip = false) => {
   const colors   = COLORMAPS[colormapName]?.colors ?? COLORMAPS['Default'].colors;
   const neutral  = 185;
   const strength = vsup ? 0.92 : 0.60;
   const lerp = (a, b, t) => Math.round(a + (b - a) * t);
-  const t = vsup
+  const t0 = vsup
     ? normVal * (1 - normStd * strength) + 0.5 * (normStd * strength)
     : normVal;
+  const t   = flip ? 1 - t0 : t0;   // reverse hue when colormap is flipped
   const seg = colors.length - 1;
   const si  = Math.min(Math.floor(Math.min(t, 0.9999) * seg), seg - 1);
   const lt  = t * seg - si;
@@ -42,17 +43,35 @@ const continuousColor = (colormapName, normVal, normStd, vsup = false) => {
 export const renderBivariateFromCache = (
   map, bivariateLayerRef, cachedData,
   colorMatrix, numBuckets, colormapName, vsup,
+  invertUncertainty = false, flipColormap = false, gridOpacity = 1,
 ) => {
   if (!map?._loaded || !cachedData) return;
   stopBivariate(map, bivariateLayerRef);
 
   const { meanData, meanLookup, stdLookup, meanMax, stdMax, half } = cachedData;
+  const fillOpacity = 0.85 * Math.min(Math.max(gridOpacity, 0), 1);
 
   // snap: 0 = continuous (exact value), N > 0 = snap to bucket centre (same as Texture)
   const snap = (norm, N) => {
     if (!N || N <= 0) return Math.min(Math.max(norm, 0), 1);
     const clamped = Math.min(Math.max(norm, 0), 0.9999);
     return (Math.floor(clamped * N) + 0.5) / N;
+  };
+
+  // ── True VSUP fan quantization ──────────────────────────────────────────────
+  // Uncertainty is split into `rings` levels; the number of VALUE buckets shrinks
+  // as uncertainty rises (segCounts, ordered low→high uncertainty). This makes the
+  // map match the fan legend: fewer distinguishable values where spread is high.
+  const vsupLevels = vsup ? buildVsupLevels(numBuckets) : null;
+  const vsupSnap = (normVal0, normStd0) => {
+    const { segCounts, rings } = vsupLevels;
+    const rIdx  = Math.min(Math.floor(normStd0 * rings), rings - 1);
+    const bins  = segCounts[rIdx];
+    const vClamp = Math.min(Math.max(normVal0, 0), 0.9999);
+    return {
+      normVal: (Math.floor(vClamp * bins) + 0.5) / bins,
+      normStd: (rIdx + 0.5) / rings,
+    };
   };
 
   const layerGroup = L.layerGroup();
@@ -63,12 +82,16 @@ export const renderBivariateFromCache = (
     const meanVal = meanLookup[key] ?? 0;
     const stdVal  = stdLookup[key]  ?? 0;
 
-    const normVal = snap(Math.min(meanVal / meanMax, 1), numBuckets);
-    const normStd = snap(Math.min(stdVal  / stdMax,  1), numBuckets);
-    const color   = continuousColor(colormapName, normVal, normStd, vsup);
+    const rawVal = Math.min(meanVal / meanMax, 1);
+    let   rawStd = Math.min(stdVal  / stdMax,  1);
+    if (invertUncertainty) rawStd = 1 - rawStd;
+    const { normVal, normStd } = vsup
+      ? vsupSnap(rawVal, rawStd)
+      : { normVal: snap(rawVal, numBuckets), normStd: snap(rawStd, numBuckets) };
+    const color   = continuousColor(colormapName, normVal, normStd, vsup, flipColormap);
     L.rectangle(
       [[lat - half, lon - half], [lat + half, lon + half]],
-      { fillColor: color, color: 'transparent', fillOpacity: 0.85, weight: 0, interactive: false },
+      { fillColor: color, color: 'transparent', fillOpacity, weight: 0, interactive: false },
     ).addTo(layerGroup);
   }
   layerGroup.addTo(map);
@@ -86,6 +109,9 @@ export const drawBivariateLayer = async (
   numBuckets = 0,
   colormapName = 'Default',
   vsup = false,
+  invertUncertainty = false,
+  flipColormap = false,
+  gridOpacity = 1,
 ) => {
   if (!map?._loaded) return null;
   stopBivariate(map, bivariateLayerRef);
@@ -116,7 +142,7 @@ export const drawBivariateLayer = async (
 
     const cachedData = { meanData, meanLookup, stdLookup, meanMax, stdMax, half };
 
-    renderBivariateFromCache(map, bivariateLayerRef, cachedData, colorMatrix, numBuckets, colormapName, vsup);
+    renderBivariateFromCache(map, bivariateLayerRef, cachedData, colorMatrix, numBuckets, colormapName, vsup, invertUncertainty, flipColormap, gridOpacity);
 
     return cachedData;
   } catch (err) {

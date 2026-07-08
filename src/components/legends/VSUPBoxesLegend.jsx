@@ -1,8 +1,14 @@
 import React from 'react';
 
-export function VSUPBoxesLegend({ stats, selectedVariable, invertUncertainty = false }) {
-  const fracs = [1.0, 0.75, 0.5, 0.25, 0.05];
+export function VSUPBoxesLegend({ stats, selectedVariable, invertUncertainty = false, numBuckets = 0, stdMax }) {
+  // When bucketing is on, show one row per bucket centre (largest → smallest) so the
+  // key matches the discrete box sizes drawn on the map; otherwise a continuous scale.
+  const fracs = numBuckets > 1
+    ? Array.from({ length: numBuckets }, (_, i) => (numBuckets - i - 0.5) / numBuckets)
+    : [1.0, 0.75, 0.5, 0.25, 0.05];
   const unit = selectedVariable === 'wind' ? 'm/s' : 'mm/hr';
+  // Labels are std-dev values → use the true stdMax from the layer, not the value-max stat.
+  const maxStd = Number.isFinite(stdMax) ? stdMax : parseFloat(stats.max);
 
   const cardStyle = {
     background: 'rgba(10,18,28,0.92)',
@@ -23,7 +29,7 @@ export function VSUPBoxesLegend({ stats, selectedVariable, invertUncertainty = f
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
         {fracs.map((frac, i) => {
-          const stdVal   = (parseFloat(stats.max) * frac).toFixed(2);
+          const stdVal   = (maxStd * frac).toFixed(2);
           const sizeFrac = invertUncertainty ? (1 - frac) : frac;
           const boxSize  = Math.round(4 + Math.sqrt(sizeFrac) * (28 - 4));
           return (

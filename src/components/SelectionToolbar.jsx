@@ -9,11 +9,11 @@ import React from 'react';
  *   selectedRegion   {object|null}
  *   clearSelection   {fn}
  */
-export function SelectionToolbar({ selectionMode, setSelectionMode, selectedRegion, clearSelection }) {
+export function SelectionToolbar({ selectionMode, setSelectionMode, selectedRegion, clearSelection, rightPanelOpen = false }) {
   return (
     <>
       {/* Tool buttons */}
-      <div style={{ position: 'absolute', top: '124px', right: '12px', zIndex: 1001, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+      <div style={{ position: 'absolute', top: '124px', right: rightPanelOpen ? '282px' : '12px', zIndex: 1001, display: 'flex', flexDirection: 'column', gap: '6px', transition: 'right 0.3s ease' }}>
         <button
           title="Rectangle selection"
           onClick={() => setSelectionMode(m => m === 'rectangle' ? null : 'rectangle')}

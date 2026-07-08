@@ -17,8 +17,19 @@ export const drawUncertaintyBoxes = async (
   map, uncertaintyLayerRef, uncertaintyCanvasRef,
   modelName, variable, hour, selectedColormap,
   invertUncertainty = false,
+  numBuckets = 0, flipColormap = false, gridOpacity = 1,
+  onRanges,
 ) => {
   if (!map?._loaded) return;
+
+  // Snap a normalised value to its bucket centre (0 = continuous) — same as the
+  // other overlays, so the Number of Buckets control discretises Size mode too.
+  const snap = (norm, N) => {
+    if (!N || N <= 0) return Math.min(Math.max(norm, 0), 1);
+    const c = Math.min(Math.max(norm, 0), 0.9999);
+    return (Math.floor(c * N) + 0.5) / N;
+  };
+  const gop = Math.min(Math.max(gridOpacity, 0), 1);
 
   // Remove previous layer
   if (uncertaintyLayerRef.current) {
@@ -42,16 +53,19 @@ export const drawUncertaintyBoxes = async (
     const stdVals  = stdData.map(val).filter(v => !isNaN(v) && v >= 0);
     const meanMax  = Math.max(...meanVals) || 1;
     const stdMax   = Math.max(...stdVals)  || 1;
+    onRanges?.({ meanMax, stdMax });
 
     const vsupColor = (meanVal, stdVal) => {
-      const normVal    = Math.min(meanVal / meanMax, 1);
-      const normStd    = Math.min(stdVal / stdMax, 1);
+      const normVal    = snap(Math.min(meanVal / meanMax, 1), numBuckets);
+      const normStd    = snap(Math.min(stdVal / stdMax, 1), numBuckets);
       // Colour encoding is never changed by inversion — precipitation colours stay identical.
       // Only box size is affected by the invert flag (handled in sizeScale below).
+      // flipColormap reverses the hue; numBuckets discretises it.
       const colors = COLORMAPS[selectedColormap].colors;
       const seg    = colors.length - 1;
       const ss     = 1 / seg;
-      const mapped = 0.15 + normVal * 0.85;
+      const hue    = flipColormap ? 1 - normVal : normVal;
+      const mapped = 0.15 + hue * 0.85;
       const si     = Math.min(Math.floor(mapped / ss), seg - 1);
       const t      = (mapped - si * ss) / ss;
       const c1 = colors[si], c2 = colors[si + 1];
@@ -72,9 +86,10 @@ export const drawUncertaintyBoxes = async (
       if (stdMax === 0) return (minDeg + maxDeg) / 2;
       // Inversion flips box size: normal = large box means high uncertainty;
       //                           inverted = small box means high uncertainty
-      const normStd = invertUncertainty
+      const rawStd = invertUncertainty
         ? (1 - Math.min(stdVal / stdMax, 1))
         : Math.min(stdVal / stdMax, 1);
+      const normStd = snap(rawStd, numBuckets);   // discrete box sizes when bucketed
       const t = Math.sqrt(normStd);
       return minDeg + t * (maxDeg - minDeg);
     };
@@ -97,7 +112,7 @@ export const drawUncertaintyBoxes = async (
       const color = vsupColor(meanVal, stdVal);
       L.rectangle(
         [[lat - half, lon - half], [lat + half, lon + half]],
-        { fillColor: color, color, fillOpacity: 1, weight: 0.3, opacity: 0.4, interactive: false },
+        { fillColor: color, color, fillOpacity: gop, weight: 0.3, opacity: 0.4 * gop, interactive: false },
       ).addTo(layerGroup);
     }
 
