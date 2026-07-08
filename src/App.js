@@ -24,6 +24,7 @@ import { renderMetricCanvas, clearMetricCanvas } from './layers/metricLayer';
 import { ControlsSidebar }    from './components/ControlsSidebar';
 import { Timeline }           from './components/Timeline';
 import { AboutModal }         from './components/AboutModal';
+import { OnboardingTour }     from './components/OnboardingTour';
 import { SelectionToolbar }   from './components/SelectionToolbar';
 import { MetricPanel }        from './components/MetricPanel';
 import { AnalysisTab }        from './components/AnalysisTab';
@@ -41,13 +42,16 @@ function App() {
   const [activeTab, setActiveTab]               = useState('visualization');
   const [menuOpen, setMenuOpen]                 = useState(false);
   const [showAbout, setShowAbout]               = useState(false);
+  const [showTour, setShowTour]                 = useState(() => { try { return !localStorage.getItem('weave_onboarded'); } catch { return false; } });
+  const closeTour = () => { try { localStorage.setItem('weave_onboarded', '1'); } catch { /* ignore */ } setShowTour(false); };
+  const [isNarrow, setIsNarrow]                 = useState(() => typeof window !== 'undefined' && window.innerWidth < 760);
 
   // ── Forecast controls state ──────────────────────────────────────────────────
   const [selectedModel, setSelectedModel]       = useState('AIFS');
   const [selectedHour, setSelectedHour]         = useState(6);
   const [selectedMember, setSelectedMember]     = useState('mean');
   const [selectedVariable, setSelectedVariable] = useState('precipitation');
-  const [selectedColormap, setSelectedColormap] = useState('Default');
+  const [selectedColormap, setSelectedColormap] = useState('Viridis');  // CVD-safe, perceptually-uniform default
   const [showWindArrows, setShowWindArrows]     = useState(false);
   const [showWindLines, setShowWindLines]       = useState(false);
 
@@ -155,6 +159,20 @@ function App() {
     if (activeTab === 'visualization' && mapInstanceRef.current)
       setTimeout(() => mapInstanceRef.current.invalidateSize(), 50);
   }, [activeTab]);
+
+  // Escape closes the sidebar / About modal.
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') { setMenuOpen(false); setShowAbout(false); } };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // Track narrow viewports for responsive layout.
+  useEffect(() => {
+    const onResize = () => setIsNarrow(window.innerWidth < 760);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   // ── Reload data on control changes (debounced) ───────────────────────────────
   // 300 ms debounce so rapid timeline scrubbing fires only one request.
@@ -486,17 +504,19 @@ function App() {
 
       {/* Tab bar */}
       <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: TAB_BAR_H, background: 'rgba(22,33,44,0.98)', display: 'flex', alignItems: 'center', zIndex: 1100, boxShadow: '0 2px 8px rgba(0,0,0,0.35)', paddingLeft: '16px', gap: '4px' }}>
-        <span style={{ color: 'white', fontWeight: '700', fontSize: '16px', marginRight: '16px', letterSpacing: '1px', display: 'inline-flex', alignItems: 'center', gap: '7px' }}><CloudRain size={18} style={{ color: '#3aa0ff' }} />WEAVE</span>
+        <span style={{ color: 'white', fontWeight: '700', fontSize: '16px', marginRight: isNarrow ? '8px' : '16px', letterSpacing: '1px', display: 'inline-flex', alignItems: 'center', gap: '7px' }}><CloudRain size={18} style={{ color: '#3aa0ff' }} />{!isNarrow && 'WEAVE'}</span>
         {[['visualization', MapIcon, 'Visualization'], ['analysis', BarChart3, 'Analysis'], ['comparison', Scale, 'Comparison']].map(([id, Icon, label]) => (
-          <button key={id} onClick={() => setActiveTab(id)}
-            style={{ padding: '6px 20px', fontSize: '13px', fontWeight: '600', border: 'none', borderRadius: '6px', cursor: 'pointer', transition: 'all 0.2s', background: activeTab === id ? 'rgba(255,255,255,0.15)' : 'transparent', color: activeTab === id ? 'white' : 'rgba(255,255,255,0.45)', borderBottom: activeTab === id ? '2px solid #3498db' : '2px solid transparent', display: 'inline-flex', alignItems: 'center', gap: '7px' }}>
-            <Icon size={15} />{label}
+          <button key={id} onClick={() => setActiveTab(id)} title={label} aria-label={label}
+            style={{ padding: isNarrow ? '6px 12px' : '6px 20px', fontSize: '13px', fontWeight: '600', border: 'none', borderRadius: '6px', cursor: 'pointer', transition: 'all 0.2s', background: activeTab === id ? 'rgba(255,255,255,0.15)' : 'transparent', color: activeTab === id ? 'white' : 'rgba(255,255,255,0.45)', borderBottom: activeTab === id ? '2px solid #3498db' : '2px solid transparent', display: 'inline-flex', alignItems: 'center', gap: '7px' }}>
+            <Icon size={15} />{!isNarrow && label}
           </button>
         ))}
-        {/* Persistent context: what you're currently looking at */}
+        {/* Persistent context: what you're currently looking at (hidden on narrow) */}
+        {!isNarrow && (
         <span style={{ marginLeft: 'auto', marginRight: '16px', display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 12px', borderRadius: '20px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.75)', fontSize: '12px', whiteSpace: 'nowrap' }}>
           {currentModel.name} · {selectedVariable === 'wind' ? 'Wind' : 'Precipitation'} · +{selectedHour}h
         </span>
+        )}
       </div>
 
       {/* ══ VISUALIZATION TAB ══ */}
@@ -506,6 +526,8 @@ function App() {
           input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: #3498db; border: 2.5px solid white; cursor: pointer; box-shadow: 0 0 0 3px rgba(52,152,219,0.25); }
           input[type=range]::-moz-range-thumb      { width: 16px; height: 16px; border-radius: 50%; background: #3498db; border: 2.5px solid white; cursor: pointer; box-shadow: 0 0 0 3px rgba(52,152,219,0.25); }
           input[type=range] { -webkit-appearance: none; appearance: none; }
+          :focus-visible { outline: 2px solid #3aa0ff; outline-offset: 2px; border-radius: 4px; }
+          @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
         `}</style>
 
         {/* Map canvas */}
@@ -520,13 +542,13 @@ function App() {
         )}
 
         {/* Controls toggle */}
-        <button onClick={() => setMenuOpen(!menuOpen)} title="Controls"
-          style={{ position: 'absolute', top: '12px', left: menuOpen ? '312px' : '12px', width: '44px', height: '44px', background: 'rgba(15,25,35,0.95)', border: 'none', borderRadius: '8px', color: 'white', cursor: 'pointer', zIndex: 1002, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.3)', transition: 'left 0.3s ease' }}>
+        <button onClick={() => setMenuOpen(!menuOpen)} title="Controls" aria-label="Controls" aria-expanded={menuOpen}
+          style={{ position: 'absolute', top: '12px', left: (menuOpen && !isNarrow) ? '312px' : '12px', width: '44px', height: '44px', background: 'rgba(15,25,35,0.95)', border: 'none', borderRadius: '8px', color: 'white', cursor: 'pointer', zIndex: 1002, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.3)', transition: 'left 0.3s ease' }}>
           {menuOpen ? <ChevronLeft size={22} /> : <Menu size={22} />}
         </button>
 
         {/* About button */}
-        <button onClick={() => setShowAbout(!showAbout)} title="About WEAVE"
+        <button onClick={() => setShowAbout(!showAbout)} title="About WEAVE" aria-label="About WEAVE"
           style={{ position: 'absolute', top: '12px', right: '12px', width: '44px', height: '44px', background: showAbout ? 'rgba(231,76,60,0.95)' : 'rgba(15,25,35,0.95)', border: 'none', borderRadius: '8px', color: 'white', cursor: 'pointer', zIndex: 1001, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.3)', transition: 'background 0.2s' }}>
           <Info size={20} />
         </button>
@@ -534,6 +556,7 @@ function App() {
         {/* Unified controls sidebar (Data · Display · Advanced) */}
         <ControlsSidebar
           open={menuOpen}
+          isNarrow={isNarrow}
           models={MODELS}
           selectedModel={selectedModel} setSelectedModel={setSelectedModel}
           selectedVariable={selectedVariable} setSelectedVariable={setSelectedVariable}
@@ -640,8 +663,12 @@ function App() {
             stats={stats}
             selectedVariable={selectedVariable}
             currentModel={currentModel}
+            onReplayTour={() => { setShowAbout(false); setShowTour(true); }}
           />
         )}
+
+        {/* First-run onboarding */}
+        <OnboardingTour open={showTour} onClose={closeTour} />
       </div>
 
       {/* ══ ANALYSIS TAB ══ */}

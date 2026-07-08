@@ -4,6 +4,8 @@ import {
   Droplet, Wind, ChevronDown, ChevronRight, Loader, AlertTriangle,
   Database, Palette, SlidersHorizontal,
 } from 'lucide-react';
+import { Toggle } from './ui/Toggle';
+import { t } from '../theme';
 
 const sectionLabel = { fontSize: '11px', color: 'rgba(255,255,255,0.45)', letterSpacing: '0.01em', marginBottom: '9px', display: 'flex', alignItems: 'center', gap: '6px' };
 const ctlLabel = { fontSize: '11px', fontWeight: 500, color: 'rgba(255,255,255,0.5)', marginBottom: '7px' };
@@ -40,7 +42,7 @@ const MODES = [
  * (right) panels into one, with progressive disclosure (Data / Display / Advanced).
  */
 export function ControlsSidebar({
-  open,
+  open, isNarrow = false,
   models, selectedModel, setSelectedModel,
   selectedVariable, setSelectedVariable,
   currentModel, getMemberOptions, selectedMember, setSelectedMember,
@@ -59,7 +61,7 @@ export function ControlsSidebar({
   const showTexture = uncertaintyMode === 'texture';
 
   return (
-    <div style={{ position: 'absolute', top: 0, left: open ? '0' : '-330px', width: '300px', height: '100%', background: 'rgba(15,25,35,0.97)', color: 'white', boxShadow: '4px 0 20px rgba(0,0,0,0.4)', transition: 'left 0.3s ease', zIndex: 1000, display: 'flex', flexDirection: 'column' }}>
+    <div style={{ position: 'absolute', top: 0, left: open ? '0' : (isNarrow ? '-92vw' : '-330px'), width: isNarrow ? '86vw' : '300px', maxWidth: '360px', height: '100%', background: t.panel, color: 'white', boxShadow: '4px 0 20px rgba(0,0,0,0.4)', transition: 'left 0.3s ease', zIndex: 1000, display: 'flex', flexDirection: 'column' }}>
       <div style={{ padding: '14px 16px', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingTop: '64px', flexShrink: 0, display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 500 }}>
         <SlidersHorizontal size={16} style={{ color: '#3aa0ff' }} />Controls
       </div>
@@ -128,7 +130,7 @@ export function ControlsSidebar({
           <div style={{ paddingTop: '12px' }}>
             <div style={rowStyle}>
               <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.7)' }}>Flip colours<Hint text="Reverse the colour scale — e.g. so heavy rain reads dark instead of light." /></span>
-              <div onClick={() => setFlipColormap(v => !v)} style={{ width: '40px', height: '22px', borderRadius: '11px', cursor: 'pointer', flexShrink: 0, background: flipColormap ? '#3498db' : 'rgba(255,255,255,0.15)', position: 'relative', transition: 'background 0.2s' }}><div style={{ position: 'absolute', top: '3px', left: flipColormap ? '21px' : '3px', width: '16px', height: '16px', borderRadius: '50%', background: 'white', transition: 'left 0.2s' }} /></div>
+              <Toggle on={flipColormap} onChange={setFlipColormap} label="Flip colours" />
             </div>
 
             <div style={{ marginBottom: '10px' }}>
@@ -154,7 +156,7 @@ export function ControlsSidebar({
             {uncertaintyMode !== null && (
               <div style={rowStyle}>
                 <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.7)' }}>Invert uncertainty<Hint text="Whether high uncertainty is shown muted (off) or vivid (on)." /></span>
-                <div onClick={() => setInvertUncertainty(v => !v)} style={{ width: '40px', height: '22px', borderRadius: '11px', cursor: 'pointer', flexShrink: 0, background: invertUncertainty ? '#e67e22' : 'rgba(255,255,255,0.15)', position: 'relative', transition: 'background 0.2s' }}><div style={{ position: 'absolute', top: '3px', left: invertUncertainty ? '21px' : '3px', width: '16px', height: '16px', borderRadius: '50%', background: 'white', transition: 'left 0.2s' }} /></div>
+                <Toggle on={invertUncertainty} onChange={setInvertUncertainty} color={t.warn} label="Invert uncertainty" />
               </div>
             )}
 

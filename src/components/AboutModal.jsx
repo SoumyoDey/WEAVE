@@ -10,7 +10,7 @@ import { CloudRain, X } from 'lucide-react';
  *   selectedVariable {string}
  *   currentModel   {object}
  */
-export function AboutModal({ onClose, stats, selectedVariable, currentModel }) {
+export function AboutModal({ onClose, stats, selectedVariable, currentModel, onReplayTour }) {
   return (
     <div
       onClick={onClose}
@@ -69,6 +69,12 @@ export function AboutModal({ onClose, stats, selectedVariable, currentModel }) {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {onReplayTour && (
+          <div style={{ textAlign: 'center', marginBottom: '20px' }}>
+            <button onClick={onReplayTour} style={{ padding: '9px 18px', borderRadius: '8px', border: '1px solid #3498db', background: 'rgba(52,152,219,0.1)', color: '#2980b9', fontSize: '14px', fontWeight: 600, cursor: 'pointer' }}>Take the tour</button>
           </div>
         )}
 
