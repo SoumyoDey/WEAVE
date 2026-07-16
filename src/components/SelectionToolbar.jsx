@@ -1,5 +1,7 @@
 import React from 'react';
 import { Square, Hexagon, X } from 'lucide-react';
+import { IconButton } from './ui/IconButton';
+import { t } from '../theme';
 
 /**
  * Floating toolbar for rectangle / polygon region selection.
@@ -10,30 +12,38 @@ import { Square, Hexagon, X } from 'lucide-react';
  *   selectedRegion   {object|null}
  *   clearSelection   {fn}
  */
-export function SelectionToolbar({ selectionMode, setSelectionMode, selectedRegion, clearSelection, rightPanelOpen = false }) {
+export function SelectionToolbar({ selectionMode, setSelectionMode, selectedRegion, clearSelection }) {
   return (
     <>
       {/* Tool buttons */}
-      <div style={{ position: 'absolute', top: '124px', right: rightPanelOpen ? '282px' : '12px', zIndex: 1001, display: 'flex', flexDirection: 'column', gap: '6px', transition: 'right 0.3s ease' }}>
-        <button
-          title="Rectangle selection"
+      <div style={{ position: 'absolute', top: '124px', right: '12px', zIndex: 1001, display: 'flex', flexDirection: 'column', gap: '6px', transition: t.transition }}>
+        <IconButton
+          label="Rectangle selection"
+          aria-pressed={selectionMode === 'rectangle'}
+          active={selectionMode === 'rectangle'}
+          size={44}
           onClick={() => setSelectionMode(m => m === 'rectangle' ? null : 'rectangle')}
-          style={{ width: '44px', height: '44px', background: selectionMode === 'rectangle' ? 'rgba(52,152,219,0.95)' : 'rgba(44,62,80,0.95)', border: 'none', borderRadius: '8px', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.3)', transition: 'all 0.2s' }}>
+          style={{ background: selectionMode === 'rectangle' ? t.accent : t.panel }}>
           <Square size={20} />
-        </button>
-        <button
-          title="Polygon selection"
+        </IconButton>
+        <IconButton
+          label="Polygon selection"
+          aria-pressed={selectionMode === 'polygon'}
+          active={selectionMode === 'polygon'}
+          size={44}
           onClick={() => setSelectionMode(m => m === 'polygon' ? null : 'polygon')}
-          style={{ width: '44px', height: '44px', background: selectionMode === 'polygon' ? 'rgba(52,152,219,0.95)' : 'rgba(44,62,80,0.95)', border: 'none', borderRadius: '8px', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.3)', transition: 'all 0.2s' }}>
+          style={{ background: selectionMode === 'polygon' ? t.accent : t.panel }}>
           <Hexagon size={20} />
-        </button>
+        </IconButton>
         {selectedRegion && (
-          <button
-            title="Clear selection"
+          <IconButton
+            label="Clear selection"
+            danger
+            size={44}
             onClick={clearSelection}
-            style={{ width: '44px', height: '44px', background: 'rgba(231,76,60,0.9)', border: 'none', borderRadius: '8px', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.3)', transition: 'all 0.2s' }}>
+          >
             <X size={18} />
-          </button>
+          </IconButton>
         )}
       </div>
 

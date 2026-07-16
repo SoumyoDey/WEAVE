@@ -1,22 +1,17 @@
 import React, { useState } from 'react';
 import {
-  HelpCircle, Fan, AlignJustify, Navigation, Waves, LayoutGrid,
+  Fan, AlignJustify, Navigation, Waves, LayoutGrid,
   Droplet, Wind, ChevronDown, ChevronRight, Loader, AlertTriangle,
   Database, Palette, SlidersHorizontal,
 } from 'lucide-react';
 import { Toggle } from './ui/Toggle';
+import { Hint } from './ui/Hint';
+import { IconButton } from './ui/IconButton';
+import { Select, SelectOption } from './ui/Select';
+import { SectionHeader, FieldLabel } from './ui/SectionHeader';
 import { t } from '../theme';
 
-const sectionLabel = { fontSize: '11px', color: 'rgba(255,255,255,0.45)', letterSpacing: '0.01em', marginBottom: '9px', display: 'flex', alignItems: 'center', gap: '6px' };
-const ctlLabel = { fontSize: '11px', fontWeight: 500, color: 'rgba(255,255,255,0.5)', marginBottom: '7px' };
-const rowStyle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' };
-
-// Small "?" that shows a plain-language explanation on hover.
-const Hint = ({ text }) => (
-  <span title={text} aria-label={text} style={{ cursor: 'help', display: 'inline-flex', verticalAlign: '-2px', marginLeft: '5px', color: 'rgba(255,255,255,0.35)' }}>
-    <HelpCircle size={12} />
-  </span>
-);
+const rowStyle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: t.space(2.5) };
 
 // Mini preview of what each uncertainty style looks like on the map.
 const Thumb = ({ mode }) => {
@@ -61,15 +56,15 @@ export function ControlsSidebar({
   const showTexture = uncertaintyMode === 'texture';
 
   return (
-    <div style={{ position: 'absolute', top: 0, left: open ? '0' : (isNarrow ? '-92vw' : '-330px'), width: isNarrow ? '86vw' : '300px', maxWidth: '360px', height: '100%', background: t.panel, color: 'white', boxShadow: '4px 0 20px rgba(0,0,0,0.4)', transition: 'left 0.3s ease', zIndex: 1000, display: 'flex', flexDirection: 'column' }}>
-      <div style={{ padding: '14px 16px', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingTop: '64px', flexShrink: 0, display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 500 }}>
-        <SlidersHorizontal size={16} style={{ color: '#3aa0ff' }} />Controls
+    <div style={{ position: 'absolute', top: 0, left: open ? '0' : (isNarrow ? '-92vw' : '-330px'), width: isNarrow ? '86vw' : '300px', maxWidth: '360px', height: '100%', background: t.panel, color: t.text, boxShadow: '4px 0 20px rgba(0,0,0,0.4)', transition: t.transition, zIndex: 1000, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ padding: `${t.space(3.5)} ${t.space(4)}`, borderBottom: `1px solid ${t.border}`, paddingTop: t.space(16), flexShrink: 0, display: 'flex', alignItems: 'center', gap: t.space(2), fontWeight: 500 }}>
+        <SlidersHorizontal size={16} style={{ color: t.accent }} />Controls
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px' }}>
 
         {/* ── Data ── */}
-        <div style={sectionLabel}><Database size={13} />Data</div>
+        <SectionHeader icon={Database}>Data</SectionHeader>
         <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
           {Object.entries(models).map(([key, model]) => (
             <button key={key} onClick={() => setSelectedModel(key)} title={`${model.ensembleCount} members`}
@@ -90,22 +85,20 @@ export function ControlsSidebar({
           })}
         </div>
         {currentModel.hasEnsemble && (
-          <select value={selectedMember} onChange={e => setSelectedMember(e.target.value)}
-            style={{ width: '100%', padding: '8px 10px', fontSize: '12px', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '7px', background: 'rgba(255,255,255,0.07)', color: 'white', cursor: 'pointer', outline: 'none', marginBottom: '18px' }}>
-            {getMemberOptions().map(opt => <option key={opt.value} value={opt.value} style={{ background: '#0f1923' }}>{opt.label}</option>)}
-          </select>
+          <Select value={selectedMember} onChange={e => setSelectedMember(e.target.value)} style={{ marginBottom: '18px' }} aria-label="Ensemble member">
+            {getMemberOptions().map(opt => <SelectOption key={opt.value} value={opt.value}>{opt.label}</SelectOption>)}
+          </Select>
         )}
 
         {/* ── Display ── */}
-        <div style={sectionLabel}><Palette size={13} />Display</div>
-        <div style={ctlLabel}>Colour scheme</div>
-        <select value={selectedColormap} onChange={e => setSelectedColormap(e.target.value)}
-          style={{ width: '100%', padding: '8px 10px', fontSize: '12px', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '7px', background: 'rgba(255,255,255,0.07)', color: 'white', cursor: 'pointer', outline: 'none', marginBottom: '8px' }}>
-          {Object.keys(colormaps).map(n => <option key={n} value={n} style={{ background: '#0f1923' }}>{n}</option>)}
-        </select>
+        <SectionHeader icon={Palette}>Display</SectionHeader>
+        <FieldLabel>Colour scheme</FieldLabel>
+        <Select value={selectedColormap} onChange={e => setSelectedColormap(e.target.value)} style={{ marginBottom: '8px' }} aria-label="Colour scheme">
+          {Object.keys(colormaps).map(n => <SelectOption key={n} value={n}>{n}</SelectOption>)}
+        </Select>
         <div style={{ height: '9px', borderRadius: '4px', marginBottom: '14px', background: `linear-gradient(to right, ${(flipColormap ? [...colormaps[selectedColormap].colors].reverse() : colormaps[selectedColormap].colors).join(', ')})`, border: '1px solid rgba(255,255,255,0.12)' }} />
 
-        <div style={ctlLabel}>Uncertainty style<Hint text="How the ensemble's spread — the model's uncertainty — is drawn over the forecast." /></div>
+        <FieldLabel>Uncertainty style<Hint text="How the ensemble's spread — the model's uncertainty — is drawn over the forecast." /></FieldLabel>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginBottom: '16px' }}>
           {MODES.map(({ mode, label }) => {
             const active = uncertaintyMode === mode;
@@ -147,9 +140,9 @@ export function ControlsSidebar({
                 <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)' }}>0 = continuous</div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <button onClick={() => setNumBuckets(v => Math.max(0, v - 1))} style={{ width: '24px', height: '24px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(255,255,255,0.07)', color: 'white', cursor: 'pointer', fontSize: '16px', lineHeight: '22px' }}>−</button>
+                <IconButton label="Decrease number of buckets" size={24} onClick={() => setNumBuckets(v => Math.max(0, v - 1))} style={{ boxShadow: 'none', borderRadius: '4px', fontSize: '16px' }}>−</IconButton>
                 <span style={{ fontSize: '13px', minWidth: '22px', textAlign: 'center', fontWeight: '600' }}>{numBuckets ?? 0}</span>
-                <button onClick={() => setNumBuckets(v => Math.min(20, v + 1))} style={{ width: '24px', height: '24px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(255,255,255,0.07)', color: 'white', cursor: 'pointer', fontSize: '16px', lineHeight: '22px' }}>+</button>
+                <IconButton label="Increase number of buckets" size={24} onClick={() => setNumBuckets(v => Math.min(20, v + 1))} style={{ boxShadow: 'none', borderRadius: '4px', fontSize: '16px' }}>+</IconButton>
               </div>
             </div>
 
@@ -162,7 +155,7 @@ export function ControlsSidebar({
 
             {showTexture && (
               <div style={{ marginTop: '6px' }}>
-                <div style={ctlLabel}>Texture settings</div>
+                <FieldLabel>Texture settings</FieldLabel>
                 <div style={{ display: 'flex', gap: '6px' }}>
                   {['Lines', 'Squares'].map(s => {
                     const active = textureStyle === s;
@@ -178,7 +171,7 @@ export function ControlsSidebar({
 
             {selectedVariable === 'wind' && (
               <div style={{ marginTop: '12px' }}>
-                <div style={ctlLabel}>Wind overlay</div>
+                <FieldLabel>Wind overlay</FieldLabel>
                 <div style={{ display: 'flex', gap: '6px' }}>
                   {[
                     { key: 'arrows', state: showWindArrows, setter: () => { setShowWindArrows(v => !v); if (showWindLines) setShowWindLines(false); }, icon: Navigation, label: 'Arrows' },

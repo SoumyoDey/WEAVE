@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Play, Pause, SkipBack, SkipForward } from 'lucide-react';
+import { IconButton } from './ui/IconButton';
+import { t } from '../theme';
 
 /**
  * Bottom timeline scrubber with transport controls.
@@ -61,12 +63,6 @@ export function Timeline({ currentModel, selectedHour, setSelectedHour }) {
     return () => window.removeEventListener('keydown', onKey);
   }); // re-bind each render so step() sees current values
 
-  const btn = (extra = {}) => ({
-    width: '30px', height: '30px', borderRadius: '7px', border: '1px solid rgba(255,255,255,0.12)',
-    background: 'rgba(255,255,255,0.06)', color: '#cdd8e3', cursor: 'pointer',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, ...extra,
-  });
-
   return (
     <div style={{
       position: 'absolute', bottom: 0, left: 0, right: 0,
@@ -78,16 +74,16 @@ export function Timeline({ currentModel, selectedHour, setSelectedHour }) {
 
         {/* Transport controls */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <button onClick={() => step(-1)} title="Previous lead time (←)" aria-label="Previous lead time" style={btn()}>
+          <IconButton onClick={() => step(-1)} title="Previous lead time (←)" label="Previous lead time" size={30} style={{ boxShadow: 'none' }}>
             <SkipBack size={15} />
-          </button>
-          <button onClick={() => setPlaying(p => !p)} title={playing ? 'Pause' : 'Play'} aria-label={playing ? 'Pause' : 'Play'}
-            style={btn({ width: '34px', height: '34px', borderRadius: '50%', background: '#3aa0ff', border: 'none', color: '#04213a' })}>
+          </IconButton>
+          <IconButton onClick={() => setPlaying(p => !p)} label={playing ? 'Pause' : 'Play'} active size={34}
+            style={{ borderRadius: t.radiusRound, boxShadow: 'none' }}>
             {playing ? <Pause size={16} /> : <Play size={16} />}
-          </button>
-          <button onClick={() => step(1)} title="Next lead time (→)" aria-label="Next lead time" style={btn()}>
+          </IconButton>
+          <IconButton onClick={() => step(1)} title="Next lead time (→)" label="Next lead time" size={30} style={{ boxShadow: 'none' }}>
             <SkipForward size={15} />
-          </button>
+          </IconButton>
         </div>
 
         {/* Scrubber + day ticks */}
@@ -99,7 +95,7 @@ export function Timeline({ currentModel, selectedHour, setSelectedHour }) {
             style={{
               width: '100%', height: '4px', borderRadius: '2px', outline: 'none', cursor: 'pointer',
               appearance: 'none', WebkitAppearance: 'none', display: 'block',
-              background: `linear-gradient(to right, #3498db 0%, #3498db ${pct}%, rgba(255,255,255,0.15) ${pct}%, rgba(255,255,255,0.15) 100%)`,
+              background: `linear-gradient(to right, ${t.accent} 0%, ${t.accent} ${pct}%, ${t.borderStrong} ${pct}%, ${t.borderStrong} 100%)`,
             }}
           />
           <div style={{ position: 'absolute', top: '10px', left: 0, right: 0, pointerEvents: 'none' }}>
