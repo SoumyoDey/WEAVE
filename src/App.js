@@ -34,6 +34,7 @@ import { BivariateLegend }    from './components/legends/BivariateLegend';
 import { VSUPFanLegend }      from './components/legends/VSUPFanLegend';
 import { VSUPBoxesLegend }    from './components/legends/VSUPBoxesLegend';
 import { TextureLegend }      from './components/legends/TextureLegend';
+import { t } from './theme';
 
 const TAB_BAR_H = 48;
 
@@ -504,16 +505,16 @@ function App() {
 
       {/* Tab bar */}
       <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: TAB_BAR_H, background: 'rgba(22,33,44,0.98)', display: 'flex', alignItems: 'center', zIndex: 1100, boxShadow: '0 2px 8px rgba(0,0,0,0.35)', paddingLeft: '16px', gap: '4px' }}>
-        <span style={{ color: 'white', fontWeight: '700', fontSize: '16px', marginRight: isNarrow ? '8px' : '16px', letterSpacing: '1px', display: 'inline-flex', alignItems: 'center', gap: '7px' }}><CloudRain size={18} style={{ color: '#3aa0ff' }} />{!isNarrow && 'WEAVE'}</span>
+        <span style={{ color: 'white', fontWeight: '700', fontSize: t.fontSize.lg, marginRight: isNarrow ? '8px' : '16px', letterSpacing: '1px', display: 'inline-flex', alignItems: 'center', gap: '7px' }}><CloudRain size={18} style={{ color: '#3aa0ff' }} />{!isNarrow && 'WEAVE'}</span>
         {[['visualization', MapIcon, 'Visualization'], ['analysis', BarChart3, 'Analysis'], ['comparison', Scale, 'Comparison']].map(([id, Icon, label]) => (
           <button key={id} onClick={() => setActiveTab(id)} title={label} aria-label={label}
-            style={{ padding: isNarrow ? '6px 12px' : '6px 20px', fontSize: '13px', fontWeight: '600', border: 'none', borderRadius: '6px', cursor: 'pointer', transition: 'all 0.2s', background: activeTab === id ? 'rgba(255,255,255,0.15)' : 'transparent', color: activeTab === id ? 'white' : 'rgba(255,255,255,0.45)', borderBottom: activeTab === id ? '2px solid #3498db' : '2px solid transparent', display: 'inline-flex', alignItems: 'center', gap: '7px' }}>
+            style={{ padding: isNarrow ? '6px 12px' : '6px 20px', fontSize: t.fontSize.base, fontWeight: '600', border: 'none', borderRadius: '6px', cursor: 'pointer', transition: 'all 0.2s', background: activeTab === id ? 'rgba(255,255,255,0.15)' : 'transparent', color: activeTab === id ? 'white' : t.textMuted, borderBottom: activeTab === id ? '2px solid #3498db' : '2px solid transparent', display: 'inline-flex', alignItems: 'center', gap: '7px' }}>
             <Icon size={15} />{!isNarrow && label}
           </button>
         ))}
         {/* Persistent context: what you're currently looking at (hidden on narrow) */}
         {!isNarrow && (
-        <span style={{ marginLeft: 'auto', marginRight: '16px', display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 12px', borderRadius: '20px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.75)', fontSize: '12px', whiteSpace: 'nowrap' }}>
+        <span style={{ marginLeft: 'auto', marginRight: '16px', display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 12px', borderRadius: '20px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.75)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }}>
           {currentModel.name} · {selectedVariable === 'wind' ? 'Wind' : 'Precipitation'} · +{selectedHour}h
         </span>
         )}
@@ -527,6 +528,10 @@ function App() {
           input[type=range]::-moz-range-thumb      { width: 16px; height: 16px; border-radius: 50%; background: #3498db; border: 2.5px solid white; cursor: pointer; box-shadow: 0 0 0 3px rgba(52,152,219,0.25); }
           input[type=range] { -webkit-appearance: none; appearance: none; }
           :focus-visible { outline: 2px solid #3aa0ff; outline-offset: 2px; border-radius: 4px; }
+          /* Baseline hover feedback for every button/select — most of the app's
+             controls are bespoke inline-styled buttons with no :hover of their
+             own, so this gives a consistent, low-risk lift everywhere at once. */
+          button:not(:disabled):hover, select:hover { filter: brightness(1.18); transition: filter 0.15s ease; }
           @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
         `}</style>
 

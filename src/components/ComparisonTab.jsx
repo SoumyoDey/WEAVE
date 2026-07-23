@@ -6,6 +6,7 @@ import {
 } from 'recharts';
 import { Scale, MapPin } from 'lucide-react';
 import { fetchComparisonTimeseries, fetchComparisonSkill, fetchSpatialAgreement } from '../api/comparisonApi';
+import { t } from '../theme';
 
 const MODEL_COLORS = { AIFS: '#3498db', GEFS: '#e74c3c', UKMO: '#2ecc71' };
 const MODEL_NAMES  = ['AIFS', 'GEFS', 'UKMO'];
@@ -28,14 +29,14 @@ const CARD = {
 
 const SECTION_TITLE = {
   color: 'rgba(255,255,255,0.85)',
-  fontSize: '14px',
+  fontSize: t.fontSize.md,
   fontWeight: '600',
   letterSpacing: '0.02em',
   margin: '0 0 14px 0',
 };
 
 const LABEL = {
-  fontSize: '11px',
+  fontSize: t.fontSize.xs,
   fontWeight: '500',
   letterSpacing: '0.02em',
   color: 'rgba(255,255,255,0.5)',
@@ -47,7 +48,7 @@ const INPUT = {
   border: '1px solid rgba(255,255,255,0.12)',
   borderRadius: '7px',
   color: 'rgba(255,255,255,0.85)',
-  fontSize: '13px',
+  fontSize: t.fontSize.base,
   padding: '6px 10px',
   outline: 'none',
   width: '80px',
@@ -56,15 +57,15 @@ const INPUT = {
 const TOOLTIP_STYLE = {
   background: '#1a2535',
   border: '1px solid rgba(255,255,255,0.15)',
-  borderRadius: '8px',
+  borderRadius: t.radius,
   color: 'white',
-  fontSize: '12px',
+  fontSize: t.fontSize.sm,
 };
 
 // ── Small helpers ────────────────────────────────────────────────────────────
 function Spinner() {
   return (
-    <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: '14px', padding: '40px 0', textAlign: 'center' }}>
+    <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.md, padding: '40px 0', textAlign: 'center' }}>
       ⏳ Loading…
     </div>
   );
@@ -109,7 +110,7 @@ function ForecastTooltip({ active, payload, label, selectedModels, normalized, v
 
   return (
     <div style={{ ...TOOLTIP_STYLE, padding: '10px 14px', minWidth: '210px' }}>
-      <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: '11px', marginBottom: '8px' }}>
+      <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: t.fontSize.xs, marginBottom: '8px' }}>
         +{label}h forecast
         {normalized && <span style={{ color: '#f39c12', marginLeft: '6px' }}>· per-model normalised</span>}
       </div>
@@ -120,15 +121,15 @@ function ForecastTooltip({ active, payload, label, selectedModels, normalized, v
             <span style={{ color: 'rgba(255,255,255,0.85)', fontWeight: '600', minWidth: '44px' }}>{model}</span>
             <span style={{ color: 'rgba(255,255,255,0.85)', fontWeight: '700' }}>
               {rateMean.toFixed(3)}
-              <span style={{ color: 'rgba(255,255,255,0.5)', fontWeight: '400', fontSize: '10px', marginLeft: '2px' }}>{displayUnit}</span>
+              <span style={{ color: 'rgba(255,255,255,0.5)', fontWeight: '400', fontSize: t.fontSize.micro, marginLeft: '2px' }}>{displayUnit}</span>
             </span>
             {rateStd != null && (
-              <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '11px' }}>±{rateStd.toFixed(3)}</span>
+              <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.xs }}>±{rateStd.toFixed(3)}</span>
             )}
           </div>
           {/* Raw stored value — only informative for precipitation (accum > 1) */}
           {isPrecip && accumH > 1 && (
-            <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '10px', marginLeft: '18px', marginTop: '1px' }}>
+            <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.micro, marginLeft: '18px', marginTop: '1px' }}>
               raw: {rawMean.toFixed(3)} mm/{accumH}h
             </div>
           )}
@@ -378,16 +379,16 @@ export function ComparisonTab({
     <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: 1 }}>
       {/* ── Header ── */}
       <div style={{ padding: '16px 30px 10px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-        <h2 style={{ color: 'white', margin: '0 0 4px 0', fontSize: '18px', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <h2 style={{ color: 'white', margin: '0 0 4px 0', fontSize: t.fontSize.xl, fontWeight: '600', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Scale size={18} />Model comparison
         </h2>
-        <p style={{ color: 'rgba(255,255,255,0.4)', margin: '0 0 8px 0', fontSize: '13px' }}>
+        <p style={{ color: 'rgba(255,255,255,0.4)', margin: '0 0 8px 0', fontSize: t.fontSize.base }}>
           Configure models, location and lead times then click Run.
         </p>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           {/* Variable badge */}
           <span style={{
-            fontSize: '11px', fontWeight: '600', padding: '3px 10px', borderRadius: '20px',
+            fontSize: t.fontSize.xs, fontWeight: '600', padding: '3px 10px', borderRadius: '20px',
             background: 'rgba(52,152,219,0.15)', border: '1px solid rgba(52,152,219,0.3)',
             color: '#3498db',
           }}>
@@ -396,7 +397,7 @@ export function ComparisonTab({
           {/* Location badge */}
           {validLocation && (
             <span style={{
-              fontSize: '11px', fontWeight: '600', padding: '3px 10px', borderRadius: '20px',
+              fontSize: t.fontSize.xs, fontWeight: '600', padding: '3px 10px', borderRadius: '20px',
               background: 'rgba(46,204,113,0.12)', border: '1px solid rgba(46,204,113,0.25)',
               color: '#2ecc71',
             }}>
@@ -411,12 +412,16 @@ export function ComparisonTab({
 
         {/* ── Section 2: Configuration card ── */}
         <div style={{ ...CARD, marginBottom: '24px' }}>
+          {/* Location / Models / Lead times sit side by side on wide screens
+              instead of stacking full-width with mostly-empty rows, and wrap
+              back to a single column once the viewport gets too narrow. */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(260px, 100%), 1fr))', gap: '24px', marginBottom: '20px' }}>
           {/* LOCATION */}
-          <div style={{ marginBottom: '20px' }}>
+          <div>
             <div style={LABEL}>Location</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: '12px' }}>Lat</span>
+                <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: t.fontSize.sm }}>Lat</span>
                 <input
                   type="number"
                   value={lat}
@@ -426,7 +431,7 @@ export function ComparisonTab({
                 />
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: '12px' }}>Lon</span>
+                <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: t.fontSize.sm }}>Lon</span>
                 <input
                   type="number"
                   value={lon}
@@ -446,7 +451,7 @@ export function ComparisonTab({
                     border: '1px solid rgba(52,152,219,0.25)',
                     borderRadius: '7px',
                     color: '#3498db',
-                    fontSize: '12px',
+                    fontSize: t.fontSize.sm,
                     fontWeight: '600',
                     padding: '6px 12px',
                     cursor: 'pointer',
@@ -462,7 +467,7 @@ export function ComparisonTab({
           </div>
 
           {/* MODELS */}
-          <div style={{ marginBottom: '20px' }}>
+          <div>
             <div style={LABEL}>Models</div>
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
               {MODEL_NAMES.map(m => {
@@ -475,7 +480,7 @@ export function ComparisonTab({
                     style={{
                       display: 'flex', alignItems: 'center', gap: '6px',
                       padding: '6px 14px', borderRadius: '20px', cursor: 'pointer',
-                      fontSize: '13px', fontWeight: '600',
+                      fontSize: t.fontSize.base, fontWeight: '600',
                       background: active ? `${color}22` : 'rgba(255,255,255,0.04)',
                       border: `1px solid ${active ? color : 'rgba(255,255,255,0.12)'}`,
                       color: active ? color : 'rgba(255,255,255,0.4)',
@@ -492,18 +497,18 @@ export function ComparisonTab({
               })}
             </div>
             {selectedModels.length < 2 && (
-              <div style={{ color: '#f39c12', fontSize: '11px', marginTop: '6px' }}>
+              <div style={{ color: '#f39c12', fontSize: t.fontSize.xs, marginTop: '6px' }}>
                 Select at least 2 models to compare.
               </div>
             )}
           </div>
 
           {/* LEAD TIMES */}
-          <div style={{ marginBottom: '24px' }}>
+          <div>
             <div style={LABEL}>Lead times</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: '12px' }}>Min</span>
+                <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: t.fontSize.sm }}>Min</span>
                 <input
                   type="number"
                   value={hourMin}
@@ -511,7 +516,7 @@ export function ComparisonTab({
                   onChange={e => handleHourMin(e.target.value)}
                   style={{ ...INPUT, width: '64px' }}
                 />
-                <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: '12px' }}>h</span>
+                <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.sm }}>h</span>
               </div>
               <div style={{
                 flex: 1, height: '3px', background: 'rgba(255,255,255,0.1)',
@@ -526,7 +531,7 @@ export function ComparisonTab({
                 }} />
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: '12px' }}>Max</span>
+                <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: t.fontSize.sm }}>Max</span>
                 <input
                   type="number"
                   value={hourMax}
@@ -534,14 +539,15 @@ export function ComparisonTab({
                   onChange={e => handleHourMax(e.target.value)}
                   style={{ ...INPUT, width: '64px' }}
                 />
-                <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: '12px' }}>h</span>
+                <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.sm }}>h</span>
               </div>
             </div>
             {hourMin >= hourMax && (
-              <div style={{ color: '#f39c12', fontSize: '11px', marginTop: '6px' }}>
+              <div style={{ color: '#f39c12', fontSize: t.fontSize.xs, marginTop: '6px' }}>
                 Min must be less than Max.
               </div>
             )}
+          </div>
           </div>
 
           {/* Run button */}
@@ -553,9 +559,9 @@ export function ComparisonTab({
                 background: canRun ? '#3498db' : 'rgba(255,255,255,0.08)',
                 color: canRun ? 'white' : 'rgba(255,255,255,0.25)',
                 border: 'none',
-                borderRadius: '8px',
+                borderRadius: t.radius,
                 padding: '9px 24px',
-                fontSize: '14px',
+                fontSize: t.fontSize.md,
                 fontWeight: '700',
                 cursor: canRun ? 'pointer' : 'not-allowed',
                 display: 'flex',
@@ -578,10 +584,10 @@ export function ComparisonTab({
           }}>
             <div>
               <div style={{ marginBottom: '16px', lineHeight: 1, color: 'rgba(255,255,255,0.3)' }}><Scale size={52} /></div>
-              <p style={{ fontSize: '16px', margin: '0 0 8px 0', color: 'rgba(255,255,255,0.4)' }}>
+              <p style={{ fontSize: t.fontSize.lg, margin: '0 0 8px 0', color: 'rgba(255,255,255,0.4)' }}>
                 Configure the comparison above and click Run
               </p>
-              <p style={{ fontSize: '13px', margin: 0 }}>No results yet</p>
+              <p style={{ fontSize: t.fontSize.base, margin: 0 }}>No results yet</p>
             </div>
           </div>
         )}
@@ -596,14 +602,14 @@ export function ComparisonTab({
                 display: 'flex', gap: '10px', flexWrap: 'wrap',
                 marginBottom: '12px', alignItems: 'center',
               }}>
-                <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.25)' }}>
+                <span style={{ fontSize: t.fontSize.xs, color: 'rgba(255,255,255,0.25)' }}>
                   Converted to mm/h —
                 </span>
                 {selectedModels.map(m => {
                   const ah = MODEL_ACCUM_HOURS[m] || 1;
                   return (
                     <span key={m} style={{
-                      fontSize: '11px', fontWeight: '600',
+                      fontSize: t.fontSize.xs, fontWeight: '600',
                       color: MODEL_COLORS[m],
                       opacity: 0.75,
                     }}>
@@ -611,7 +617,7 @@ export function ComparisonTab({
                     </span>
                   );
                 })}
-                <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.18)', marginLeft: '4px' }}>
+                <span style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.18)', marginLeft: '4px' }}>
                   Hover for raw values
                 </span>
               </div>
@@ -626,7 +632,7 @@ export function ComparisonTab({
                   <div style={{
                     background: 'rgba(52,152,219,0.10)',
                     border: '1px solid rgba(52,152,219,0.3)',
-                    borderRadius: '8px',
+                    borderRadius: t.radius,
                     padding: '9px 14px',
                     marginBottom: '12px',
                     display: 'flex',
@@ -635,7 +641,7 @@ export function ComparisonTab({
                     gap: '12px',
                     flexWrap: 'wrap',
                   }}>
-                    <span style={{ color: '#bcd8f2', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ color: '#bcd8f2', fontSize: t.fontSize.sm, display: 'flex', alignItems: 'center', gap: '6px' }}>
                       These models report at different scales ({scaleRatio.toFixed(0)}× apart), so one line may look flat. Turn on normalise to compare their shapes.
                     </span>
                     <button
@@ -643,9 +649,9 @@ export function ComparisonTab({
                       style={{
                         background: 'rgba(52,152,219,0.18)',
                         border: '1px solid rgba(52,152,219,0.45)',
-                        borderRadius: '6px',
+                        borderRadius: t.radiusSm,
                         color: '#7ec8f7',
-                        fontSize: '12px',
+                        fontSize: t.fontSize.sm,
                         fontWeight: '600',
                         padding: '4px 12px',
                         cursor: 'pointer',
@@ -675,9 +681,9 @@ export function ComparisonTab({
                         padding: '4px 12px',
                       }}>
                         <span style={{ display: 'inline-block', width: '12px', height: '3px', background: color, borderRadius: '2px' }} />
-                        <span style={{ color: 'rgba(255,255,255,0.85)', fontSize: '12px', fontWeight: '600' }}>{m}</span>
+                        <span style={{ color: 'rgba(255,255,255,0.85)', fontSize: t.fontSize.sm, fontWeight: '600' }}>{m}</span>
                         {rateValue != null && (
-                          <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: '11px' }}>
+                          <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: t.fontSize.xs }}>
                             {rateValue.toFixed(3)} {yAxisUnit}
                           </span>
                         )}
@@ -687,7 +693,7 @@ export function ComparisonTab({
 
                   {/* Toggles */}
                   <div style={{ display: 'flex', gap: '14px', marginLeft: 'auto', alignItems: 'center' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'rgba(255,255,255,0.5)', fontSize: '12px', cursor: 'pointer' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'rgba(255,255,255,0.5)', fontSize: t.fontSize.sm, cursor: 'pointer' }}>
                       <input
                         type="checkbox"
                         checked={normalizeScales}
@@ -696,7 +702,7 @@ export function ComparisonTab({
                       />
                       <span style={{ color: normalizeScales ? '#f39c12' : undefined }}>Normalise</span>
                     </label>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'rgba(255,255,255,0.5)', fontSize: '12px', cursor: 'pointer' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'rgba(255,255,255,0.5)', fontSize: t.fontSize.sm, cursor: 'pointer' }}>
                       <input
                         type="checkbox"
                         checked={showSpreadBands}
@@ -792,7 +798,7 @@ export function ComparisonTab({
             )}
 
             {!tsLoading && !tsData && (
-              <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '13px', padding: '20px 0' }}>
+              <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.base, padding: '20px 0' }}>
                 Forecast timeseries unavailable. Check API connectivity.
               </div>
             )}
@@ -805,7 +811,7 @@ export function ComparisonTab({
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', marginBottom: '14px' }}>
               <h3 style={{ ...SECTION_TITLE, margin: 0 }}>Skill Verification</h3>
               {selectedVariable !== 'wind' && (
-                <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.25)', letterSpacing: '0.04em' }}>
+                <span style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.25)', letterSpacing: '0.04em' }}>
                   Metrics in mm/h · accumulation window matched per model
                 </span>
               )}
@@ -824,11 +830,11 @@ export function ComparisonTab({
                     <div style={{
                       background: 'rgba(243,156,18,0.1)',
                       border: '1px solid rgba(243,156,18,0.3)',
-                      borderRadius: '8px',
+                      borderRadius: t.radius,
                       padding: '10px 14px',
                       marginBottom: '16px',
                       color: '#f39c12',
-                      fontSize: '13px',
+                      fontSize: t.fontSize.base,
                       display: 'flex',
                       alignItems: 'flex-start',
                       gap: '8px',
@@ -844,7 +850,7 @@ export function ComparisonTab({
                       textAlign: 'center',
                       padding: '32px 20px',
                       color: 'rgba(255,255,255,0.35)',
-                      fontSize: '13px',
+                      fontSize: t.fontSize.base,
                       lineHeight: 1.6,
                     }}>
                       No observations available for verification at this location.
@@ -883,7 +889,7 @@ export function ComparisonTab({
                             }}>
                               {/* Model name */}
                               <span style={{
-                                fontWeight: '700', fontSize: '13px', color,
+                                fontWeight: '700', fontSize: t.fontSize.base, color,
                                 minWidth: '48px',
                               }}>
                                 {m}
@@ -891,8 +897,8 @@ export function ComparisonTab({
                               {/* Stat chips */}
                               {stats.map(({ label, value, color: vc }) => (
                                 <div key={label} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                                  <span style={{ color: vc, fontSize: '14px', fontWeight: '700', lineHeight: 1 }}>{value}</span>
-                                  <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: '10px', marginTop: '2px', whiteSpace: 'nowrap' }}>{label}</span>
+                                  <span style={{ color: vc, fontSize: t.fontSize.md, fontWeight: '700', lineHeight: 1 }}>{value}</span>
+                                  <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.micro, marginTop: '2px', whiteSpace: 'nowrap' }}>{label}</span>
                                 </div>
                               ))}
                             </div>
@@ -902,12 +908,12 @@ export function ComparisonTab({
 
                       {/* SSR grouped bar chart */}
                       <div style={{ marginBottom: '24px' }}>
-                        <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                        <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
                           <span style={{ fontWeight: '600' }}>Spread-Skill Ratio by Lead Time</span>
                           {selectedModels.map(m => (
                             <span key={m} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                               <span style={{ display: 'inline-block', width: '10px', height: '10px', background: MODEL_COLORS[m], borderRadius: '2px' }} />
-                              <span style={{ fontSize: '11px' }}>{m}</span>
+                              <span style={{ fontSize: t.fontSize.xs }}>{m}</span>
                             </span>
                           ))}
                         </div>
@@ -968,15 +974,15 @@ export function ComparisonTab({
 
                       {/* CRPS line chart */}
                       <div>
-                        <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                        <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
                           <span style={{ fontWeight: '600' }}>CRPS by Lead Time</span>
                           {selectedModels.map(m => {
                             const mHours = skillData.models?.[m]?.hours?.length || 0;
                             return (
                               <span key={m} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                                 <span style={{ display: 'inline-block', width: '16px', height: '2px', background: MODEL_COLORS[m], borderRadius: '1px' }} />
-                                <span style={{ fontSize: '11px' }}>{m}</span>
-                                <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)' }}>({mHours} pts)</span>
+                                <span style={{ fontSize: t.fontSize.xs }}>{m}</span>
+                                <span style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.3)' }}>({mHours} pts)</span>
                               </span>
                             );
                           })}
@@ -1051,7 +1057,7 @@ export function ComparisonTab({
             })()}
 
             {!skillLoading && !skillData && (
-              <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '13px', padding: '20px 0' }}>
+              <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.base, padding: '20px 0' }}>
                 Skill verification data unavailable. Check API connectivity.
               </div>
             )}
@@ -1066,12 +1072,12 @@ export function ComparisonTab({
               style={{
                 background: 'none', border: 'none', cursor: 'pointer',
                 display: 'flex', alignItems: 'center', gap: '8px',
-                color: 'rgba(255,255,255,0.7)', fontSize: '14px', fontWeight: '600',
+                color: 'rgba(255,255,255,0.7)', fontSize: t.fontSize.md, fontWeight: '600',
                 letterSpacing: '0.02em',
                 padding: '0 0 12px 0',
               }}
             >
-              <span style={{ fontSize: '11px' }}>{showAdvanced ? '▼' : '▶'}</span>
+              <span style={{ fontSize: t.fontSize.xs }}>{showAdvanced ? '▼' : '▶'}</span>
               Advanced metrics
             </button>
 
@@ -1088,7 +1094,7 @@ export function ComparisonTab({
                         onChange={e => setThreshold(Number(e.target.value))}
                         style={{ ...INPUT, width: '64px' }}
                       />
-                      <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: '12px' }}>{thresholdUnit}</span>
+                      <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: t.fontSize.sm }}>{thresholdUnit}</span>
                     </div>
                   </div>
                   <div>
@@ -1101,7 +1107,7 @@ export function ComparisonTab({
                         onChange={e => setFssWindow(Math.max(1, Number(e.target.value)))}
                         style={{ ...INPUT, width: '56px' }}
                       />
-                      <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: '12px' }}>
+                      <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: t.fontSize.sm }}>
                         × {fssWindow} grid points (= {(fssWindow * 0.5).toFixed(1)}°)
                       </span>
                     </div>
@@ -1114,12 +1120,12 @@ export function ComparisonTab({
                   textAlign: 'center',
                   padding: '32px 20px',
                   color: 'rgba(255,255,255,0.25)',
-                  fontSize: '13px',
+                  fontSize: t.fontSize.base,
                   lineHeight: 1.6,
                 }}>
-                  <div style={{ fontSize: '28px', marginBottom: '10px' }}>🔬</div>
+                  <div style={{ fontSize: t.fontSize.hero, marginBottom: '10px' }}>🔬</div>
                   Advanced metric charts — coming in next update
-                  <div style={{ fontSize: '11px', marginTop: '6px', color: 'rgba(255,255,255,0.18)' }}>
+                  <div style={{ fontSize: t.fontSize.xs, marginTop: '6px', color: 'rgba(255,255,255,0.18)' }}>
                     CSI · POD · FAR · FSS charts will appear here
                   </div>
                 </div>
@@ -1144,7 +1150,7 @@ export function ComparisonTab({
                 alignItems: 'flex-start',
                 gap: '12px',
                 color: 'rgba(255,255,255,0.35)',
-                fontSize: '13px',
+                fontSize: t.fontSize.base,
                 lineHeight: 1.6,
               }}>
                 <span style={{ lineHeight: 1, display: 'inline-flex' }}><MapPin size={18} /></span>
@@ -1165,7 +1171,7 @@ export function ComparisonTab({
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginBottom: '16px' }}>
                   {/* Region badge */}
                   <span style={{
-                    fontSize: '11px', fontWeight: '600', padding: '4px 12px', borderRadius: '20px',
+                    fontSize: t.fontSize.xs, fontWeight: '600', padding: '4px 12px', borderRadius: '20px',
                     background: 'rgba(230,126,34,0.12)', border: '1px solid rgba(230,126,34,0.3)',
                     color: '#e67e22',
                   }}>
@@ -1177,7 +1183,7 @@ export function ComparisonTab({
 
                   {/* Spatial hour input */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: '12px' }}>Hour</span>
+                    <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: t.fontSize.sm }}>Hour</span>
                     <input
                       type="number"
                       value={spatialHour}
@@ -1185,7 +1191,7 @@ export function ComparisonTab({
                       onChange={e => setSpatialHour(Math.max(0, Math.min(360, Number(e.target.value))))}
                       style={{ ...INPUT, width: '60px' }}
                     />
-                    <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: '12px' }}>h</span>
+                    <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.sm }}>h</span>
                   </div>
 
                   {/* Run button */}
@@ -1196,9 +1202,9 @@ export function ComparisonTab({
                       background: (!spatialLoading && selectedModels.length >= 2) ? '#e67e22' : 'rgba(255,255,255,0.08)',
                       color: (!spatialLoading && selectedModels.length >= 2) ? 'white' : 'rgba(255,255,255,0.25)',
                       border: 'none',
-                      borderRadius: '8px',
+                      borderRadius: t.radius,
                       padding: '7px 18px',
-                      fontSize: '13px',
+                      fontSize: t.fontSize.base,
                       fontWeight: '700',
                       cursor: (!spatialLoading && selectedModels.length >= 2) ? 'pointer' : 'not-allowed',
                       display: 'flex',
@@ -1221,7 +1227,7 @@ export function ComparisonTab({
                           border: '1px solid rgba(255,255,255,0.12)',
                           borderRadius: '7px',
                           color: 'rgba(255,255,255,0.7)',
-                          fontSize: '12px',
+                          fontSize: t.fontSize.sm,
                           padding: '5px 12px',
                           cursor: 'pointer',
                           display: 'flex',
@@ -1239,7 +1245,7 @@ export function ComparisonTab({
                           border: `1px solid ${spatialShareState === 'copied' ? 'rgba(46,204,113,0.4)' : 'rgba(255,255,255,0.12)'}`,
                           borderRadius: '7px',
                           color: spatialShareState === 'copied' ? '#2ecc71' : 'rgba(255,255,255,0.7)',
-                          fontSize: '12px',
+                          fontSize: t.fontSize.sm,
                           padding: '5px 12px',
                           cursor: 'pointer',
                           display: 'flex',
@@ -1262,10 +1268,10 @@ export function ComparisonTab({
                   <div style={{
                     background: 'rgba(231,76,60,0.08)',
                     border: '1px solid rgba(231,76,60,0.25)',
-                    borderRadius: '8px',
+                    borderRadius: t.radius,
                     padding: '12px 16px',
                     color: '#e74c3c',
-                    fontSize: '13px',
+                    fontSize: t.fontSize.base,
                   }}>
                     ⚠ {spatialData.error}
                   </div>
@@ -1301,10 +1307,10 @@ export function ComparisonTab({
                         { label: 'Lead time', value: `+${spatialData.hour}h` },
                       ].map(({ label, value }) => (
                         <div key={label} style={{ textAlign: 'center' }}>
-                          <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: '14px', fontWeight: '700' }}>
+                          <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: t.fontSize.md, fontWeight: '700' }}>
                             {value ?? '—'}
                           </div>
-                          <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: '10px', marginTop: '1px' }}>
+                          <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.micro, marginTop: '1px' }}>
                             {label}
                           </div>
                         </div>
@@ -1315,7 +1321,7 @@ export function ComparisonTab({
 
                 {/* Initial state — region selected but not yet run */}
                 {!spatialLoading && !spatialData && (
-                  <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '13px', padding: '16px 0', textAlign: 'center' }}>
+                  <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.base, padding: '16px 0', textAlign: 'center' }}>
                     Click <strong style={{ color: 'rgba(255,255,255,0.5)' }}>▶ Run Map</strong> to compute model disagreement for the selected region.
                   </div>
                 )}
