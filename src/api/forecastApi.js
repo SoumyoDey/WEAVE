@@ -10,8 +10,9 @@ export const fetchForecastData = async (modelName, variable, hour, member) => {
   const response = await fetch(`${BASE}/${endpoint}?${params}`);
   if (!response.ok) throw new Error(`API error: ${response.status}`);
   const data = await response.json();
-  if (!Array.isArray(data) || data.length === 0) throw new Error('No data returned');
-  return data;
+  // An empty array is a valid response (e.g. an out-of-range member/hour) —
+  // it's not an error, so callers can distinguish it from a thrown failure.
+  return Array.isArray(data) ? data : [];
 };
 
 /**

@@ -41,6 +41,7 @@ export function MetricPanel({
     <div style={{
       position: 'fixed', left: panelPos.x, top: panelPos.y,
       width: panelMinimized ? '260px' : '380px',
+      maxWidth: 'calc(100vw - 24px)',
       background: 'rgba(17,27,39,0.97)', color: 'white',
       borderRadius: '10px', boxShadow: '0 8px 32px rgba(0,0,0,0.55)',
       zIndex: 2000, border: '1px solid rgba(255,255,255,0.12)',

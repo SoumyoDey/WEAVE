@@ -245,11 +245,15 @@ export function AnalysisTab({
     setRegionRunning(false);
   };
 
+  // Mirrors the 5-tier SSR scale used by the backend's map legend
+  // (flask_api.py PLOT_STYLE_REGISTRY['ssr']) so every SSR view agrees.
   const ssrBarColor = (ssr) => {
     if (ssr === null) return '#555';
-    if (ssr >= 0.8 && ssr <= 1.2) return '#2ecc71';
+    if (ssr < 0.5) return '#c00000';
     if (ssr < 0.8) return '#e74c3c';
-    return '#f39c12';
+    if (ssr <= 1.2) return '#27ae60';
+    if (ssr <= 2.0) return '#e67e22';
+    return '#3498db';
   };
 
   const yAxisUnit = selectedVariable === 'wind' ? 'm/s' : 'mm/hr';
@@ -454,9 +458,18 @@ export function AnalysisTab({
                   {!ssrLoading && ssrData && ssrData.n_cases > 0 && (() => {
                     const corrVal      = ssrData.correlation;
                     const corrColor    = corrVal === null ? '#aaa' : corrVal >= 0.7 ? '#2ecc71' : corrVal >= 0.4 ? '#f39c12' : '#e74c3c';
-                    const meanSSR      = ssrData.hours.filter(h => h.ssr !== null).reduce((a, h, _, arr) => a + h.ssr / arr.length, 0);
-                    const meanSSRColor = meanSSR >= 0.8 && meanSSR <= 1.2 ? '#2ecc71' : meanSSR < 0.8 ? '#e74c3c' : '#f39c12';
-                    const ssrInterpret = meanSSR >= 0.8 && meanSSR <= 1.2 ? 'Well calibrated' : meanSSR < 0.8 ? 'Overconfident (underdispersed)' : 'Underconfident (overdispersed)';
+                    const meanSSR = ssrData.hours.filter(h => h.ssr !== null).reduce((a, h, _, arr) => a + h.ssr / arr.length, 0);
+                    // Mirrors the 5-tier SSR scale used by the backend's map legend
+                    // (flask_api.py PLOT_STYLE_REGISTRY['ssr']) so the two views agree.
+                    const ssrTier = (
+                      meanSSR < 0.5 ? { label: 'Severely underdispersive', color: '#c00000' } :
+                      meanSSR < 0.8 ? { label: 'Overconfident (underdispersed)', color: '#e74c3c' } :
+                      meanSSR <= 1.2 ? { label: 'Well calibrated', color: '#27ae60' } :
+                      meanSSR <= 2.0 ? { label: 'Underconfident (overdispersed)', color: '#e67e22' } :
+                      { label: 'Severely overdispersive', color: '#3498db' }
+                    );
+                    const meanSSRColor = ssrTier.color;
+                    const ssrInterpret = ssrTier.label;
                     return (
                       <>
                         {/* Stat badges */}
@@ -480,9 +493,13 @@ export function AnalysisTab({
                           <span>
                             {meanSSR >= 0.8 && meanSSR <= 1.2
                               ? "The ensemble spread here looks about right — its uncertainty roughly matches its actual errors."
-                              : meanSSR < 0.8
-                                ? "The forecast looks overconfident here — the members agree more closely than the model's real errors would justify."
-                                : "The forecast looks underconfident here — the members disagree more than the model's real errors would justify."}
+                              : meanSSR < 0.5
+                                ? "The forecast looks severely overconfident here — the members agree far more closely than the model's real errors justify."
+                                : meanSSR < 0.8
+                                  ? "The forecast looks overconfident here — the members agree more closely than the model's real errors would justify."
+                                  : meanSSR <= 2.0
+                                    ? "The forecast looks underconfident here — the members disagree more than the model's real errors would justify."
+                                    : "The forecast looks severely underconfident here — the members disagree far more than the model's real errors justify."}
                           </span>
                         </div>
 
@@ -492,9 +509,11 @@ export function AnalysisTab({
                           <div style={{ flex: '1 1 340px', minWidth: 0 }}>
                             <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', marginBottom: '6px' }}>
                               Spread-Skill Ratio per Lead Time &nbsp;
-                              <span style={{ color: '#2ecc71' }}>■</span> calibrated &nbsp;
+                              <span style={{ color: '#c00000' }}>■</span> sev. underdisp. &nbsp;
                               <span style={{ color: '#e74c3c' }}>■</span> overconfident &nbsp;
-                              <span style={{ color: '#f39c12' }}>■</span> underconfident
+                              <span style={{ color: '#27ae60' }}>■</span> calibrated &nbsp;
+                              <span style={{ color: '#e67e22' }}>■</span> underconfident &nbsp;
+                              <span style={{ color: '#3498db' }}>■</span> sev. overdisp.
                             </div>
                             <ResponsiveContainer width="100%" height={220}>
                               <BarChart data={ssrData.hours} margin={{ top: 8, right: 20, left: 0, bottom: 20 }}>
@@ -1020,7 +1039,7 @@ export function AnalysisTab({
                       <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: '13px', fontWeight: '700', margin: 0, letterSpacing: '0.02em' }}>{group.label}</h3>
                       <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px' }}>{group.hint}</span>
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(420px, 1fr))', gap: '16px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(420px, 100%), 1fr))', gap: '16px' }}>
                       {group.keys.map(key => {
                         const st = spatialMaps[key];
                         const cfg = METRIC_CONFIG.find(m => m.key === key);
