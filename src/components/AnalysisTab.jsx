@@ -8,6 +8,7 @@ import { BarChart3, MapPin, Map as MapIcon } from 'lucide-react';
 import { fetchCategoricalMetrics, fetchRegionCategoricalMetrics } from '../api/analysisApi';
 import { fetchSpatialMetric, fetchSpatialMetricPlot } from '../api/spatialApi';
 import { METRIC_CONFIG } from '../constants';
+import { t } from '../theme';
 
 // ── Region metric definitions (defined outside component to avoid recreation) ──
 const REGION_METRICS = [
@@ -280,18 +281,18 @@ export function AnalysisTab({
       {/* ── Header with mode toggle ── */}
       <div style={{ padding: '12px 30px 10px', borderBottom: '1px solid rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
         <div>
-          <h2 style={{ color: 'white', margin: '0 0 3px 0', fontSize: '18px', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '8px' }}><BarChart3 size={18} />Forecast Analysis</h2>
-          <p style={{ color: 'rgba(255,255,255,0.4)', margin: 0, fontSize: '12px' }}>
+          <h2 style={{ color: 'white', margin: '0 0 3px 0', fontSize: t.fontSize.xl, fontWeight: '600', display: 'flex', alignItems: 'center', gap: '8px' }}><BarChart3 size={18} />Forecast Analysis</h2>
+          <p style={{ color: 'rgba(255,255,255,0.4)', margin: 0, fontSize: t.fontSize.sm }}>
             {analysisMode === 'point'
               ? (clickedPoint ? `Point: ${clickedPoint.lat}°N, ${clickedPoint.lon}°E — ${currentModel?.name} — ${selectedVariable}` : 'Click anywhere on the map to analyse a location')
               : (selectedRegion?.bounds ? `Region: ${selectedRegion.bounds.min_lat?.toFixed(1)}°–${selectedRegion.bounds.max_lat?.toFixed(1)}°N · ${selectedRegion.bounds.min_lon?.toFixed(1)}°–${selectedRegion.bounds.max_lon?.toFixed(1)}°E — ${currentModel?.name}` : 'Draw a region on the map to compute spatial metrics')}
           </p>
         </div>
         {/* Point / Region toggle */}
-        <div style={{ display: 'flex', borderRadius: '8px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.15)', flexShrink: 0 }}>
+        <div style={{ display: 'flex', borderRadius: t.radius, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.15)', flexShrink: 0 }}>
           {[{ id: 'point', icon: MapPin, label: 'Point' }, { id: 'region', icon: MapIcon, label: 'Region' }].map(({ id, icon: Icon, label }) => (
             <button key={id} onClick={() => setAnalysisMode(id)}
-              style={{ padding: '6px 18px', fontSize: '12px', fontWeight: '600', cursor: 'pointer', border: 'none', outline: 'none',
+              style={{ padding: '6px 18px', fontSize: t.fontSize.sm, fontWeight: '600', cursor: 'pointer', border: 'none', outline: 'none',
                 display: 'inline-flex', alignItems: 'center', gap: '6px',
                 background: analysisMode === id ? 'rgba(52,152,219,0.25)' : 'rgba(255,255,255,0.04)',
                 color:      analysisMode === id ? 'rgba(52,152,219,0.95)' : 'rgba(255,255,255,0.45)' }}>
@@ -311,8 +312,8 @@ export function AnalysisTab({
               <div style={{ height: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', color: 'rgba(255,255,255,0.25)' }}>
                 <div>
                   <div style={{ marginBottom: '16px', color: 'rgba(255,255,255,0.3)' }}><MapPin size={48} /></div>
-                  <p style={{ fontSize: '16px', margin: 0 }}>Click a point on the map</p>
-                  <p style={{ fontSize: '13px', margin: '8px 0 0 0' }}>Switch to Visualization tab, click anywhere, then come back here</p>
+                  <p style={{ fontSize: t.fontSize.lg, margin: 0 }}>Click a point on the map</p>
+                  <p style={{ fontSize: t.fontSize.base, margin: '8px 0 0 0' }}>Switch to Visualization tab, click anywhere, then come back here</p>
                 </div>
               </div>
             )}
@@ -322,14 +323,14 @@ export function AnalysisTab({
                 {/* ── Section 1: Cone of Uncertainty ── */}
                 <div style={{ marginBottom: '32px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '12px', flexWrap: 'wrap' }}>
-                    <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: '14px', fontWeight: '600', margin: 0, letterSpacing: '0.02em' }}>
+                    <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: t.fontSize.md, fontWeight: '600', margin: 0, letterSpacing: '0.02em' }}>
                       Cone of Uncertainty
                     </h3>
                     {/* Gaussian / Empirical toggle */}
-                    <div style={{ display: 'flex', borderRadius: '6px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.12)' }}>
+                    <div style={{ display: 'flex', borderRadius: t.radiusSm, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.12)' }}>
                       {[{ id: 'gaussian', label: 'Gaussian ±σ' }, { id: 'empirical', label: 'Empirical P10–P90' }].map(({ id, label }) => (
                         <button key={id} onClick={() => setConeMode(id)}
-                          style={{ padding: '4px 12px', fontSize: '11px', fontWeight: '600', cursor: 'pointer', border: 'none', outline: 'none',
+                          style={{ padding: '4px 12px', fontSize: t.fontSize.xs, fontWeight: '600', cursor: 'pointer', border: 'none', outline: 'none',
                             background: coneMode === id ? 'rgba(52,152,219,0.22)' : 'rgba(255,255,255,0.04)',
                             color:      coneMode === id ? 'rgba(52,152,219,0.95)' : 'rgba(255,255,255,0.4)' }}>
                           {label}
@@ -337,17 +338,17 @@ export function AnalysisTab({
                       ))}
                     </div>
                     {coneMode === 'gaussian' && selectedVariable === 'precipitation' && (
-                      <span style={{ fontSize: '11px', color: 'rgba(243,156,18,0.7)' }} title="Gaussian bands can go negative for skewed precipitation distributions">⚠ Gaussian bands may go negative for precip — try Empirical</span>
+                      <span style={{ fontSize: t.fontSize.xs, color: 'rgba(243,156,18,0.7)' }} title="Gaussian bands can go negative for skewed precipitation distributions">⚠ Gaussian bands may go negative for precip — try Empirical</span>
                     )}
                     {timeseriesData && (
                       <button onClick={() => downloadChartAsPng(coneChartRef, `WEAVE-cone-${currentModel?.name}.png`)}
-                        style={{ marginLeft: 'auto', fontSize: '13px', color: 'rgba(255,255,255,0.45)', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '5px', cursor: 'pointer', padding: '2px 8px' }}
+                        style={{ marginLeft: 'auto', fontSize: t.fontSize.base, color: 'rgba(255,255,255,0.45)', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '5px', cursor: 'pointer', padding: '2px 8px' }}
                         title="Download chart as PNG">⬇</button>
                     )}
                   </div>
 
                   {timeseriesLoading && (
-                    <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: '14px', padding: '40px 0' }}>⏳ Loading forecast data…</div>
+                    <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.md, padding: '40px 0' }}>⏳ Loading forecast data…</div>
                   )}
 
                   {!timeseriesLoading && timeseriesData && (
@@ -368,7 +369,7 @@ export function AnalysisTab({
                             {legendItems.map(({ color, label, solid }) => (
                               <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                 <div style={{ width: '24px', height: solid ? '3px' : '12px', background: color, borderRadius: '2px' }} />
-                                <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px' }}>{label}</span>
+                                <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: t.fontSize.sm }}>{label}</span>
                               </div>
                             ))}
                           </div>
@@ -396,7 +397,7 @@ export function AnalysisTab({
                             tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }}
                             label={{ value: selectedVariable === 'wind' ? 'Wind Speed (m/s)' : 'Precipitation (mm/hr)', angle: -90, position: 'insideLeft', fill: 'rgba(255,255,255,0.4)', fontSize: 12 }} />
                           <Tooltip
-                            contentStyle={{ background: '#1a2535', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: 'white', fontSize: '12px' }}
+                            contentStyle={{ background: '#1a2535', border: '1px solid rgba(255,255,255,0.15)', borderRadius: t.radius, color: 'white', fontSize: t.fontSize.sm }}
                             formatter={(value, name) => {
                               if (value == null) return null;
                               const labels = coneMode === 'gaussian'
@@ -427,32 +428,32 @@ export function AnalysisTab({
                   )}
 
                   {!timeseriesLoading && !timeseriesData && (
-                    <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '13px', padding: '20px 0' }}>No forecast data available for this location</div>
+                    <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.base, padding: '20px 0' }}>No forecast data available for this location</div>
                   )}
                 </div>
 
                 {/* ── Section 2: Spread-Skill Analysis ── */}
                 <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '24px' }}>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: '16px', marginBottom: '12px', flexWrap: 'wrap' }}>
-                    <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: '14px', fontWeight: '600', margin: 0, letterSpacing: '0.02em' }}>
+                    <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: t.fontSize.md, fontWeight: '600', margin: 0, letterSpacing: '0.02em' }}>
                       Spread-Skill Analysis
                     </h3>
-                    <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: '12px' }}>
+                    <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.sm }}>
                       {verifiedAgainst}{' · Lead times with obs shown'}
                     </span>
                     {ssrData && ssrData.n_cases > 0 && (
                       <button onClick={() => downloadChartAsPng(ssrChartRef, `WEAVE-ssr-${currentModel?.name}.png`)}
-                        style={{ marginLeft: 'auto', fontSize: '13px', color: 'rgba(255,255,255,0.45)', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '5px', cursor: 'pointer', padding: '2px 8px' }}
+                        style={{ marginLeft: 'auto', fontSize: t.fontSize.base, color: 'rgba(255,255,255,0.45)', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '5px', cursor: 'pointer', padding: '2px 8px' }}
                         title="Download chart as PNG">⬇</button>
                     )}
                   </div>
 
                   {ssrLoading && (
-                    <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: '14px', padding: '40px 0' }}>⏳ Loading spread-skill data…</div>
+                    <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.md, padding: '40px 0' }}>⏳ Loading spread-skill data…</div>
                   )}
 
                   {!ssrLoading && ssrData && ssrData.n_cases === 0 && (
-                    <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '13px', padding: '20px 0' }}>No overlapping observations found for this location and time window</div>
+                    <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.base, padding: '20px 0' }}>No overlapping observations found for this location and time window</div>
                   )}
 
                   {!ssrLoading && ssrData && ssrData.n_cases > 0 && (() => {
@@ -460,13 +461,15 @@ export function AnalysisTab({
                     const corrColor    = corrVal === null ? '#aaa' : corrVal >= 0.7 ? '#2ecc71' : corrVal >= 0.4 ? '#f39c12' : '#e74c3c';
                     const meanSSR = ssrData.hours.filter(h => h.ssr !== null).reduce((a, h, _, arr) => a + h.ssr / arr.length, 0);
                     // Mirrors the 5-tier SSR scale used by the backend's map legend
-                    // (flask_api.py PLOT_STYLE_REGISTRY['ssr']) so the two views agree.
+                    // (flask_api.py PLOT_STYLE_REGISTRY['ssr']) for colors/thresholds,
+                    // but uses plain confidence language (matching the readout sentence
+                    // below) instead of "-dispersive" jargon.
                     const ssrTier = (
-                      meanSSR < 0.5 ? { label: 'Severely underdispersive', color: '#c00000' } :
-                      meanSSR < 0.8 ? { label: 'Overconfident (underdispersed)', color: '#e74c3c' } :
+                      meanSSR < 0.5 ? { label: 'Severely overconfident', color: '#c00000' } :
+                      meanSSR < 0.8 ? { label: 'Overconfident', color: '#e74c3c' } :
                       meanSSR <= 1.2 ? { label: 'Well calibrated', color: '#27ae60' } :
-                      meanSSR <= 2.0 ? { label: 'Underconfident (overdispersed)', color: '#e67e22' } :
-                      { label: 'Severely overdispersive', color: '#3498db' }
+                      meanSSR <= 2.0 ? { label: 'Underconfident', color: '#e67e22' } :
+                      { label: 'Severely underconfident', color: '#3498db' }
                     );
                     const meanSSRColor = ssrTier.color;
                     const ssrInterpret = ssrTier.label;
@@ -480,16 +483,16 @@ export function AnalysisTab({
                             { label: 'Verified Hours',   value: ssrData.n_cases,    color: '#3498db',    hint: 'Lead times with matching observations' },
                           ].map(({ label, value, color, hint }) => (
                             <div key={label} style={{ background: 'rgba(255,255,255,0.06)', borderRadius: '10px', padding: '12px 18px', minWidth: '140px', borderLeft: `3px solid ${color}` }}>
-                              <div style={{ color, fontSize: '22px', fontWeight: '700', lineHeight: 1 }}>{value}</div>
-                              <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '12px', marginTop: '4px', fontWeight: '500' }}>{label}</div>
-                              <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: '11px', marginTop: '2px' }}>{hint}</div>
+                              <div style={{ color, fontSize: t.fontSize.stat, fontWeight: '700', lineHeight: 1 }}>{value}</div>
+                              <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: t.fontSize.sm, marginTop: '4px', fontWeight: '500' }}>{label}</div>
+                              <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.xs, marginTop: '2px' }}>{hint}</div>
                             </div>
                           ))}
                         </div>
 
                         {/* Plain-language readout */}
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', marginBottom: '20px', padding: '10px 14px', background: `${meanSSRColor}22`, border: `1px solid ${meanSSRColor}55`, borderRadius: '8px', fontSize: '13px', color: 'rgba(255,255,255,0.85)', lineHeight: 1.5 }}>
-                          <span style={{ fontSize: '15px', lineHeight: 1.2 }}>ℹ️</span>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', marginBottom: '20px', padding: '10px 14px', background: `${meanSSRColor}22`, border: `1px solid ${meanSSRColor}55`, borderRadius: t.radius, fontSize: t.fontSize.base, color: 'rgba(255,255,255,0.85)', lineHeight: 1.5 }}>
+                          <span style={{ fontSize: t.fontSize.lg, lineHeight: 1.2 }}>ℹ️</span>
                           <span>
                             {meanSSR >= 0.8 && meanSSR <= 1.2
                               ? "The ensemble spread here looks about right — its uncertainty roughly matches its actual errors."
@@ -507,13 +510,13 @@ export function AnalysisTab({
                         <div ref={ssrChartRef} style={{ display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
                           {/* Chart A: SSR per hour */}
                           <div style={{ flex: '1 1 340px', minWidth: 0 }}>
-                            <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', marginBottom: '6px' }}>
+                            <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, marginBottom: '6px' }}>
                               Spread-Skill Ratio per Lead Time &nbsp;
-                              <span style={{ color: '#c00000' }}>■</span> sev. underdisp. &nbsp;
+                              <span style={{ color: '#c00000' }}>■</span> sev. overconfident &nbsp;
                               <span style={{ color: '#e74c3c' }}>■</span> overconfident &nbsp;
                               <span style={{ color: '#27ae60' }}>■</span> calibrated &nbsp;
                               <span style={{ color: '#e67e22' }}>■</span> underconfident &nbsp;
-                              <span style={{ color: '#3498db' }}>■</span> sev. overdisp.
+                              <span style={{ color: '#3498db' }}>■</span> sev. underconfident
                             </div>
                             <ResponsiveContainer width="100%" height={220}>
                               <BarChart data={ssrData.hours} margin={{ top: 8, right: 20, left: 0, bottom: 20 }}>
@@ -521,7 +524,7 @@ export function AnalysisTab({
                                 <XAxis dataKey="hour" stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }} tickFormatter={h => `+${h}h`} label={{ value: 'Forecast Hour', position: 'insideBottom', offset: -10, fill: 'rgba(255,255,255,0.4)', fontSize: 11 }} />
                                 <YAxis stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }} label={{ value: 'SSR', angle: -90, position: 'insideLeft', fill: 'rgba(255,255,255,0.4)', fontSize: 11 }} />
                                 <Tooltip
-                                  contentStyle={{ background: '#1a2535', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: 'white', fontSize: '12px' }}
+                                  contentStyle={{ background: '#1a2535', border: '1px solid rgba(255,255,255,0.15)', borderRadius: t.radius, color: 'white', fontSize: t.fontSize.sm }}
                                   formatter={(value) => [value !== null ? Number(value).toFixed(3) : 'N/A (zero error)', 'SSR']}
                                   labelFormatter={h => `Forecast +${h}h — ${ssrData.hours.find(r => r.hour === h)?.n_members} members`} />
                                 <ReferenceLine y={1} stroke="rgba(255,255,255,0.5)" strokeDasharray="6 3" label={{ value: 'SSR=1', position: 'right', fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} />
@@ -536,12 +539,12 @@ export function AnalysisTab({
 
                           {/* Chart B: Spread vs |Error| */}
                           <div style={{ flex: '1 1 340px', minWidth: 0 }}>
-                            <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                            <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
                               <span>Ensemble Spread vs Absolute Error per Lead Time</span>
-                              <span style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}>
+                              <span style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: t.fontSize.xs }}>
                                 <span style={{ display: 'inline-block', width: '10px', height: '10px', background: '#3498db', borderRadius: '2px' }} />Spread (σ)
                               </span>
-                              <span style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}>
+                              <span style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: t.fontSize.xs }}>
                                 <span style={{ display: 'inline-block', width: '10px', height: '10px', background: '#e74c3c', borderRadius: '2px' }} />|Error|
                               </span>
                             </div>
@@ -551,7 +554,7 @@ export function AnalysisTab({
                                 <XAxis dataKey="hour" stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }} tickFormatter={h => `+${h}h`} label={{ value: 'Forecast Hour', position: 'insideBottom', offset: -12, fill: 'rgba(255,255,255,0.4)', fontSize: 11 }} />
                                 <YAxis stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }} label={{ value: yAxisUnit, angle: -90, position: 'insideLeft', fill: 'rgba(255,255,255,0.4)', fontSize: 11 }} />
                                 <Tooltip
-                                  contentStyle={{ background: '#1a2535', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: 'white', fontSize: '12px' }}
+                                  contentStyle={{ background: '#1a2535', border: '1px solid rgba(255,255,255,0.15)', borderRadius: t.radius, color: 'white', fontSize: t.fontSize.sm }}
                                   formatter={(value, name) => [Number(value).toFixed(4), name]}
                                   labelFormatter={h => {
                                     const r = ssrData.hours.find(x => x.hour === h);
@@ -568,29 +571,29 @@ export function AnalysisTab({
                   })()}
 
                   {!ssrLoading && !ssrData && (
-                    <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '13px', padding: '20px 0' }}>Spread-skill data unavailable</div>
+                    <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.base, padding: '20px 0' }}>Spread-skill data unavailable</div>
                   )}
                 </div>
 
                 {/* ── Section 3: Verification Metrics ── */}
                 <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '24px', marginTop: '32px' }}>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: '16px', marginBottom: '14px', flexWrap: 'wrap' }}>
-                    <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: '14px', fontWeight: '600', margin: 0, letterSpacing: '0.02em' }}>
+                    <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: t.fontSize.md, fontWeight: '600', margin: 0, letterSpacing: '0.02em' }}>
                       Verification metrics
                     </h3>
-                    <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: '12px' }}>
+                    <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.sm }}>
                       CSI · POD · FAR · FBI · Brier Score · Composite Confidence
                     </span>
                     {(catMode === 'point' ? catData : regCatData) && (
                       <button onClick={() => downloadChartAsPng(catChartRef, `WEAVE-verification-${currentModel?.name}.png`)}
-                        style={{ marginLeft: 'auto', fontSize: '13px', color: 'rgba(255,255,255,0.45)', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '5px', cursor: 'pointer', padding: '2px 8px' }}
+                        style={{ marginLeft: 'auto', fontSize: t.fontSize.base, color: 'rgba(255,255,255,0.45)', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '5px', cursor: 'pointer', padding: '2px 8px' }}
                         title="Download chart as PNG">⬇</button>
                     )}
                   </div>
 
                   {/* Non-precipitation warning */}
                   {selectedVariable !== 'precipitation' && (
-                    <div style={{ background: 'rgba(243,156,18,0.10)', border: '1px solid rgba(243,156,18,0.3)', borderRadius: '8px', padding: '8px 14px', marginBottom: '14px', color: '#f39c12', fontSize: '12px' }}>
+                    <div style={{ background: 'rgba(243,156,18,0.10)', border: '1px solid rgba(243,156,18,0.3)', borderRadius: t.radius, padding: '8px 14px', marginBottom: '14px', color: '#f39c12', fontSize: t.fontSize.sm }}>
                       ⚠️ Categorical metrics (CSI, POD, FAR, Brier) are defined for precipitation exceedance thresholds. Results for <strong>{selectedVariable}</strong> may be unreliable — switch the variable to <em>precipitation</em> for meaningful scores.
                     </div>
                   )}
@@ -599,13 +602,13 @@ export function AnalysisTab({
                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
 
                     {/* Point / Region mode toggle */}
-                    <div style={{ display: 'flex', borderRadius: '8px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.15)' }}>
+                    <div style={{ display: 'flex', borderRadius: t.radius, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.15)' }}>
                       {['point', 'region'].map(mode => (
                         <button
                           key={mode}
                           onClick={() => setCatMode(mode)}
                           style={{
-                            padding: '5px 14px', fontSize: '12px', fontWeight: '600', cursor: 'pointer',
+                            padding: '5px 14px', fontSize: t.fontSize.sm, fontWeight: '600', cursor: 'pointer',
                             background: catMode === mode ? 'rgba(52,152,219,0.25)' : 'rgba(255,255,255,0.04)',
                             color:  catMode === mode ? 'rgba(52,152,219,0.95)' : 'rgba(255,255,255,0.4)',
                             border: 'none', outline: 'none',
@@ -622,7 +625,7 @@ export function AnalysisTab({
                       const mn = b.minLat ?? b.min_lat, mx = b.maxLat ?? b.max_lat;
                       const mw = b.minLon ?? b.min_lon, me = b.maxLon ?? b.max_lon;
                       return (
-                        <span style={{ fontSize: '11px', color: 'rgba(52,152,219,0.8)', background: 'rgba(52,152,219,0.10)', padding: '3px 10px', borderRadius: '10px', border: '1px solid rgba(52,152,219,0.25)' }}>
+                        <span style={{ fontSize: t.fontSize.xs, color: 'rgba(52,152,219,0.8)', background: 'rgba(52,152,219,0.10)', padding: '3px 10px', borderRadius: '10px', border: '1px solid rgba(52,152,219,0.25)' }}>
                           {mn?.toFixed(1)}°–{mx?.toFixed(1)}°N · {mw?.toFixed(1)}°–{me?.toFixed(1)}°E
                         </span>
                       );
@@ -630,35 +633,35 @@ export function AnalysisTab({
 
                     {/* No-region warning */}
                     {catMode === 'region' && !selectedRegion?.bounds && (
-                      <span style={{ fontSize: '12px', color: 'rgba(243,156,18,0.8)' }}>
+                      <span style={{ fontSize: t.fontSize.sm, color: 'rgba(243,156,18,0.8)' }}>
                         ⚠️ Draw a region on the map first
                       </span>
                     )}
 
                     {/* Threshold */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', whiteSpace: 'nowrap' }} title="Separate from the Region spatial-maps threshold above">Threshold</span>
+                      <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }} title="Separate from the Region spatial-maps threshold above">Threshold</span>
                       <input
                         type="number" min="0" step={selectedVariable === 'wind' ? '1' : '1'} value={catThreshold}
                         onChange={e => setCatThreshold(e.target.value)}
-                        style={{ width: '72px', padding: '4px 8px', fontSize: '13px', fontWeight: '600', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'white', textAlign: 'right', outline: 'none' }}
+                        style={{ width: '72px', padding: '4px 8px', fontSize: t.fontSize.base, fontWeight: '600', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'right', outline: 'none' }}
                       />
-                      <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px' }}>
+                      <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.sm }}>
                         {selectedVariable === 'wind' ? 'm/s' : 'mm/6h'}
                       </span>
                     </div>
 
                     {/* Hour range */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', whiteSpace: 'nowrap' }}>Hours</span>
+                      <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }}>Hours</span>
                       <input type="number" min="0" step="6" value={catHourMin}
                         onChange={e => setCatHourMin(parseInt(e.target.value, 10) || 0)}
-                        style={{ width: '60px', padding: '4px 6px', fontSize: '12px', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'white', textAlign: 'center', outline: 'none' }} />
-                      <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px' }}>–</span>
+                        style={{ width: '60px', padding: '4px 6px', fontSize: t.fontSize.sm, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'center', outline: 'none' }} />
+                      <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.sm }}>–</span>
                       <input type="number" min="0" step="24" value={catHourMax}
                         onChange={e => setCatHourMax(parseInt(e.target.value, 10) || 240)}
-                        style={{ width: '60px', padding: '4px 6px', fontSize: '12px', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'white', textAlign: 'center', outline: 'none' }} />
-                      <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px' }}>h</span>
+                        style={{ width: '60px', padding: '4px 6px', fontSize: t.fontSize.sm, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'center', outline: 'none' }} />
+                      <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.sm }}>h</span>
                     </div>
 
                     {/* Run button */}
@@ -666,10 +669,10 @@ export function AnalysisTab({
                       onClick={catMode === 'point' ? handleRunCategorical : handleRunRegionCategorical}
                       disabled={catMode === 'point' ? (catLoading || !clickedPoint) : (regCatLoading || !selectedRegion?.bounds)}
                       style={{
-                        padding: '6px 16px', fontSize: '12px', fontWeight: '700',
+                        padding: '6px 16px', fontSize: t.fontSize.sm, fontWeight: '700',
                         cursor: (catMode === 'point' ? catLoading : regCatLoading) ? 'not-allowed' : 'pointer',
                         background: (catMode === 'point' ? catLoading : regCatLoading) ? 'rgba(52,152,219,0.08)' : 'rgba(52,152,219,0.18)',
-                        border: '1px solid rgba(52,152,219,0.45)', borderRadius: '8px',
+                        border: '1px solid rgba(52,152,219,0.45)', borderRadius: t.radius,
                         color: (catMode === 'point' ? catLoading : regCatLoading) ? 'rgba(52,152,219,0.45)' : 'rgba(52,152,219,0.95)',
                         display: 'flex', alignItems: 'center', gap: '6px',
                       }}
@@ -684,7 +687,7 @@ export function AnalysisTab({
                       const unit = ti.unit ?? (selectedVariable === 'wind' ? 'm/s' : 'mm/6h');
                       const rateLabel = ti.unit === 'm/s' ? '' : ` (≡ ${ti.threshold_rate?.toFixed(3) ?? '—'} mm/h)`;
                       return (
-                        <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>
+                        <span style={{ fontSize: t.fontSize.xs, color: 'rgba(255,255,255,0.3)' }}>
                           {currentModel.name} · &gt;{thr} {unit}{rateLabel}
                         </span>
                       );
@@ -694,7 +697,7 @@ export function AnalysisTab({
                       const thr = ti.threshold_ms ?? ti.threshold_mm_6h ?? catThreshold;
                       const unit = ti.unit ?? (selectedVariable === 'wind' ? 'm/s' : 'mm/6h');
                       return (
-                        <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>
+                        <span style={{ fontSize: t.fontSize.xs, color: 'rgba(255,255,255,0.3)' }}>
                           {currentModel.name} · &gt;{thr} {unit} · {regCatData.summary?.n_grid_pts ?? '?'} grid pts
                         </span>
                       );
@@ -703,14 +706,14 @@ export function AnalysisTab({
 
                   {/* Error banner */}
                   {(catMode === 'point' ? catError : regCatError) && (
-                    <div style={{ background: 'rgba(231,76,60,0.12)', border: '1px solid rgba(231,76,60,0.3)', borderRadius: '8px', padding: '10px 14px', marginBottom: '14px', color: '#e74c3c', fontSize: '12px' }}>
+                    <div style={{ background: 'rgba(231,76,60,0.12)', border: '1px solid rgba(231,76,60,0.3)', borderRadius: t.radius, padding: '10px 14px', marginBottom: '14px', color: '#e74c3c', fontSize: t.fontSize.sm }}>
                       ⚠️ {catMode === 'point' ? catError : regCatError}
                     </div>
                   )}
 
                   {/* Obs coverage warning banner */}
                   {(catMode === 'point' ? catData : regCatData)?.obs_warning && (
-                    <div style={{ background: 'rgba(243,156,18,0.10)', border: '1px solid rgba(243,156,18,0.3)', borderRadius: '8px', padding: '8px 14px', marginBottom: '16px', color: '#f39c12', fontSize: '12px', display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+                    <div style={{ background: 'rgba(243,156,18,0.10)', border: '1px solid rgba(243,156,18,0.3)', borderRadius: t.radius, padding: '8px 14px', marginBottom: '16px', color: '#f39c12', fontSize: t.fontSize.sm, display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
                       <span style={{ flexShrink: 0 }}>⚠️</span>
                       <span>{(catMode === 'point' ? catData : regCatData).obs_warning}</span>
                     </div>
@@ -719,7 +722,7 @@ export function AnalysisTab({
                   {/* Empty-hours result */}
                   {(catMode === 'point' ? (catHasRun && !catLoading && catData && catData.hours?.length === 0)
                                         : (regCatHasRun && !regCatLoading && regCatData && regCatData.hours?.length === 0)) && (
-                    <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '13px', padding: '16px 0' }}>
+                    <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.base, padding: '16px 0' }}>
                       No overlapping observations found for this location and time window. Try a different point or extend the hour range.
                     </div>
                   )}
@@ -763,11 +766,11 @@ export function AnalysisTab({
                         <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
                           {badges.map(({ key, label, hint, val }) => (
                             <div key={key} style={{ background: 'rgba(255,255,255,0.06)', borderRadius: '10px', padding: '12px 16px', minWidth: '100px', borderLeft: `3px solid ${metricColor(key, val)}` }}>
-                              <div style={{ color: metricColor(key, val), fontSize: '22px', fontWeight: '700', lineHeight: 1 }}>
+                              <div style={{ color: metricColor(key, val), fontSize: t.fontSize.stat, fontWeight: '700', lineHeight: 1 }}>
                                 {val != null ? val.toFixed(3) : 'N/A'}
                               </div>
-                              <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '12px', marginTop: '4px', fontWeight: '600' }}>{label}</div>
-                              <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '10px', marginTop: '2px' }}>{hint}</div>
+                              <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: t.fontSize.sm, marginTop: '4px', fontWeight: '600' }}>{label}</div>
+                              <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.micro, marginTop: '2px' }}>{hint}</div>
                             </div>
                           ))}
 
@@ -778,16 +781,16 @@ export function AnalysisTab({
                             borderLeft: `3px solid ${metricColor('cc', cc)}`,
                             borderTop: `1px solid ${metricColor('cc', cc)}33`,
                           }}>
-                            <div style={{ color: metricColor('cc', cc), fontSize: '24px', fontWeight: '800', lineHeight: 1 }}>
+                            <div style={{ color: metricColor('cc', cc), fontSize: t.fontSize.statLg, fontWeight: '800', lineHeight: 1 }}>
                               {cc != null ? cc.toFixed(3) : 'N/A'}
                             </div>
-                            <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: '12px', marginTop: '4px', fontWeight: '700' }}>Composite Confidence</div>
-                            <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: '10px', marginTop: '2px' }}>
+                            <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: t.fontSize.sm, marginTop: '4px', fontWeight: '700' }}>Composite Confidence</div>
+                            <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.micro, marginTop: '2px' }}>
                               {catMode === 'region' && fss != null
                                 ? '0.40×CSI + 0.30×FSS + 0.20×POD + 0.10×(1–FAR)'
                                 : '0.40×CSI + 0.20×POD + 0.10×(1–FAR) ÷ 0.70'}
                             </div>
-                            {catMode === 'point' && <div style={{ color: 'rgba(255,255,255,0.2)', fontSize: '10px', marginTop: '1px' }}>FSS = N/A (spatial-only)</div>}
+                            {catMode === 'point' && <div style={{ color: 'rgba(255,255,255,0.2)', fontSize: t.fontSize.micro, marginTop: '1px' }}>FSS = N/A (spatial-only)</div>}
                           </div>
                         </div>
 
@@ -799,14 +802,14 @@ export function AnalysisTab({
                             { label: 'False Alarms',val: s.false_alarms, color: '#f39c12' },
                             { label: 'Correct Neg.',val: s.correct_neg,  color: '#3498db' },
                           ].map(({ label, val, color }) => (
-                            <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '5px', background: 'rgba(255,255,255,0.04)', borderRadius: '6px', padding: '5px 10px', border: `1px solid ${color}33` }}>
-                              <span style={{ color, fontWeight: '700', fontSize: '13px' }}>{val}</span>
-                              <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: '11px' }}>{label}</span>
+                            <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '5px', background: 'rgba(255,255,255,0.04)', borderRadius: t.radiusSm, padding: '5px 10px', border: `1px solid ${color}33` }}>
+                              <span style={{ color, fontWeight: '700', fontSize: t.fontSize.base }}>{val}</span>
+                              <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: t.fontSize.xs }}>{label}</span>
                             </div>
                           ))}
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '5px', background: 'rgba(255,255,255,0.04)', borderRadius: '6px', padding: '5px 10px', border: '1px solid rgba(255,255,255,0.1)' }}>
-                            <span style={{ color: 'rgba(255,255,255,0.6)', fontWeight: '700', fontSize: '13px' }}>{contingencyTotal}</span>
-                            <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: '11px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '5px', background: 'rgba(255,255,255,0.04)', borderRadius: t.radiusSm, padding: '5px 10px', border: '1px solid rgba(255,255,255,0.1)' }}>
+                            <span style={{ color: 'rgba(255,255,255,0.6)', fontWeight: '700', fontSize: t.fontSize.base }}>{contingencyTotal}</span>
+                            <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.xs }}>
                               Total {catMode === 'region' ? `(${(s.n_grid_pts ?? '?')} pts × hours)` : 'cases'}
                             </span>
                           </div>
@@ -816,7 +819,7 @@ export function AnalysisTab({
                         {catMode === 'point' && (
                           <>
                           <div ref={catChartRef}>
-                            <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+                            <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
                               <span>Event Probability per Lead Time (threshold &gt; {activeData.threshold_info?.threshold_ms ?? activeData.threshold_info?.threshold_mm_6h ?? catThreshold} {activeData.threshold_info?.unit ?? (selectedVariable === 'wind' ? 'm/s' : 'mm/6h')})</span>
                               <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ display: 'inline-block', width: '10px', height: '10px', background: 'rgba(52,152,219,0.6)', borderRadius: '2px' }} />P(event) — Gaussian</span>
                               <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ display: 'inline-block', width: '14px', height: '3px', background: '#2ecc71', borderRadius: '1px' }} />Observed event</span>
@@ -828,7 +831,7 @@ export function AnalysisTab({
                                 <XAxis dataKey="hour" stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }} tickFormatter={h => `+${h}h`} label={{ value: 'Forecast Hour', position: 'insideBottom', offset: -12, fill: 'rgba(255,255,255,0.4)', fontSize: 11 }} />
                                 <YAxis domain={[0, 1]} stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }} tickFormatter={v => `${(v * 100).toFixed(0)}%`} label={{ value: 'Probability', angle: -90, position: 'insideLeft', fill: 'rgba(255,255,255,0.4)', fontSize: 11 }} />
                                 <Tooltip
-                                  contentStyle={{ background: '#1a2535', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: 'white', fontSize: '12px' }}
+                                  contentStyle={{ background: '#1a2535', border: '1px solid rgba(255,255,255,0.15)', borderRadius: t.radius, color: 'white', fontSize: t.fontSize.sm }}
                                   formatter={(value, name) => {
                                     if (name === 'P(event)')   return [`${(value * 100).toFixed(1)}%`, 'P(event) Gaussian'];
                                     if (name === 'Obs event')  return [value === 1 ? 'Yes' : 'No', 'Observed event'];
@@ -862,7 +865,7 @@ export function AnalysisTab({
                             });
                             return (
                               <div style={{ marginTop: '18px' }}>
-                                <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+                                <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
                                   <span>Cumulative Skill Scores by Lead Time</span>
                                   <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ display: 'inline-block', width: '14px', height: '3px', background: '#3498db' }} />CSI</span>
                                   <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ display: 'inline-block', width: '14px', height: '3px', background: '#2ecc71' }} />POD</span>
@@ -874,7 +877,7 @@ export function AnalysisTab({
                                     <XAxis dataKey="hour" stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }} tickFormatter={h => `+${h}h`} label={{ value: 'Forecast Hour', position: 'insideBottom', offset: -12, fill: 'rgba(255,255,255,0.4)', fontSize: 11 }} />
                                     <YAxis domain={[0, 1]} stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }} label={{ value: 'Score', angle: -90, position: 'insideLeft', fill: 'rgba(255,255,255,0.4)', fontSize: 11 }} />
                                     <Tooltip
-                                      contentStyle={{ background: '#1a2535', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: 'white', fontSize: '12px' }}
+                                      contentStyle={{ background: '#1a2535', border: '1px solid rgba(255,255,255,0.15)', borderRadius: t.radius, color: 'white', fontSize: t.fontSize.sm }}
                                       formatter={(v, n) => [v != null ? v.toFixed(3) : 'N/A', n]}
                                       labelFormatter={h => `Cumulative through +${h}h`}
                                     />
@@ -896,7 +899,7 @@ export function AnalysisTab({
                             <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
                               {/* Chart A: Forecast vs Observed fraction per hour */}
                               <div style={{ flex: '1 1 300px', minWidth: 0 }}>
-                                <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                                <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                                   <span>Event Frequency per Lead Time</span>
                                   <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ display: 'inline-block', width: '10px', height: '10px', background: 'rgba(52,152,219,0.6)', borderRadius: '2px' }} />Fcst fraction</span>
                                   <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ display: 'inline-block', width: '10px', height: '10px', background: 'rgba(46,204,113,0.6)', borderRadius: '2px' }} />Obs fraction</span>
@@ -907,7 +910,7 @@ export function AnalysisTab({
                                     <XAxis dataKey="hour" stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} tickFormatter={h => `+${h}h`} label={{ value: 'Forecast Hour', position: 'insideBottom', offset: -12, fill: 'rgba(255,255,255,0.4)', fontSize: 10 }} />
                                     <YAxis domain={[0, 'auto']} stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} tickFormatter={v => `${(v * 100).toFixed(0)}%`} label={{ value: 'Grid-pt fraction', angle: -90, position: 'insideLeft', fill: 'rgba(255,255,255,0.4)', fontSize: 10 }} />
                                     <Tooltip
-                                      contentStyle={{ background: '#1a2535', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: 'white', fontSize: '12px' }}
+                                      contentStyle={{ background: '#1a2535', border: '1px solid rgba(255,255,255,0.15)', borderRadius: t.radius, color: 'white', fontSize: t.fontSize.sm }}
                                       formatter={(v, n) => [`${(v*100).toFixed(1)}%`, n]}
                                       labelFormatter={h => {
                                         const r = activeData.hours.find(x => x.hour === h);
@@ -922,7 +925,7 @@ export function AnalysisTab({
 
                               {/* Chart B: CSI and FSS per hour */}
                               <div style={{ flex: '1 1 300px', minWidth: 0 }}>
-                                <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '12px', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                                <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                                   <span>Skill Scores per Lead Time</span>
                                   <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ display: 'inline-block', width: '14px', height: '3px', background: '#3498db' }} />CSI</span>
                                   <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ display: 'inline-block', width: '14px', height: '3px', background: '#f39c12' }} />FSS</span>
@@ -934,7 +937,7 @@ export function AnalysisTab({
                                     <XAxis dataKey="hour" stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} tickFormatter={h => `+${h}h`} label={{ value: 'Forecast Hour', position: 'insideBottom', offset: -12, fill: 'rgba(255,255,255,0.4)', fontSize: 10 }} />
                                     <YAxis domain={[0, 1]} stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} label={{ value: 'Score', angle: -90, position: 'insideLeft', fill: 'rgba(255,255,255,0.4)', fontSize: 10 }} />
                                     <Tooltip
-                                      contentStyle={{ background: '#1a2535', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: 'white', fontSize: '12px' }}
+                                      contentStyle={{ background: '#1a2535', border: '1px solid rgba(255,255,255,0.15)', borderRadius: t.radius, color: 'white', fontSize: t.fontSize.sm }}
                                       formatter={(v, n) => [v != null ? Number(v).toFixed(3) : 'N/A', n]}
                                       labelFormatter={h => `+${h}h`}
                                     />
@@ -954,7 +957,7 @@ export function AnalysisTab({
 
                   {/* Pre-run placeholder */}
                   {(catMode === 'point' ? (!catHasRun && !catLoading) : (!regCatHasRun && !regCatLoading)) && (
-                    <div style={{ color: 'rgba(255,255,255,0.25)', fontSize: '13px', padding: '28px 0', textAlign: 'center' }}>
+                    <div style={{ color: 'rgba(255,255,255,0.25)', fontSize: t.fontSize.base, padding: '28px 0', textAlign: 'center' }}>
                       Set a threshold and click <strong style={{ color: 'rgba(52,152,219,0.6)' }}>▶ Run Metrics</strong> to generate verification scores
                     </div>
                   )}
@@ -964,7 +967,7 @@ export function AnalysisTab({
                 <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', padding: '14px 0 4px', display: 'flex', justifyContent: 'flex-end' }}>
                   <button
                     onClick={onCompare}
-                    style={{ background: 'rgba(52,152,219,0.12)', border: '1px solid rgba(52,152,219,0.3)', color: 'rgba(52,152,219,0.9)', fontSize: '12px', fontWeight: '600', padding: '6px 14px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+                    style={{ background: 'rgba(52,152,219,0.12)', border: '1px solid rgba(52,152,219,0.3)', color: 'rgba(52,152,219,0.9)', fontSize: t.fontSize.sm, fontWeight: '600', padding: '6px 14px', borderRadius: t.radius, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
                   >
                     Compare models at this point →
                   </button>
@@ -982,8 +985,8 @@ export function AnalysisTab({
               <div style={{ height: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', color: 'rgba(255,255,255,0.25)' }}>
                 <div>
                   <div style={{ marginBottom: '16px', color: 'rgba(255,255,255,0.3)' }}><MapIcon size={48} /></div>
-                  <p style={{ fontSize: '16px', margin: 0 }}>Draw a region on the map</p>
-                  <p style={{ fontSize: '13px', margin: '8px 0 0 0' }}>Use the rectangle or polygon selection tool in the Visualization tab</p>
+                  <p style={{ fontSize: t.fontSize.lg, margin: 0 }}>Draw a region on the map</p>
+                  <p style={{ fontSize: t.fontSize.base, margin: '8px 0 0 0' }}>Use the rectangle or polygon selection tool in the Visualization tab</p>
                 </div>
               </div>
             )}
@@ -994,34 +997,34 @@ export function AnalysisTab({
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px', flexWrap: 'wrap', background: 'rgba(255,255,255,0.04)', borderRadius: '10px', padding: '12px 16px', border: '1px solid rgba(255,255,255,0.08)' }}>
                   {/* Hour range */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '11px', whiteSpace: 'nowrap' }}>Hours</span>
+                    <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: t.fontSize.xs, whiteSpace: 'nowrap' }}>Hours</span>
                     <input type="number" min="0" step="6" value={regionHourMin}
                       onChange={e => setRegionHourMin(parseInt(e.target.value, 10) || 0)}
-                      style={{ width: '52px', padding: '4px 6px', fontSize: '12px', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'white', textAlign: 'center', outline: 'none' }} />
-                    <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px' }}>–</span>
+                      style={{ width: '52px', padding: '4px 6px', fontSize: t.fontSize.sm, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'center', outline: 'none' }} />
+                    <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.xs }}>–</span>
                     <input type="number" min="0" step="24" value={regionHourMax}
                       onChange={e => setRegionHourMax(parseInt(e.target.value, 10) || 168)}
-                      style={{ width: '52px', padding: '4px 6px', fontSize: '12px', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'white', textAlign: 'center', outline: 'none' }} />
-                    <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px' }}>h</span>
+                      style={{ width: '52px', padding: '4px 6px', fontSize: t.fontSize.sm, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'center', outline: 'none' }} />
+                    <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.xs }}>h</span>
                   </div>
 
                   {/* Threshold */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '11px', whiteSpace: 'nowrap' }} title="For spatial metric maps only. Verification Metrics below uses its own threshold setting.">Threshold (maps)</span>
+                    <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: t.fontSize.xs, whiteSpace: 'nowrap' }} title="For spatial metric maps only. Verification Metrics below uses its own threshold setting.">Threshold (maps)</span>
                     <input type="number" min="0" step="1" value={regionThreshold}
                       onChange={e => setRegionThreshold(parseFloat(e.target.value) || (selectedVariable === 'wind' ? 10 : 25))}
-                      style={{ width: '60px', padding: '4px 6px', fontSize: '12px', fontWeight: '600', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'white', textAlign: 'right', outline: 'none' }} />
-                    <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px' }}>
+                      style={{ width: '60px', padding: '4px 6px', fontSize: t.fontSize.sm, fontWeight: '600', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'right', outline: 'none' }} />
+                    <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.xs }}>
                       {selectedVariable === 'wind' ? 'm/s' : 'mm/6h'}
                     </span>
                   </div>
 
                   {/* Compute button */}
                   <button onClick={handleComputeAllMaps} disabled={regionRunning}
-                    style={{ padding: '7px 20px', fontSize: '12px', fontWeight: '700',
+                    style={{ padding: '7px 20px', fontSize: t.fontSize.sm, fontWeight: '700',
                       cursor: regionRunning ? 'not-allowed' : 'pointer',
                       background: regionRunning ? 'rgba(52,152,219,0.08)' : 'rgba(52,152,219,0.2)',
-                      border: '1px solid rgba(52,152,219,0.5)', borderRadius: '8px',
+                      border: '1px solid rgba(52,152,219,0.5)', borderRadius: t.radius,
                       color: regionRunning ? 'rgba(52,152,219,0.4)' : 'rgba(52,152,219,0.95)',
                       display: 'flex', alignItems: 'center', gap: '6px' }}>
                     {regionRunning ? '⏳ Computing…' : '▶ Compute All Maps'}
@@ -1036,8 +1039,8 @@ export function AnalysisTab({
                 ].map(group => (
                   <div key={group.id} style={{ marginBottom: '32px' }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: '12px', marginBottom: '14px' }}>
-                      <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: '13px', fontWeight: '700', margin: 0, letterSpacing: '0.02em' }}>{group.label}</h3>
-                      <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '11px' }}>{group.hint}</span>
+                      <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: t.fontSize.base, fontWeight: '700', margin: 0, letterSpacing: '0.02em' }}>{group.label}</h3>
+                      <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.xs }}>{group.hint}</span>
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(420px, 100%), 1fr))', gap: '16px' }}>
                       {group.keys.map(key => {
@@ -1047,18 +1050,18 @@ export function AnalysisTab({
                           <div key={key} style={{ background: 'rgba(255,255,255,0.04)', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.08)', overflow: 'hidden' }}>
                             {/* Card header */}
                             <div style={{ padding: '8px 12px', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                              <span style={{ fontSize: '12px', fontWeight: '600', color: 'rgba(255,255,255,0.75)' }}>{cfg?.label ?? key.toUpperCase()}</span>
+                              <span style={{ fontSize: t.fontSize.sm, fontWeight: '600', color: 'rgba(255,255,255,0.75)' }}>{cfg?.label ?? key.toUpperCase()}</span>
                               {st?.url && (
                                 <div style={{ display: 'flex', gap: '4px' }}>
                                   <button
                                     onClick={() => { const a = document.createElement('a'); a.href = st.url; a.download = `WEAVE-${currentModel?.name}-${key}.png`; a.click(); }}
-                                    style={{ fontSize: '13px', color: 'rgba(255,255,255,0.45)', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '5px', cursor: 'pointer', padding: '2px 7px', lineHeight: 1 }}
+                                    style={{ fontSize: t.fontSize.base, color: 'rgba(255,255,255,0.45)', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '5px', cursor: 'pointer', padding: '2px 7px', lineHeight: 1 }}
                                     title="Download as PNG"
                                   >⬇</button>
                                   <button
                                     onClick={() => shareMap(key, st.url)}
                                     style={{
-                                      fontSize: '13px', borderRadius: '5px', cursor: 'pointer', padding: '2px 7px', border: '1px solid rgba(255,255,255,0.12)', lineHeight: 1,
+                                      fontSize: t.fontSize.base, borderRadius: '5px', cursor: 'pointer', padding: '2px 7px', border: '1px solid rgba(255,255,255,0.12)', lineHeight: 1,
                                       ...(shareStates[key] === 'copied'
                                         ? { background: 'rgba(46,204,113,0.15)', borderColor: 'rgba(46,204,113,0.4)', color: '#2ecc71' }
                                         : { background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.45)' }),
@@ -1071,21 +1074,21 @@ export function AnalysisTab({
                             {/* Card body */}
                             <div style={{ minHeight: '200px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                               {!st && (
-                                <span style={{ color: 'rgba(255,255,255,0.2)', fontSize: '12px' }}>Click ▶ Compute All Maps</span>
+                                <span style={{ color: 'rgba(255,255,255,0.2)', fontSize: t.fontSize.sm }}>Click ▶ Compute All Maps</span>
                               )}
                               {st?.loading && (
-                                <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.4)', fontSize: '12px' }}>
-                                  <div style={{ fontSize: '24px', marginBottom: '8px' }}>⏳</div>Computing…
+                                <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.sm }}>
+                                  <div style={{ fontSize: t.fontSize.statLg, marginBottom: '8px' }}>⏳</div>Computing…
                                 </div>
                               )}
                               {st && !st.loading && st.error && (
-                                <div style={{ color: '#e74c3c', fontSize: '11px', padding: '16px', textAlign: 'center' }}>⚠️ {st.error}</div>
+                                <div style={{ color: '#e74c3c', fontSize: t.fontSize.xs, padding: '16px', textAlign: 'center' }}>⚠️ {st.error}</div>
                               )}
                               {st && !st.loading && !st.error && st.url && (
                                 <img src={st.url} alt={key} style={{ width: '100%', display: 'block' }} />
                               )}
                               {st && !st.loading && !st.error && !st.url && (
-                                <span style={{ color: 'rgba(255,255,255,0.25)', fontSize: '12px' }}>No data for this region</span>
+                                <span style={{ color: 'rgba(255,255,255,0.25)', fontSize: t.fontSize.sm }}>No data for this region</span>
                               )}
                             </div>
                           </div>
@@ -1102,7 +1105,7 @@ export function AnalysisTab({
               <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', padding: '14px 0 4px', display: 'flex', justifyContent: 'flex-end' }}>
                 <button
                   onClick={onCompare}
-                  style={{ background: 'rgba(52,152,219,0.12)', border: '1px solid rgba(52,152,219,0.3)', color: 'rgba(52,152,219,0.9)', fontSize: '12px', fontWeight: '600', padding: '6px 14px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+                  style={{ background: 'rgba(52,152,219,0.12)', border: '1px solid rgba(52,152,219,0.3)', color: 'rgba(52,152,219,0.9)', fontSize: t.fontSize.sm, fontWeight: '600', padding: '6px 14px', borderRadius: t.radius, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
                 >
                   Compare models for this region →
                 </button>

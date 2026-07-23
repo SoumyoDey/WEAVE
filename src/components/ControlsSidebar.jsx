@@ -67,9 +67,9 @@ export function ControlsSidebar({
         <SectionHeader icon={Database}>Data</SectionHeader>
         <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
           {Object.entries(models).map(([key, model]) => (
-            <button key={key} onClick={() => setSelectedModel(key)} title={`${model.ensembleCount} members`}
-              style={{ flex: 1, padding: '8px 4px', fontSize: '12px', fontWeight: '700', border: selectedModel === key ? `2px solid ${model.color}` : '2px solid rgba(255,255,255,0.08)', borderRadius: '8px', background: selectedModel === key ? `${model.color}22` : 'rgba(255,255,255,0.04)', color: selectedModel === key ? model.color : 'rgba(255,255,255,0.45)', cursor: 'pointer', transition: 'all 0.15s' }}>
-              {model.name}
+            <button key={key} onClick={() => setSelectedModel(key)}
+              style={{ flex: 1, padding: '8px 4px', fontSize: t.fontSize.sm, fontWeight: '700', border: selectedModel === key ? `2px solid ${model.color}` : '2px solid rgba(255,255,255,0.08)', borderRadius: t.radius, background: selectedModel === key ? `${model.color}22` : 'rgba(255,255,255,0.04)', color: selectedModel === key ? model.color : t.textMuted, cursor: 'pointer', transition: 'all 0.15s' }}>
+              {model.name}<Hint text={`${model.ensembleCount} ensemble members`} />
             </button>
           ))}
         </div>
@@ -78,7 +78,7 @@ export function ControlsSidebar({
             const active = selectedVariable === val;
             return (
               <button key={val} onClick={() => setSelectedVariable(val)}
-                style={{ flex: 1, padding: '8px', fontSize: '12px', fontWeight: '600', border: active ? '1.5px solid rgba(52,152,219,0.7)' : '1.5px solid rgba(255,255,255,0.07)', borderRadius: '8px', background: active ? 'rgba(52,152,219,0.14)' : 'rgba(255,255,255,0.03)', color: active ? '#7ec8f7' : 'rgba(255,255,255,0.55)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                style={{ flex: 1, padding: '8px', fontSize: t.fontSize.sm, fontWeight: '600', border: active ? '1.5px solid rgba(52,152,219,0.7)' : '1.5px solid rgba(255,255,255,0.07)', borderRadius: t.radius, background: active ? 'rgba(52,152,219,0.14)' : 'rgba(255,255,255,0.03)', color: active ? '#7ec8f7' : 'rgba(255,255,255,0.55)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
                 <Icon size={14} />{label}
               </button>
             );
@@ -97,7 +97,7 @@ export function ControlsSidebar({
               {getMemberOptions().map(opt => <SelectOption key={opt.value} value={opt.value}>{opt.label}</SelectOption>)}
             </Select>
             {uncertaintyMode !== null && (
-              <div style={{ fontSize: '10.5px', color: 'rgba(255,255,255,0.35)', marginBottom: '18px', lineHeight: 1.4 }}>
+              <div style={{ fontSize: t.fontSize.xs, color: 'rgba(255,255,255,0.35)', marginBottom: '18px', lineHeight: 1.4 }}>
                 Uncertainty views always use the ensemble mean/spread.
               </div>
             )}
@@ -118,9 +118,9 @@ export function ControlsSidebar({
             const active = uncertaintyMode === mode;
             return (
               <button key={String(mode)} onClick={() => setUncertaintyMode(mode)}
-                style={{ border: active ? '1.5px solid rgba(58,160,255,0.7)' : '0.5px solid rgba(255,255,255,0.1)', background: active ? 'rgba(58,160,255,0.12)' : 'rgba(255,255,255,0.03)', borderRadius: '8px', padding: '6px 4px 5px', cursor: 'pointer', textAlign: 'center' }}>
+                style={{ border: active ? '1.5px solid rgba(58,160,255,0.7)' : '0.5px solid rgba(255,255,255,0.1)', background: active ? 'rgba(58,160,255,0.12)' : 'rgba(255,255,255,0.03)', borderRadius: t.radius, padding: '6px 4px 5px', cursor: 'pointer', textAlign: 'center' }}>
                 <Thumb mode={mode} />
-                <div style={{ fontSize: '11px', color: active ? '#cfe8fb' : 'rgba(255,255,255,0.75)' }}>{label}</div>
+                <div style={{ fontSize: t.fontSize.xs, color: active ? '#cfe8fb' : 'rgba(255,255,255,0.75)' }}>{label}</div>
               </button>
             );
           })}
@@ -128,7 +128,7 @@ export function ControlsSidebar({
 
         {/* ── Advanced (progressive disclosure) ── */}
         <button onClick={() => setShowAdvanced(v => !v)}
-          style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'none', borderTop: '0.5px solid rgba(255,255,255,0.08)', borderLeft: 'none', borderRight: 'none', borderBottom: 'none', padding: '11px 0 0', color: 'rgba(255,255,255,0.6)', fontSize: '12px', cursor: 'pointer' }}>
+          style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'none', borderTop: '0.5px solid rgba(255,255,255,0.08)', borderLeft: 'none', borderRight: 'none', borderBottom: 'none', padding: '11px 0 0', color: 'rgba(255,255,255,0.6)', fontSize: t.fontSize.sm, cursor: 'pointer' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}><SlidersHorizontal size={13} />Advanced</span>
           {showAdvanced ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
         </button>
@@ -136,33 +136,33 @@ export function ControlsSidebar({
         {showAdvanced && (
           <div style={{ paddingTop: '12px' }}>
             <div style={rowStyle}>
-              <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.7)' }}>Flip colours<Hint text="Reverse the colour scale — e.g. so heavy rain reads dark instead of light." /></span>
+              <span style={{ fontSize: t.fontSize.sm, color: 'rgba(255,255,255,0.7)' }}>Flip colours<Hint text="Reverse the colour scale — e.g. so heavy rain reads dark instead of light." /></span>
               <Toggle on={flipColormap} onChange={setFlipColormap} label="Flip colours" />
             </div>
 
             <div style={{ marginBottom: '10px' }}>
               <div style={{ ...rowStyle, marginBottom: '4px' }}>
-                <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.7)' }}>Grid opacity<Hint text="How see-through the overlay is, so the map underneath shows through." /></span>
-                <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.45)' }}>{(gridOpacity ?? 1).toFixed(1)}</span>
+                <span style={{ fontSize: t.fontSize.sm, color: 'rgba(255,255,255,0.7)' }}>Grid opacity<Hint text="How see-through the overlay is, so the map underneath shows through." /></span>
+                <span style={{ fontSize: t.fontSize.sm, color: 'rgba(255,255,255,0.45)' }}>{(gridOpacity ?? 1).toFixed(1)}</span>
               </div>
               <input type="range" min="0" max="1" step="0.05" value={gridOpacity ?? 1} onChange={e => setGridOpacity(parseFloat(e.target.value))} style={{ width: '100%', accentColor: '#3498db', cursor: 'pointer' }} />
             </div>
 
             <div style={rowStyle}>
               <div>
-                <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.7)' }}>Number of buckets<Hint text="Group values into this many discrete colour/size steps. 0 = smooth, continuous shading." /></span>
-                <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)' }}>0 = continuous</div>
+                <span style={{ fontSize: t.fontSize.sm, color: 'rgba(255,255,255,0.7)' }}>Number of buckets<Hint text="Group values into this many discrete colour/size steps. 0 = smooth, continuous shading." /></span>
+                <div style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.3)' }}>0 = continuous</div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <IconButton label="Decrease number of buckets" size={24} onClick={() => setNumBuckets(v => Math.max(0, v - 1))} style={{ boxShadow: 'none', borderRadius: '4px', fontSize: '16px' }}>−</IconButton>
-                <span style={{ fontSize: '13px', minWidth: '22px', textAlign: 'center', fontWeight: '600' }}>{numBuckets ?? 0}</span>
-                <IconButton label="Increase number of buckets" size={24} onClick={() => setNumBuckets(v => Math.min(20, v + 1))} style={{ boxShadow: 'none', borderRadius: '4px', fontSize: '16px' }}>+</IconButton>
+                <IconButton label="Decrease number of buckets" size={24} onClick={() => setNumBuckets(v => Math.max(0, v - 1))} style={{ boxShadow: 'none', borderRadius: '4px', fontSize: t.fontSize.lg }}>−</IconButton>
+                <span style={{ fontSize: t.fontSize.base, minWidth: '22px', textAlign: 'center', fontWeight: '600' }}>{numBuckets ?? 0}</span>
+                <IconButton label="Increase number of buckets" size={24} onClick={() => setNumBuckets(v => Math.min(20, v + 1))} style={{ boxShadow: 'none', borderRadius: '4px', fontSize: t.fontSize.lg }}>+</IconButton>
               </div>
             </div>
 
             {uncertaintyMode !== null && (
               <div style={rowStyle}>
-                <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.7)' }}>Invert uncertainty<Hint text="Whether high uncertainty is shown muted (off) or vivid (on)." /></span>
+                <span style={{ fontSize: t.fontSize.sm, color: 'rgba(255,255,255,0.7)' }}>Invert uncertainty<Hint text="Whether high uncertainty is shown muted (off) or vivid (on)." /></span>
                 <Toggle on={invertUncertainty} onChange={setInvertUncertainty} color={t.warn} label="Invert uncertainty" />
               </div>
             )}
@@ -174,7 +174,7 @@ export function ControlsSidebar({
                   {['Lines', 'Squares'].map(s => {
                     const active = textureStyle === s;
                     return (
-                      <button key={s} onClick={() => setTextureStyle(s)} style={{ flex: 1, padding: '8px', fontSize: '12px', fontWeight: '600', border: active ? '1.5px solid rgba(52,152,219,0.8)' : '1.5px solid rgba(255,255,255,0.1)', borderRadius: '7px', background: active ? 'rgba(52,152,219,0.18)' : 'rgba(255,255,255,0.04)', color: active ? '#7ec8f7' : 'rgba(255,255,255,0.5)', cursor: 'pointer', display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: '3px' }}>
+                      <button key={s} onClick={() => setTextureStyle(s)} style={{ flex: 1, padding: '8px', fontSize: t.fontSize.sm, fontWeight: '600', border: active ? '1.5px solid rgba(52,152,219,0.8)' : '1.5px solid rgba(255,255,255,0.1)', borderRadius: '7px', background: active ? 'rgba(52,152,219,0.18)' : 'rgba(255,255,255,0.04)', color: active ? '#7ec8f7' : 'rgba(255,255,255,0.5)', cursor: 'pointer', display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: '3px' }}>
                         {s === 'Lines' ? <AlignJustify size={16} /> : <LayoutGrid size={16} />}{s}
                       </button>
                     );
@@ -191,7 +191,7 @@ export function ControlsSidebar({
                     { key: 'arrows', state: showWindArrows, setter: () => { setShowWindArrows(v => !v); if (showWindLines) setShowWindLines(false); }, icon: Navigation, label: 'Arrows' },
                     { key: 'streamlines', state: showWindLines, setter: () => { setShowWindLines(v => !v); if (showWindArrows) setShowWindArrows(false); }, icon: Waves, label: 'Streamlines' },
                   ].map(({ key, state, setter, icon: Icon, label }) => (
-                    <button key={key} onClick={setter} style={{ flex: 1, padding: '8px 6px', fontSize: '12px', fontWeight: '600', border: state ? '1.5px solid rgba(52,152,219,0.8)' : '1.5px solid rgba(255,255,255,0.1)', borderRadius: '7px', background: state ? 'rgba(52,152,219,0.18)' : 'rgba(255,255,255,0.04)', color: state ? '#7ec8f7' : 'rgba(255,255,255,0.5)', cursor: 'pointer', display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
+                    <button key={key} onClick={setter} style={{ flex: 1, padding: '8px 6px', fontSize: t.fontSize.sm, fontWeight: '600', border: state ? '1.5px solid rgba(52,152,219,0.8)' : '1.5px solid rgba(255,255,255,0.1)', borderRadius: '7px', background: state ? 'rgba(52,152,219,0.18)' : 'rgba(255,255,255,0.04)', color: state ? '#7ec8f7' : 'rgba(255,255,255,0.5)', cursor: 'pointer', display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
                       <Icon size={15} />{label}
                     </button>
                   ))}
@@ -202,13 +202,13 @@ export function ControlsSidebar({
         )}
 
         {loading && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px', background: 'rgba(241,196,15,0.1)', border: '1px solid rgba(241,196,15,0.25)', borderRadius: '8px', marginTop: '14px' }}>
-            <Loader size={14} style={{ color: '#f1c40f' }} /><span style={{ fontSize: '12px', color: '#f1c40f' }}>Loading forecast data…</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px', background: 'rgba(241,196,15,0.1)', border: '1px solid rgba(241,196,15,0.25)', borderRadius: t.radius, marginTop: '14px' }}>
+            <Loader size={14} style={{ color: '#f1c40f' }} /><span style={{ fontSize: t.fontSize.sm, color: '#f1c40f' }}>Loading forecast data…</span>
           </div>
         )}
         {error && (
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', padding: '10px 12px', background: 'rgba(231,76,60,0.1)', border: '1px solid rgba(231,76,60,0.25)', borderRadius: '8px', marginTop: '14px' }}>
-            <AlertTriangle size={14} style={{ color: '#e74c3c', flexShrink: 0 }} /><span style={{ fontSize: '12px', color: '#e74c3c', lineHeight: 1.4 }}>{error}</span>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', padding: '10px 12px', background: 'rgba(231,76,60,0.1)', border: '1px solid rgba(231,76,60,0.25)', borderRadius: t.radius, marginTop: '14px' }}>
+            <AlertTriangle size={14} style={{ color: '#e74c3c', flexShrink: 0 }} /><span style={{ fontSize: t.fontSize.sm, color: '#e74c3c', lineHeight: 1.4 }}>{error}</span>
           </div>
         )}
       </div>
