@@ -580,11 +580,17 @@ function App() {
           currentModel={currentModel}
           selectedHour={selectedHour} setSelectedHour={setSelectedHour}
           selectedVariable={selectedVariable}
+          isNarrow={isNarrow}
         />
 
         {/* Legends */}
         {showData && (
-          <div style={{ position: 'absolute', bottom: '72px', right: '20px', display: 'flex', flexDirection: 'column', gap: '10px', zIndex: 500, alignItems: 'flex-end' }}>
+          <div style={{
+            position: 'absolute', bottom: isNarrow ? '100px' : '72px', right: isNarrow ? '10px' : '20px',
+            display: 'flex', flexDirection: 'column', gap: '10px', zIndex: 500, alignItems: 'flex-end',
+            transform: isNarrow ? 'scale(0.8)' : 'none', transformOrigin: 'bottom right',
+            maxHeight: isNarrow ? '60vh' : 'none', overflowY: isNarrow ? 'auto' : 'visible',
+          }}>
             {showBivariate && (
               <BivariateLegend
                 bivariateRanges={bivariateRanges}
