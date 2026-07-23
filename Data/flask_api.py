@@ -745,7 +745,10 @@ def get_forecast_data():
     variable_name = request.args.get('variable', 'precipitation')
     if _bad_token(model_name, variable_name):
         return jsonify({'error': 'Invalid model or variable'}), 400
-    forecast_hour = int(request.args.get('hour', 6))
+    try:
+        forecast_hour = int(request.args.get('hour', 6))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'hour must be numeric'}), 400
     member        = request.args.get('member', 'mean')
 
     if variable_name == 'wind':
@@ -815,7 +818,10 @@ def get_wind_data():
     model_name    = request.args.get('model', 'AIFS')
     if _bad_token(model_name):
         return jsonify({'error': 'Invalid model'}), 400
-    forecast_hour = int(request.args.get('hour', 6))
+    try:
+        forecast_hour = int(request.args.get('hour', 6))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'hour must be numeric'}), 400
     member        = request.args.get('member', 'mean')
 
     conn   = get_db_connection()
@@ -1367,8 +1373,10 @@ def spatial_metric_plot():
           "points":   [{"lat": ..., "lon": ..., "value": ...}, ...]
         }
     """
+    body = request.get_json(force=True)
+    if not isinstance(body, dict):
+        return jsonify({'error': 'Request body must be a JSON object'}), 400
     try:
-        body     = request.get_json(force=True)
         metric   = body.get('metric',   'ssr')
         model    = body.get('model',    'AIFS')
         variable = body.get('variable', 'precipitation')
@@ -1599,12 +1607,19 @@ def compare_timeseries():
         { "AIFS": [{"hour": 6, "mean": 1.234, "std": 0.456}, ...], ... }
     """
     body     = request.get_json(force=True)
+    if not isinstance(body, dict):
+        return jsonify({'error': 'Request body must be a JSON object'}), 400
     models   = body.get('models', [])
-    lat      = float(body.get('lat', 35.0))
-    lon      = float(body.get('lon', -75.0))
-    hour_min = int(body.get('hour_min', 0))
-    hour_max = int(body.get('hour_max', 168))
     variable = body.get('variable', 'precipitation')
+    if _bad_token(*models, variable):
+        return jsonify({'error': 'Invalid model or variable'}), 400
+    try:
+        lat      = float(body.get('lat', 35.0))
+        lon      = float(body.get('lon', -75.0))
+        hour_min = int(body.get('hour_min', 0))
+        hour_max = int(body.get('hour_max', 168))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'lat, lon, hour_min, hour_max must be numeric'}), 400
 
     # Map 'wind' shorthand to the u-component stored in regridded_forecast
     var_name = 'wind_u_10m' if variable == 'wind' else variable
@@ -1665,12 +1680,19 @@ def compare_skill():
         { models, lat, lon, hour_min, hour_max, variable }
     """
     body     = request.get_json(force=True)
+    if not isinstance(body, dict):
+        return jsonify({'error': 'Request body must be a JSON object'}), 400
     models   = body.get('models', [])
-    lat      = float(body.get('lat', 35.0))
-    lon      = float(body.get('lon', -75.0))
-    hour_min = int(body.get('hour_min', 0))
-    hour_max = int(body.get('hour_max', 168))
     variable = body.get('variable', 'precipitation')
+    if _bad_token(*models, variable):
+        return jsonify({'error': 'Invalid model or variable'}), 400
+    try:
+        lat      = float(body.get('lat', 35.0))
+        lon      = float(body.get('lon', -75.0))
+        hour_min = int(body.get('hour_min', 0))
+        hour_max = int(body.get('hour_max', 168))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'lat, lon, hour_min, hour_max must be numeric'}), 400
 
     if variable == 'wind':
         fcst_var = 'wind_u_10m'
@@ -1939,13 +1961,20 @@ def compare_spatial_agreement():
         { image: base64_png, hour, n_models, n_points }
     """
     body     = request.get_json(force=True)
+    if not isinstance(body, dict):
+        return jsonify({'error': 'Request body must be a JSON object'}), 400
     models   = body.get('models', [])
-    min_lat  = float(body.get('min_lat',  25))
-    max_lat  = float(body.get('max_lat',  45))
-    min_lon  = float(body.get('min_lon', -85))
-    max_lon  = float(body.get('max_lon', -65))
-    hour     = int(body.get('hour', 24))
     variable = body.get('variable', 'precipitation')
+    if _bad_token(*models, variable):
+        return jsonify({'error': 'Invalid model or variable'}), 400
+    try:
+        min_lat  = float(body.get('min_lat',  25))
+        max_lat  = float(body.get('max_lat',  45))
+        min_lon  = float(body.get('min_lon', -85))
+        max_lon  = float(body.get('max_lon', -65))
+        hour     = int(body.get('hour', 24))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'min_lat, max_lat, min_lon, max_lon, hour must be numeric'}), 400
 
     var_name = 'wind_u_10m' if variable == 'wind' else variable
 
@@ -2142,23 +2171,33 @@ def categorical_metrics_endpoint():
         { model, variable, lat, lon, threshold_mm_6h, hour_min, hour_max }
     """
     body              = request.get_json(force=True)
+    if not isinstance(body, dict):
+        return jsonify({'error': 'Request body must be a JSON object'}), 400
     model_name        = body.get('model',            'AIFS')
     variable          = body.get('variable',         'precipitation')
-    lat               = float(body.get('lat',         35.0))
-    lon               = float(body.get('lon',        -75.0))
-    hour_min          = int(body.get('hour_min',     0))
-    hour_max          = int(body.get('hour_max',     168))
+    if _bad_token(model_name, variable):
+        return jsonify({'error': 'Invalid model or variable'}), 400
+    try:
+        lat               = float(body.get('lat',         35.0))
+        lon               = float(body.get('lon',        -75.0))
+        hour_min          = int(body.get('hour_min',     0))
+        hour_max          = int(body.get('hour_max',     168))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'lat, lon, hour_min, hour_max must be numeric'}), 400
 
     is_wind = (variable == 'wind')
-    if is_wind:
-        fcst_var, obs_var, obs_src = 'wind_u_10m', 'wind_speed', 'ERA5_WIND'
-        # Wind speed is in m/s (instantaneous) — use threshold_ms directly.
-        threshold_rate = float(body.get('threshold_ms', 10.0))
-        accum_h        = 1
-    else:
-        fcst_var, obs_var, obs_src = variable, 'precipitation', 'GPM_IMERG_V07B'
-        threshold_rate = float(body.get('threshold_mm_6h', 25.0)) / 6.0
-        accum_h        = MODEL_ACCUM_HOURS.get(model_name, 1)
+    try:
+        if is_wind:
+            fcst_var, obs_var, obs_src = 'wind_u_10m', 'wind_speed', 'ERA5_WIND'
+            # Wind speed is in m/s (instantaneous) — use threshold_ms directly.
+            threshold_rate = float(body.get('threshold_ms', 10.0))
+            accum_h        = 1
+        else:
+            fcst_var, obs_var, obs_src = variable, 'precipitation', 'GPM_IMERG_V07B'
+            threshold_rate = float(body.get('threshold_mm_6h', 25.0)) / 6.0
+            accum_h        = MODEL_ACCUM_HOURS.get(model_name, 1)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'threshold must be numeric'}), 400
 
     conn   = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
@@ -2360,24 +2399,34 @@ def region_categorical_metrics_endpoint():
           threshold_mm_6h, hour_min, hour_max }
     """
     body            = request.get_json(force=True)
+    if not isinstance(body, dict):
+        return jsonify({'error': 'Request body must be a JSON object'}), 400
     model_name      = body.get('model', 'AIFS')
     variable        = body.get('variable', 'precipitation')
-    min_lat         = float(body.get('min_lat', 20.0))
-    max_lat         = float(body.get('max_lat', 40.0))
-    min_lon         = float(body.get('min_lon', -100.0))
-    max_lon         = float(body.get('max_lon', -60.0))
-    hour_min        = int(body.get('hour_min', 0))
-    hour_max        = int(body.get('hour_max', 168))
+    if _bad_token(model_name, variable):
+        return jsonify({'error': 'Invalid model or variable'}), 400
+    try:
+        min_lat         = float(body.get('min_lat', 20.0))
+        max_lat         = float(body.get('max_lat', 40.0))
+        min_lon         = float(body.get('min_lon', -100.0))
+        max_lon         = float(body.get('max_lon', -60.0))
+        hour_min        = int(body.get('hour_min', 0))
+        hour_max        = int(body.get('hour_max', 168))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'min_lat, max_lat, min_lon, max_lon, hour_min, hour_max must be numeric'}), 400
 
     is_wind = (variable == 'wind')
-    if is_wind:
-        fcst_var, obs_var, obs_src = 'wind_u_10m', 'wind_speed', 'ERA5_WIND'
-        threshold_rate = float(body.get('threshold_ms', 10.0))
-        accum_h        = 1
-    else:
-        fcst_var, obs_var, obs_src = variable, 'precipitation', 'GPM_IMERG_V07B'
-        threshold_rate = float(body.get('threshold_mm_6h', 25.0)) / 6.0
-        accum_h        = MODEL_ACCUM_HOURS.get(model_name, 1)
+    try:
+        if is_wind:
+            fcst_var, obs_var, obs_src = 'wind_u_10m', 'wind_speed', 'ERA5_WIND'
+            threshold_rate = float(body.get('threshold_ms', 10.0))
+            accum_h        = 1
+        else:
+            fcst_var, obs_var, obs_src = variable, 'precipitation', 'GPM_IMERG_V07B'
+            threshold_rate = float(body.get('threshold_mm_6h', 25.0)) / 6.0
+            accum_h        = MODEL_ACCUM_HOURS.get(model_name, 1)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'threshold must be numeric'}), 400
 
     conn   = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)

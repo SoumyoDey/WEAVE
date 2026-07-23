@@ -57,7 +57,6 @@ export function VSUPFanLegend({ bivariateRanges, selectedColormap, colormaps, se
     return { segs, colors };
   });
 
-  const title = selectedVariable === 'wind' ? 'WIND_SPEED' : 'PRECIPITATION';
   const varLabel = selectedVariable === 'wind' ? 'Wind Speed' : 'Precipitation';
   const unit     = selectedVariable === 'wind' ? 'm/s' : 'mm/hr';
 
@@ -108,7 +107,7 @@ export function VSUPFanLegend({ bivariateRanges, selectedColormap, colormaps, se
   return (
     <div style={cardStyle}>
       <div style={{ color: 'white', fontSize: '12px', fontWeight: 600, marginBottom: '8px' }}>
-        Fan — {title}
+        Fan — {varLabel}
       </div>
 
       <svg width="330" height="255" style={{ overflow: 'visible' }}>

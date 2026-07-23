@@ -22,6 +22,11 @@ export function BivariateLegend({ bivariateRanges, selectedColormap, selectedVar
 
   const colorMatrix = buildColorMatrix(selectedColormap, false, invertUncertainty, size, flipColormap);
 
+  // Thin out tick labels once cells get too narrow to fit a label each —
+  // otherwise adjacent labels visually overlap into illegible text (high bucket counts).
+  const maxXLabels = Math.max(2, Math.floor((cellSize * cols) / 24));
+  const xLabelStep = Math.max(1, Math.ceil((cols + 1) / maxXLabels));
+
   const cardStyle = {
     background: 'rgba(10,18,28,0.92)',
     border: '1px solid rgba(255,255,255,0.1)',
@@ -51,7 +56,7 @@ export function BivariateLegend({ bivariateRanges, selectedColormap, selectedVar
               textAlign: 'center',
             }}
           >
-            {tick}
+            {(i % xLabelStep === 0 || i === cols) ? tick : ''}
           </div>
         ))}
       </div>

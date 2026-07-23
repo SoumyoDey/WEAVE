@@ -85,9 +85,23 @@ export function ControlsSidebar({
           })}
         </div>
         {currentModel.hasEnsemble && (
-          <Select value={selectedMember} onChange={e => setSelectedMember(e.target.value)} style={{ marginBottom: '18px' }} aria-label="Ensemble member">
-            {getMemberOptions().map(opt => <SelectOption key={opt.value} value={opt.value}>{opt.label}</SelectOption>)}
-          </Select>
+          <>
+            <Select
+              value={uncertaintyMode !== null ? 'mean' : selectedMember}
+              onChange={e => setSelectedMember(e.target.value)}
+              disabled={uncertaintyMode !== null}
+              title={uncertaintyMode !== null ? 'Uncertainty views always use the ensemble mean/spread — switch to "None" to pick a single member.' : undefined}
+              style={{ marginBottom: uncertaintyMode !== null ? '4px' : '18px', opacity: uncertaintyMode !== null ? 0.55 : 1, cursor: uncertaintyMode !== null ? 'not-allowed' : 'pointer' }}
+              aria-label="Ensemble member"
+            >
+              {getMemberOptions().map(opt => <SelectOption key={opt.value} value={opt.value}>{opt.label}</SelectOption>)}
+            </Select>
+            {uncertaintyMode !== null && (
+              <div style={{ fontSize: '10.5px', color: 'rgba(255,255,255,0.35)', marginBottom: '18px', lineHeight: 1.4 }}>
+                Uncertainty views always use the ensemble mean/spread.
+              </div>
+            )}
+          </>
         )}
 
         {/* ── Display ── */}
