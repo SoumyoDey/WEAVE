@@ -1,0 +1,7 @@
+# Dev/test-only dependencies (not needed to run the API in production).
+#   pip install -r requirements.txt -r requirements-dev.txt
+#
+# Run the backend metric tests (no database required):
+#   cd Data && python -m pytest -q
+
+pytest>=8.0
