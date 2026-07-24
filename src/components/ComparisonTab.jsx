@@ -249,6 +249,7 @@ export function ComparisonTab({
   const [catData, setCatData] = useState(null);
   const [catLoading, setCatLoading] = useState(false);
   const [catError, setCatError] = useState('');
+  const [runError, setRunError] = useState('');   // surfaces compare fetch failures
   const catSeqRef = useRef(0);   // drops stale advanced-metric responses
 
   // Effects
@@ -293,6 +294,7 @@ export function ComparisonTab({
   const handleRun = async () => {
     if (!canRun) return;
     setHasRun(true);
+    setRunError('');
     setTsData(null);
     setSkillData(null);
     setTsLoading(true);
@@ -310,9 +312,16 @@ export function ComparisonTab({
       fetchComparisonSkill(params),
     ]);
     if (ts.status === 'fulfilled') setTsData(ts.value);
+    else console.error('compare/timeseries failed:', ts.reason);
     setTsLoading(false);
     if (skill.status === 'fulfilled') setSkillData(skill.value);
+    else console.error('compare/skill failed:', skill.reason);
     setSkillLoading(false);
+    // Surface the actual reason (not just a generic "unavailable") when a fetch
+    // fails outright — most useful when both fail (e.g. API down / CORS).
+    if (ts.status === 'rejected' && skill.status === 'rejected') {
+      setRunError(ts.reason?.message || skill.reason?.message || 'Comparison request failed. Check API connectivity.');
+    }
   };
 
   const handleRunCategorical = async () => {
@@ -487,6 +496,7 @@ export function ComparisonTab({
                   value={lat}
                   onChange={e => setLat(e.target.value)}
                   placeholder="e.g. 37.5"
+                  aria-label="Latitude"
                   style={INPUT}
                 />
               </div>
@@ -497,6 +507,7 @@ export function ComparisonTab({
                   value={lon}
                   onChange={e => setLon(e.target.value)}
                   placeholder="e.g. -122.4"
+                  aria-label="Longitude"
                   style={INPUT}
                 />
               </div>
@@ -574,11 +585,12 @@ export function ComparisonTab({
                   value={hourMin}
                   min={0} max={360}
                   onChange={e => handleHourMin(e.target.value)}
+                  aria-label="Minimum lead time (hours)"
                   style={{ ...INPUT, width: '64px' }}
                 />
                 <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.sm }}>h</span>
               </div>
-              <div style={{
+              <div aria-hidden="true" style={{
                 flex: 1, height: '3px', background: 'rgba(255,255,255,0.1)',
                 borderRadius: '2px', minWidth: '40px', maxWidth: '120px',
                 position: 'relative',
@@ -597,6 +609,7 @@ export function ComparisonTab({
                   value={hourMax}
                   min={0} max={360}
                   onChange={e => handleHourMax(e.target.value)}
+                  aria-label="Maximum lead time (hours)"
                   style={{ ...INPUT, width: '64px' }}
                 />
                 <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.sm }}>h</span>
@@ -634,6 +647,16 @@ export function ComparisonTab({
             </button>
           </div>
         </div>
+
+        {/* ── Fetch error banner ── */}
+        {runError && (
+          <div role="alert" style={{
+            ...CARD, borderLeft: '3px solid #e74c3c', color: '#e74c3c',
+            fontSize: t.fontSize.sm, marginBottom: '20px',
+          }}>
+            Couldn’t load the comparison: {runError}
+          </div>
+        )}
 
         {/* ── Empty state (before first run) ── */}
         {!hasRun && (

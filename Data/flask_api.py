@@ -139,7 +139,9 @@ import psycopg2.pool
 # concurrent requests).
 connection_pool = psycopg2.pool.ThreadedConnectionPool(
     int(os.environ.get('DB_POOL_MIN', 5)),
-    int(os.environ.get('DB_POOL_MAX', 30)),
+    # Default 20 so the DEPLOY.md worker math holds (workers × DB_POOL_MAX must
+    # stay under PostgreSQL max_connections; 4 × 20 = 80 < 100).
+    int(os.environ.get('DB_POOL_MAX', 20)),
     **DB_CONFIG
 )
 
@@ -1777,7 +1779,10 @@ def health_check():
             "total_forecast_points": count
         })
     except Exception as e:
-        return jsonify({"status": "unhealthy", "error": str(e)}), 500
+        # Log the detail server-side but don't leak the raw exception string
+        # (DB internals / connection strings) to the client.
+        print(f"❌ Health check failed: {e}")
+        return jsonify({"status": "unhealthy", "database": "unavailable"}), 500
     finally:
         cursor.close()
         return_db_connection(conn)

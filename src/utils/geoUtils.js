@@ -13,13 +13,3 @@ export const pointInPolygon = (lat, lon, polygon) => {
   }
   return inside;
 };
-
-/**
- * Converts a forecast lead-time hour to a short human-readable date string.
- * Base date: 2025-09-08 00:00 UTC
- */
-export const formatDate = (hour) => {
-  const baseDate     = new Date('2025-09-08T00:00:00');
-  const forecastDate = new Date(baseDate.getTime() + hour * 60 * 60 * 1000);
-  return `${forecastDate.toLocaleDateString('en-US', { weekday: 'short' })}, ${forecastDate.getMonth() + 1}/${forecastDate.getDate()}`;
-};

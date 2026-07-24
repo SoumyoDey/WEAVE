@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef, useEffect } from 'react';
 import { CloudRain, X } from 'lucide-react';
 
 /**
@@ -11,18 +11,44 @@ import { CloudRain, X } from 'lucide-react';
  *   currentModel   {object}
  */
 export function AboutModal({ onClose, stats, selectedVariable, currentModel, onReplayTour }) {
+  const dialogRef   = useRef(null);
+  const closeBtnRef = useRef(null);
+
+  // Move focus into the dialog on open and trap Tab within it (Escape is handled
+  // globally in App.js; the overlay click also closes).
+  useEffect(() => {
+    closeBtnRef.current?.focus();
+    const node = dialogRef.current;
+    const onKeyDown = (e) => {
+      if (e.key !== 'Tab' || !node) return;
+      const f = node.querySelectorAll('button, a[href], input, [tabindex]:not([tabindex="-1"])');
+      if (!f.length) return;
+      const first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
+    node?.addEventListener('keydown', onKeyDown);
+    return () => node?.removeEventListener('keydown', onKeyDown);
+  }, []);
+
   return (
     <div
       onClick={onClose}
       style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(102,126,234,0.98)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px', zIndex: 1500 }}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="About WEAVE"
         onClick={e => e.stopPropagation()}
         style={{ position: 'relative', maxWidth: '800px', width: '100%', background: 'rgba(255,255,255,0.98)', borderRadius: '16px', padding: '40px', boxShadow: '0 20px 60px rgba(0,0,0,0.4)', maxHeight: '80vh', overflowY: 'auto' }}
       >
         <button
+          ref={closeBtnRef}
           onClick={onClose}
           style={{ position: 'absolute', top: '16px', right: '16px', width: '32px', height: '32px', background: 'rgba(0,0,0,0.08)', border: 'none', borderRadius: '8px', cursor: 'pointer', color: '#555', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          aria-label="Close about dialog"
           title="Close"
         ><X size={18} /></button>
 
@@ -58,7 +84,7 @@ export function AboutModal({ onClose, stats, selectedVariable, currentModel, onR
             <h4 style={{ fontSize: '14px', marginBottom: '15px', color: '#9b59b6', marginTop: 0 }}>Current Data Statistics</h4>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
               {[
-                ['DATA POINTS', stats.total.toLocaleString(),                                          currentModel.color],
+                ['DATA POINTS', (stats.total ?? 0).toLocaleString(),                                    currentModel?.color ?? '#3498db'],
                 ['AVERAGE',     `${stats.average} ${selectedVariable === 'wind' ? 'm/s' : 'mm/hr'}`, '#3498db'],
                 ['MAXIMUM',     `${stats.max} ${selectedVariable === 'wind' ? 'm/s' : 'mm/hr'}`,     '#e74c3c'],
                 ['MINIMUM',     `${stats.min} ${selectedVariable === 'wind' ? 'm/s' : 'mm/hr'}`,     '#2ecc71'],
