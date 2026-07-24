@@ -58,6 +58,42 @@ export async function fetchComparisonSkill({ models, lat, lon, hourMin, hourMax,
 }
 
 /**
+ * Fetches per-model categorical skill (CSI/POD/FAR/FSS) over lead time,
+ * evaluated over a small neighbourhood around a point.
+ *
+ * @param {{ models: string[], lat: number, lon: number, hourMin: number, hourMax: number, variable: string, threshold: number, fssWindow: number }} params
+ * @returns {Promise<{ models: Object, threshold_info: Object, fss_window: number, bbox: number[] }>}
+ *   models is e.g. { AIFS: [{hour, csi, pod, far, fss, n_pts}], ... }
+ */
+export async function fetchComparisonCategorical({ models, lat, lon, hourMin, hourMax, variable, threshold, fssWindow }) {
+  const body = {
+    models,
+    lat,
+    lon,
+    hour_min: hourMin,
+    hour_max: hourMax,
+    variable,
+    fss_window: fssWindow,
+  };
+  // Threshold units differ by variable: m/s for wind, mm/6h for precipitation.
+  if (variable === 'wind') body.threshold_ms = threshold;
+  else                     body.threshold_mm_6h = threshold;
+
+  const response = await fetch(`${API_BASE}/compare/categorical`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error || `compare/categorical failed with status ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
  * Fetches a base64-encoded PNG map of inter-model disagreement for a bounding
  * box and a single forecast hour.
  *

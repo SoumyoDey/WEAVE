@@ -9,12 +9,13 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_forecast_data_run_var_latlon
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_observation_data_time_latlon
     ON observation_data(obs_time, latitude, longitude);
 
--- regridded_forecast: run_id is now used directly (correlated subquery removed)
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_regridded_forecast_run_var_hour
-    ON regridded_forecast(run_id, variable_name, forecast_hour);
+-- regridded_forecast: queried by model_name + variable_name + forecast_hour
+-- (this table has no run_id column; the latest run is resolved separately).
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_rgf_model_var_hour
+    ON regridded_forecast(model_name, variable_name, forecast_hour);
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_regridded_forecast_run_latlon
-    ON regridded_forecast(run_id, latitude, longitude);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_rgf_lat_lon
+    ON regridded_forecast(latitude, longitude);
 
 -- regridded_observation: time + spatial + source lookups
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_regridded_obs_src_time_latlon

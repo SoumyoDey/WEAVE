@@ -68,13 +68,69 @@ CREATE TABLE ensemble_statistics (
 CREATE INDEX idx_ensemble_stats_lat_lon ON ensemble_statistics(latitude, longitude);
 CREATE INDEX idx_ensemble_stats_run_var_hour ON ensemble_statistics(run_id, variable_id, forecast_hour);
 
--- 6. Insert initial model metadata
+-- 6. Point observations (sparse gauge/station obs) — used by SSR & correlation
+--    spatial metrics, joined to ensemble_statistics by rounded lat/lon.
+CREATE TABLE observation_data (
+    obs_id BIGSERIAL PRIMARY KEY,
+    obs_time TIMESTAMP NOT NULL,
+    latitude FLOAT NOT NULL,
+    longitude FLOAT NOT NULL,
+    precipitation FLOAT,
+    random_error FLOAT,
+    quality_index FLOAT,
+    source TEXT,
+    wind_u FLOAT,
+    wind_v FLOAT,
+    wind_speed FLOAT
+);
+
+CREATE INDEX idx_obs_lat_lon ON observation_data(latitude, longitude);
+CREATE INDEX idx_obs_time ON observation_data(obs_time);
+CREATE INDEX idx_obs_time_ll ON observation_data(obs_time, latitude, longitude);
+
+-- 7. Regridded (coarsened) forecast grid — dense per-cell mean/std used by all
+--    spatial metrics except SSR/correlation. Keyed by model_name + variable_name
+--    + forecast_hour (NOT run_id); the latest run is resolved separately.
+CREATE TABLE regridded_forecast (
+    id BIGSERIAL PRIMARY KEY,
+    model_name TEXT NOT NULL,
+    variable_name TEXT NOT NULL,
+    forecast_hour INTEGER NOT NULL,
+    latitude FLOAT NOT NULL,
+    longitude FLOAT NOT NULL,
+    mean_value FLOAT,
+    std_dev FLOAT,
+    source_points INTEGER,
+    resolution TEXT
+);
+
+CREATE INDEX idx_rgf_lat_lon ON regridded_forecast(latitude, longitude);
+CREATE INDEX idx_rgf_model_var_hour ON regridded_forecast(model_name, variable_name, forecast_hour);
+
+-- 8. Regridded (dense gridded) observation grid — covers every grid cell, used
+--    as the truth field for all spatial metrics except SSR/correlation.
+CREATE TABLE regridded_observation (
+    id BIGSERIAL PRIMARY KEY,
+    source TEXT NOT NULL,
+    variable_name TEXT NOT NULL,
+    obs_time TIMESTAMP NOT NULL,
+    latitude FLOAT NOT NULL,
+    longitude FLOAT NOT NULL,
+    value FLOAT,
+    source_points INTEGER,
+    resolution TEXT
+);
+
+CREATE INDEX idx_rgo_lat_lon ON regridded_observation(latitude, longitude);
+CREATE INDEX idx_rgo_source_var_time ON regridded_observation(source, variable_name, obs_time);
+
+-- 9. Insert initial model metadata
 INSERT INTO models (model_name, ensemble_count, description) VALUES
     ('AIFS', 50, 'AI Forecasting System - ECMWF'),
     ('GEFS', 30, 'Global Ensemble Forecast System - NOAA'),
     ('UKMO', 18, 'UK Met Office Global Ensemble');
 
--- 7. Insert initial variable metadata
+-- 10. Insert initial variable metadata
 INSERT INTO variables (variable_name, units, description) VALUES
     ('precipitation', 'mm/hr', 'Total precipitation rate'),
     ('temperature_2m', 'K', '2-meter temperature'),

@@ -1,14 +1,22 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   ComposedChart, LineChart, Line, BarChart, Bar,
   Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine,
 } from 'recharts';
 import { Scale, MapPin } from 'lucide-react';
-import { fetchComparisonTimeseries, fetchComparisonSkill, fetchSpatialAgreement } from '../api/comparisonApi';
+import { fetchComparisonTimeseries, fetchComparisonSkill, fetchSpatialAgreement, fetchComparisonCategorical } from '../api/comparisonApi';
 import { t } from '../theme';
 
 const MODEL_COLORS = { AIFS: '#3498db', GEFS: '#e74c3c', UKMO: '#2ecc71' };
+
+// Advanced (categorical) metrics rendered per model over lead time in Section 5.
+const CAT_METRICS = [
+  { key: 'csi', label: 'CSI', hint: 'Critical Success Index · higher is better' },
+  { key: 'pod', label: 'POD', hint: 'Probability of Detection · higher is better' },
+  { key: 'far', label: 'FAR', hint: 'False Alarm Ratio · lower is better' },
+  { key: 'fss', label: 'FSS', hint: 'Fractions Skill Score · higher is better' },
+];
 const MODEL_NAMES  = ['AIFS', 'GEFS', 'UKMO'];
 
 // Temporal accumulation period for each model's precipitation output.
@@ -238,6 +246,10 @@ export function ComparisonTab({
   const [spatialLoading, setSpatialLoading] = useState(false);
   const [spatialShareState, setSpatialShareState] = useState('idle'); // 'idle' | 'copied'
   const [hasRun, setHasRun] = useState(false);
+  const [catData, setCatData] = useState(null);
+  const [catLoading, setCatLoading] = useState(false);
+  const [catError, setCatError] = useState('');
+  const catSeqRef = useRef(0);   // drops stale advanced-metric responses
 
   // Effects
   useEffect(() => {
@@ -301,6 +313,46 @@ export function ComparisonTab({
     setTsLoading(false);
     if (skill.status === 'fulfilled') setSkillData(skill.value);
     setSkillLoading(false);
+  };
+
+  const handleRunCategorical = async () => {
+    if (!validLocation || selectedModels.length < 1) return;
+    const thr = Number(threshold);
+    if (!Number.isFinite(thr)) { setCatError('Threshold must be a number.'); return; }
+    const seq = ++catSeqRef.current;
+    setCatError('');
+    setCatData(null);
+    setCatLoading(true);
+    try {
+      const result = await fetchComparisonCategorical({
+        models: selectedModels, lat: parsedLat, lon: parsedLon,
+        hourMin, hourMax, variable: selectedVariable,
+        threshold: thr, fssWindow,
+      });
+      if (seq !== catSeqRef.current) return;   // a newer run superseded this one
+      setCatData(result);
+    } catch (err) {
+      if (seq !== catSeqRef.current) return;
+      console.error('Comparison categorical error:', err);
+      setCatError(err.message || 'Failed to compute advanced metrics.');
+    } finally {
+      if (seq === catSeqRef.current) setCatLoading(false);
+    }
+  };
+
+  // Union of hours across models → one row per hour with a per-model column.
+  const buildCatRows = (metricKey) => {
+    if (!catData?.models) return [];
+    const allHours = new Set();
+    selectedModels.forEach(m => catData.models[m]?.forEach(h => allHours.add(h.hour)));
+    return Array.from(allHours).sort((a, b) => a - b).map(hour => {
+      const row = { hour };
+      selectedModels.forEach(m => {
+        const e = catData.models[m]?.find(h => h.hour === hour);
+        row[`${metricKey}_${m}`] = e ? e[metricKey] : null;
+      });
+      return row;
+    });
   };
 
   const handleRunSpatial = async () => {
@@ -1114,21 +1166,93 @@ export function ComparisonTab({
                   </div>
                 </div>
 
-                {/* Coming soon placeholder */}
-                <div style={{
-                  ...CARD,
-                  textAlign: 'center',
-                  padding: '32px 20px',
-                  color: 'rgba(255,255,255,0.25)',
-                  fontSize: t.fontSize.base,
-                  lineHeight: 1.6,
-                }}>
-                  <div style={{ fontSize: t.fontSize.hero, marginBottom: '10px' }}>🔬</div>
-                  Advanced metric charts — coming in next update
-                  <div style={{ fontSize: t.fontSize.xs, marginTop: '6px', color: 'rgba(255,255,255,0.18)' }}>
-                    CSI · POD · FAR · FSS charts will appear here
-                  </div>
+                {/* Run + charts */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '16px', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={handleRunCategorical}
+                    disabled={catLoading || !validLocation}
+                    style={{
+                      background: (!catLoading && validLocation) ? '#9b59b6' : 'rgba(255,255,255,0.08)',
+                      color: (!catLoading && validLocation) ? 'white' : 'rgba(255,255,255,0.25)',
+                      border: 'none', borderRadius: t.radius, padding: '7px 18px',
+                      fontSize: t.fontSize.base, fontWeight: '700',
+                      cursor: (!catLoading && validLocation) ? 'pointer' : 'not-allowed',
+                      display: 'flex', alignItems: 'center', gap: '6px', transition: 'background 0.15s',
+                    }}
+                  >
+                    {catLoading ? '⏳ Computing…' : '▶ Run advanced metrics'}
+                  </button>
+                  <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.sm }}>
+                    CSI · POD · FAR · FSS per model, over a {fssWindow}×{fssWindow}-cell neighbourhood at the point
+                  </span>
                 </div>
+
+                {catError && (
+                  <div style={{ ...CARD, color: '#e74c3c', fontSize: t.fontSize.sm, marginBottom: '16px' }}>
+                    {catError}
+                  </div>
+                )}
+
+                {catData && !catError && (() => {
+                  const anyData = selectedModels.some(m => (catData.models?.[m]?.length || 0) > 0);
+                  if (!anyData) {
+                    return (
+                      <div style={{ ...CARD, textAlign: 'center', padding: '24px', color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.sm }}>
+                        No overlapping forecast/observation data for this location, threshold, and lead-time range.
+                      </div>
+                    );
+                  }
+                  return (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px' }}>
+                      {CAT_METRICS.map(({ key, label, hint }) => (
+                        <div key={key} style={{ ...CARD, padding: '14px 12px 8px' }}>
+                          <div style={{ fontSize: t.fontSize.md, fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>{label}</div>
+                          <div style={{ fontSize: t.fontSize.xs, color: 'rgba(255,255,255,0.4)', marginBottom: '6px' }}>{hint}</div>
+                          <div style={{ height: '180px' }}>
+                            <ResponsiveContainer width="100%" height="100%">
+                              <LineChart data={buildCatRows(key)} margin={{ top: 6, right: 16, left: -8, bottom: 20 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                                <XAxis dataKey="hour" stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} tickFormatter={h => `+${h}h`} />
+                                <YAxis stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} width={34} />
+                                <Tooltip
+                                  contentStyle={TOOLTIP_STYLE}
+                                  formatter={(value, name) => [value != null ? Number(value).toFixed(3) : 'N/A', name.replace(`${key}_`, '')]}
+                                  labelFormatter={h => `+${h}h`}
+                                />
+                                {selectedModels.map(m => {
+                                  const nPts = catData.models?.[m]?.length || 0;
+                                  return (
+                                    <Line
+                                      key={m}
+                                      type="linear"
+                                      dataKey={`${key}_${m}`}
+                                      name={`${key}_${m}`}
+                                      stroke={MODEL_COLORS[m]}
+                                      strokeWidth={2}
+                                      connectNulls
+                                      dot={{ r: nPts < 10 ? 4 : 2.5, fill: MODEL_COLORS[m], strokeWidth: 0 }}
+                                      activeDot={{ r: 5 }}
+                                      isAnimationActive={false}
+                                    />
+                                  );
+                                })}
+                              </LineChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+
+                {catData && catData.threshold_info && (
+                  <div style={{ marginTop: '10px', fontSize: t.fontSize.xs, color: 'rgba(255,255,255,0.35)' }}>
+                    Threshold {catData.threshold_info.unit === 'm/s'
+                      ? `${catData.threshold_info.threshold_ms} m/s`
+                      : `${catData.threshold_info.threshold_mm_6h} mm/6h`}
+                    {catData.bbox && <> · neighbourhood bbox [{catData.bbox.join(', ')}]</>}
+                  </div>
+                )}
               </div>
             )}
           </div>

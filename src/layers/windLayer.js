@@ -8,7 +8,11 @@
  */
 export const drawWindArrows = (map, data, arrowsCanvasRef) => {
   if (!map?._loaded) return;
-  arrowsCanvasRef.current?.remove();
+  // Tear down the previous overlay AND its map listeners first. Without the
+  // map.off in stopWindArrows, every model/hour change and every arrows toggle
+  // used to stack another move/zoom handler that kept firing forever against a
+  // detached canvas — an unbounded listener leak.
+  stopWindArrows(map, arrowsCanvasRef);
 
   const canvas = document.createElement('canvas');
   map.getContainer().appendChild(canvas);
@@ -57,9 +61,30 @@ export const drawWindArrows = (map, data, arrowsCanvasRef) => {
   drawArrows();
   map.on('move', drawArrows);
   map.on('zoom', drawArrows);
+  map.__weaveArrowsHandler = drawArrows;   // remembered so stopWindArrows can detach it
+};
+
+/**
+ * Removes the wind-arrow canvas AND its map move/zoom listeners.
+ * @param {L.Map} map
+ * @param {{ current: HTMLCanvasElement | null }} arrowsCanvasRef
+ */
+export const stopWindArrows = (map, arrowsCanvasRef) => {
+  if (map && map.__weaveArrowsHandler) {
+    map.off('move', map.__weaveArrowsHandler);
+    map.off('zoom', map.__weaveArrowsHandler);
+    map.__weaveArrowsHandler = null;
+  }
+  arrowsCanvasRef?.current?.remove();
+  if (arrowsCanvasRef) arrowsCanvasRef.current = null;
 };
 
 // ── Streamlines ───────────────────────────────────────────────────────────────
+
+// Module-level detach hook for the currently-active streamline layer. Single
+// map / single stream at a time, and startStreamlines always stops first, so
+// one slot is sufficient.
+let _streamCleanup = null;
 
 /**
  * Starts an animated streamline overlay.
@@ -221,6 +246,13 @@ export const startStreamlines = (map, data, animationFrameRef, showWindLinesRef)
   rebuild();
   map.on('move', rebuild);
   map.on('zoom', rebuild);
+  // Remember how to detach these so stopStreamlines can remove them. Without
+  // this, every stop/restart (model, hour, toggle) leaked another rebuild
+  // handler firing on every pan/zoom.
+  _streamCleanup = () => {
+    map.off('move', rebuild);
+    map.off('zoom', rebuild);
+  };
 };
 
 /**
@@ -230,6 +262,10 @@ export const stopStreamlines = (animationFrameRef) => {
   if (animationFrameRef?.current) {
     cancelAnimationFrame(animationFrameRef.current);
     animationFrameRef.current = null;
+  }
+  if (_streamCleanup) {          // detach the move/zoom rebuild listeners
+    _streamCleanup();
+    _streamCleanup = null;
   }
   document.getElementById('streamlines-canvas')?.remove();
   document.getElementById('streamlines-dots')?.remove();
