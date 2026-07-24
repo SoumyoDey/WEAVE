@@ -10,3 +10,6 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# Server-side plot cache (Data/flask_api.py FileSystemCache backend)
+.cache/

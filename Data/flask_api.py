@@ -6,6 +6,8 @@ import math
 import io
 import base64
 import os
+import json
+import hashlib
 from datetime import timedelta
 import scipy.stats
 
@@ -64,6 +66,45 @@ try:
     )
 except Exception as _e:  # pragma: no cover
     print(f"⚠️  Rate limiting disabled: {_e}")
+
+
+# ── Plot caching ───────────────────────────────────────────────────────────────
+# Cartopy renders are CPU-bound and re-requested often (same region/metric,
+# repeat viewers). Best-effort, no-op if flask-caching isn't installed. Backend
+# is env-var-selectable — swap to CACHE_TYPE=RedisCache + CACHE_REDIS_URL for a
+# shared cache across multiple workers/instances; FileSystemCache (default)
+# survives a Flask restart, unlike an in-memory cache. The directory lives
+# outside Data/ so cache writes don't sit in the same tree as the source files.
+cache = None
+try:
+    from flask_caching import Cache
+    _cache_dir = os.path.join(os.path.dirname(__file__), '..', '.cache', 'plots')
+    os.makedirs(_cache_dir, exist_ok=True)
+    cache = Cache(app, config={
+        'CACHE_TYPE':       os.environ.get('CACHE_TYPE', 'FileSystemCache'),
+        'CACHE_DIR':        _cache_dir,
+        'CACHE_THRESHOLD':  int(os.environ.get('CACHE_THRESHOLD', 500)),
+        'CACHE_REDIS_URL':  os.environ.get('CACHE_REDIS_URL', ''),
+    })
+except Exception as _e:  # pragma: no cover
+    print(f"⚠️  Plot caching disabled: {_e}")
+
+def _cache_get(key):
+    if cache is None:
+        return None
+    try:
+        return cache.get(key)
+    except Exception as _e:  # pragma: no cover
+        print(f"⚠️  Cache read failed: {_e}")
+        return None
+
+def _cache_set(key, value, timeout):
+    if cache is None:
+        return
+    try:
+        cache.set(key, value, timeout=timeout)
+    except Exception as _e:  # pragma: no cover
+        print(f"⚠️  Cache write failed: {_e}")
 
 
 # ── Lightweight input allowlist ───────────────────────────────────────────────
@@ -1376,6 +1417,17 @@ def spatial_metric_plot():
     body = request.get_json(force=True)
     if not isinstance(body, dict):
         return jsonify({'error': 'Request body must be a JSON object'}), 400
+
+    # Content-addressed cache key: the request body (chiefly `points`) is the
+    # entire visual input, so a hash of it self-invalidates on new data — no
+    # explicit TTL/invalidation needed, just a long expiry to bound cache size.
+    _cache_key = 'plot:' + hashlib.sha256(
+        json.dumps(body, sort_keys=True, default=str).encode()
+    ).hexdigest()
+    _cached = _cache_get(_cache_key)
+    if _cached is not None:
+        return jsonify(_cached)
+
     try:
         metric   = body.get('metric',   'ssr')
         model    = body.get('model',    'AIFS')
@@ -1522,7 +1574,9 @@ def spatial_metric_plot():
         plt.close(fig)
 
         print(f"✅ Plot: {metric} · {model} · {var_label} · {len(points)} pts")
-        return jsonify({'image': img_b64})
+        result = {'image': img_b64}
+        _cache_set(_cache_key, result, timeout=int(os.environ.get('PLOT_CACHE_TTL', 24 * 3600)))
+        return jsonify(result)
 
     except Exception as e:
         import traceback
@@ -1989,6 +2043,20 @@ def compare_spatial_agreement():
     if not models or len(models) < 2:
         return jsonify({'error': 'At least 2 models required for spatial agreement'}), 400
 
+    # This endpoint queries the DB itself (unlike spatial-metric-plot, which
+    # renders client-supplied points), so a content hash can't self-invalidate
+    # on new data — key on the request shape and bound staleness with a TTL
+    # instead, matched to how often a new forecast run actually lands.
+    _cache_key = 'agree:' + json.dumps({
+        'models':   sorted(models),
+        'variable': variable,
+        'hour':     hour,
+        'bbox':     [round(min_lat, 2), round(max_lat, 2), round(min_lon, 2), round(max_lon, 2)],
+    }, sort_keys=True)
+    _cached = _cache_get(_cache_key)
+    if _cached is not None:
+        return jsonify(_cached)
+
     conn   = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
@@ -2136,12 +2204,14 @@ def compare_spatial_agreement():
 
         print(f"✅ compare/spatial-agreement: {n_points} pts, "
               f"{n_models} models, +{hour}h, {variable}")
-        return jsonify({
+        result = {
             'image':    img_b64,
             'hour':     hour,
             'n_models': n_models,
             'n_points': n_points,
-        })
+        }
+        _cache_set(_cache_key, result, timeout=int(os.environ.get('SPATIAL_AGREEMENT_CACHE_TTL', 20 * 60)))
+        return jsonify(result)
 
     except Exception as e:
         import traceback
