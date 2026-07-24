@@ -20,6 +20,14 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+# Object-oriented figure API. pyplot (plt.figure / plt.tight_layout / plt.close)
+# keeps a *global* figure registry that is NOT thread-safe; under gunicorn's
+# threaded workers two concurrent plot requests can interleave that global
+# state and corrupt/crash a render. Building figures via Figure()+FigureCanvasAgg
+# keeps each request's figure fully local. (plt.cm.* colormap lookups are
+# read-only constants and remain safe to use.)
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 import numpy as np
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -137,11 +145,87 @@ connection_pool = psycopg2.pool.ThreadedConnectionPool(
 
 
 def get_db_connection():
-    return connection_pool.getconn()
+    # This API is read-only, so we run every pooled connection in autocommit
+    # mode. Without it, psycopg2 opens an implicit transaction on the first
+    # statement; if any query then raises, the connection is returned to the
+    # pool stuck in an aborted-transaction state and the NEXT request that
+    # reuses it fails with "current transaction is aborted" — one bad request
+    # poisons the pool. Autocommit means a failed statement rolls itself back
+    # and the connection stays usable.
+    conn = connection_pool.getconn()
+    try:
+        if not conn.autocommit:
+            conn.rollback()          # clear any half-open txn before switching
+            conn.autocommit = True
+    except Exception:
+        # Connection is unusable — discard it and hand back a fresh one.
+        try:
+            connection_pool.putconn(conn, close=True)
+        except Exception:
+            pass
+        conn = connection_pool.getconn()
+        conn.autocommit = True
+    return conn
 
 
 def return_db_connection(conn):
-    connection_pool.putconn(conn)
+    if conn is None:
+        return
+    try:
+        # Dispose of a broken connection instead of poisoning the pool with it.
+        broken = getattr(conn, 'closed', 0)
+        connection_pool.putconn(conn, close=bool(broken))
+    except Exception:
+        pass
+
+
+# ── Request-parameter validation helpers ──────────────────────────────────────
+# These parse+validate BEFORE the DB try-block so a bad value yields a clean 400
+# rather than an uncaught cast error surfacing as a generic 500.
+def _valid_member(member):
+    """A member selector is 'mean', 'std', or an integer index."""
+    if member in ('mean', 'std'):
+        return True
+    try:
+        int(member)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _parse_bbox(args):
+    """Parse + sanity-check min/max lat/lon from request args.
+
+    Returns (bbox_dict, None) on success or (None, (json, status)) on error, so
+    callers can `bbox, err = _parse_bbox(...); if err: return err`.
+    """
+    try:
+        min_lat = float(args.get('min_lat',  25))
+        max_lat = float(args.get('max_lat',  45))
+        min_lon = float(args.get('min_lon', -85))
+        max_lon = float(args.get('max_lon', -65))
+    except (TypeError, ValueError):
+        return None, (jsonify({'error': 'lat/lon bounds must be numeric'}), 400)
+    if not (-90 <= min_lat <= 90 and -90 <= max_lat <= 90):
+        return None, (jsonify({'error': 'latitude must be in [-90, 90]'}), 400)
+    if not (-180 <= min_lon <= 180 and -180 <= max_lon <= 180):
+        return None, (jsonify({'error': 'longitude must be in [-180, 180]'}), 400)
+    if min_lat >= max_lat or min_lon >= max_lon:
+        return None, (jsonify({'error': 'min bound must be strictly less than max bound'}), 400)
+    return {'min_lat': min_lat, 'max_lat': max_lat,
+            'min_lon': min_lon, 'max_lon': max_lon}, None
+
+
+# SSR = spread²/error² explodes toward a near-zero error: a single tiny
+# denominator can yield values in the thousands that blow out the colourbar
+# (its BoundaryNorm tops out at 10) and skew the mean-SSR calibration verdict.
+# Cap to that same ceiling and reject non-finite / negative results.
+SSR_CAP = 10.0
+
+def _clamp_ssr(value):
+    if value is None or not math.isfinite(value) or value < 0:
+        return None
+    return round(min(value, SSR_CAP), 4)
 
 
 def get_model_run_id(cursor, model_name):
@@ -193,6 +277,7 @@ def _compute_ssr_points(cursor, run_id, variable_id, init_time, hour,
         for r in cursor.fetchall()
     }
     points = []
+    matched = 0
     for row in ens_rows:
         lat  = float(row['latitude'])
         lon  = float(row['longitude'])
@@ -204,10 +289,16 @@ def _compute_ssr_points(cursor, run_id, variable_id, init_time, hour,
         obs  = obs_lookup.get((round(lat * 4) / 4, round(lon * 4) / 4))
         if obs is None:
             continue
+        matched += 1
         err_sq = (mean - obs) ** 2
-        ssr    = round(std ** 2 / err_sq, 4) if err_sq > 1e-10 else None
+        ssr    = _clamp_ssr(std ** 2 / err_sq) if err_sq > 1e-10 else None
         if ssr is not None:
             points.append({'lat': lat, 'lon': lon, 'value': ssr})
+    # Diagnose silent grid misalignment (quarter-degree key match to sparse obs).
+    if ens_rows and matched == 0:
+        print(f"⚠️  SSR ens↔obs join matched 0 of {len(ens_rows)} grid points "
+              f"at +{hour}h — likely grid misalignment or no obs "
+              f"({len(obs_lookup)} obs keys, snapped to 0.25°).")
     return points
 
 
@@ -435,6 +526,7 @@ def _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
         return {}
 
     result = defaultdict(list)
+    matched_rows = 0
     for row in fcst_rows:
         lat  = round(float(row['latitude']),  2)
         lon  = round(float(row['longitude']), 2)
@@ -450,11 +542,19 @@ def _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
         ]
         if not obs_window:
             continue
+        matched_rows += 1
         obs_rate  = sum(obs_window) / len(obs_window)
         mean_rate = mean / accum_h
         std_rate  = std  / accum_h
         result[(lat, lon)].append((hour, mean_rate, std_rate, obs_rate))
 
+    # Diagnose silent grid misalignment: the fcst↔obs join is pure rounded-key
+    # (2 dp) equality, so if the two grids are offset, zero pairs match and every
+    # dependent metric returns [] — indistinguishable from "no data" downstream.
+    if matched_rows == 0:
+        print(f"⚠️  fcst↔obs join matched 0 of {len(fcst_rows)} forecast rows "
+              f"for {model_name}/{variable} — likely grid misalignment "
+              f"({len(obs_dict)} obs keys, both rounded to 2 dp).")
     return dict(result)
 
 
@@ -751,8 +851,9 @@ def _compute_ssr_agg_points_rf(cursor, model_name, variable,
         mean_var    = float(np.mean([sr ** 2 for _, _, sr, _   in entries]))
         mean_sq_err = float(np.mean([(mr - orr) ** 2 for _, mr, _, orr in entries]))
         if mean_sq_err > 1e-10:
-            ssr = round(mean_var / mean_sq_err, 4)
-            points.append({'lat': lat, 'lon': lon, 'value': ssr})
+            ssr = _clamp_ssr(mean_var / mean_sq_err)
+            if ssr is not None:
+                points.append({'lat': lat, 'lon': lon, 'value': ssr})
     return points
 
 
@@ -791,6 +892,8 @@ def get_forecast_data():
     except (TypeError, ValueError):
         return jsonify({'error': 'hour must be numeric'}), 400
     member        = request.args.get('member', 'mean')
+    if not _valid_member(member):
+        return jsonify({'error': "member must be 'mean', 'std', or an integer"}), 400
 
     if variable_name == 'wind':
         return get_wind_data()
@@ -864,6 +967,8 @@ def get_wind_data():
     except (TypeError, ValueError):
         return jsonify({'error': 'hour must be numeric'}), 400
     member        = request.args.get('member', 'mean')
+    if not _valid_member(member):
+        return jsonify({'error': "member must be 'mean', 'std', or an integer"}), 400
 
     conn   = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
@@ -875,7 +980,7 @@ def get_wind_data():
 
         if member == 'mean':
             cursor.execute("""
-                SELECT 
+                SELECT
                     u.latitude as lat, u.longitude as lon,
                     u.mean_value as u, v.mean_value as v
                 FROM ensemble_statistics u
@@ -1190,7 +1295,7 @@ def get_spread_skill():
             spread    = math.sqrt(spread_sq)
             error     = abs(ens_mean - obs)
             error_sq  = error ** 2
-            ssr       = round(spread_sq / error_sq, 4) if error_sq > 1e-10 else None
+            ssr       = _clamp_ssr(spread_sq / error_sq) if error_sq > 1e-10 else None
 
             results.append({
                 'hour':      hour,
@@ -1242,11 +1347,15 @@ def get_spatial_metric():
     variable   = request.args.get('variable', 'precipitation')
     if _bad_token(model_name, variable):
         return jsonify({'error': 'Invalid model or variable'}), 400
-    min_lat    = float(request.args.get('min_lat',  25))
-    max_lat    = float(request.args.get('max_lat',  45))
-    min_lon    = float(request.args.get('min_lon', -85))
-    max_lon    = float(request.args.get('max_lon', -65))
-    threshold_mm_6h = float(request.args.get('threshold_mm_6h', 25.0))
+    bbox, err = _parse_bbox(request.args)
+    if err:
+        return err
+    min_lat, max_lat = bbox['min_lat'], bbox['max_lat']
+    min_lon, max_lon = bbox['min_lon'], bbox['max_lon']
+    try:
+        threshold_mm_6h = float(request.args.get('threshold_mm_6h', 25.0))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'threshold_mm_6h must be numeric'}), 400
 
     if metric not in SPATIAL_METRIC_REGISTRY:
         return jsonify({'error': f'Unknown metric: {metric}. '
@@ -1414,7 +1523,7 @@ def spatial_metric_plot():
           "points":   [{"lat": ..., "lon": ..., "value": ...}, ...]
         }
     """
-    body = request.get_json(force=True)
+    body = request.get_json(silent=True)
     if not isinstance(body, dict):
         return jsonify({'error': 'Request body must be a JSON object'}), 400
 
@@ -1484,9 +1593,10 @@ def spatial_metric_plot():
             lat_arr.min() - pad, lat_arr.max() + pad,
         ]
 
-        # ── Figure ───────────────────────────────────────────────────────
+        # ── Figure (OO API — no pyplot global state; see import note) ──────
         proj = ccrs.PlateCarree()
-        fig  = plt.figure(figsize=(13, 7), dpi=130)
+        fig  = Figure(figsize=(13, 7), dpi=130)
+        FigureCanvasAgg(fig)
         ax   = fig.add_subplot(111, projection=proj)
         ax.set_extent(extent, crs=proj)
 
@@ -1563,7 +1673,7 @@ def spatial_metric_plot():
         ax.text(0.995, 0.005, 'WEAVE', transform=ax.transAxes,
                 fontsize=7, color='gray', alpha=0.55, ha='right', va='bottom')
 
-        plt.tight_layout(pad=0.4)
+        fig.tight_layout(pad=0.4)
 
         # ── Encode PNG → base64 ───────────────────────────────────────────
         buf = io.BytesIO()
@@ -1571,7 +1681,8 @@ def spatial_metric_plot():
                     facecolor='white', edgecolor='none')
         buf.seek(0)
         img_b64 = base64.b64encode(buf.read()).decode('utf-8')
-        plt.close(fig)
+        # No plt.close(): this Figure was never registered with pyplot, so it
+        # carries no global state to release and is freed on scope exit.
 
         print(f"✅ Plot: {metric} · {model} · {var_label} · {len(points)} pts")
         result = {'image': img_b64}
@@ -1660,7 +1771,7 @@ def compare_timeseries():
     Response:
         { "AIFS": [{"hour": 6, "mean": 1.234, "std": 0.456}, ...], ... }
     """
-    body     = request.get_json(force=True)
+    body     = request.get_json(silent=True)
     if not isinstance(body, dict):
         return jsonify({'error': 'Request body must be a JSON object'}), 400
     models   = body.get('models', [])
@@ -1733,7 +1844,7 @@ def compare_skill():
     Request JSON:
         { models, lat, lon, hour_min, hour_max, variable }
     """
-    body     = request.get_json(force=True)
+    body     = request.get_json(silent=True)
     if not isinstance(body, dict):
         return jsonify({'error': 'Request body must be a JSON object'}), 400
     models   = body.get('models', [])
@@ -1886,7 +1997,7 @@ def compare_skill():
             err_sq  = err ** 2
 
             # SSR (scale-invariant — same result as with raw totals)
-            ssr = round(std_rate ** 2 / err_sq, 6) if err_sq > 1e-10 else None
+            ssr = _clamp_ssr(std_rate ** 2 / err_sq) if err_sq > 1e-10 else None
 
             # Gaussian CRPS (in mm/h — comparable across models)
             if std_rate > 1e-10:
@@ -2014,7 +2125,7 @@ def compare_spatial_agreement():
     Response:
         { image: base64_png, hour, n_models, n_points }
     """
-    body     = request.get_json(force=True)
+    body     = request.get_json(silent=True)
     if not isinstance(body, dict):
         return jsonify({'error': 'Request body must be a JSON object'}), 400
     models   = body.get('models', [])
@@ -2129,9 +2240,10 @@ def compare_spatial_agreement():
             lat_arr.min() - pad, lat_arr.max() + pad,
         ]
 
-        # ── Figure ───────────────────────────────────────────────────────
+        # ── Figure (OO API — no pyplot global state; see import note) ──────
         proj = ccrs.PlateCarree()
-        fig  = plt.figure(figsize=(13, 7), dpi=130)
+        fig  = Figure(figsize=(13, 7), dpi=130)
+        FigureCanvasAgg(fig)
         ax   = fig.add_subplot(111, projection=proj)
         ax.set_extent(extent, crs=proj)
 
@@ -2193,14 +2305,14 @@ def compare_spatial_agreement():
         ax.text(0.995, 0.005, 'WEAVE', transform=ax.transAxes,
                 fontsize=7, color='gray', alpha=0.55, ha='right', va='bottom')
 
-        plt.tight_layout(pad=0.4)
+        fig.tight_layout(pad=0.4)
 
         buf = io.BytesIO()
         fig.savefig(buf, format='png', dpi=130, bbox_inches='tight',
                     facecolor='white', edgecolor='none')
         buf.seek(0)
         img_b64 = base64.b64encode(buf.read()).decode('utf-8')
-        plt.close(fig)
+        # No plt.close() — OO Figure, no pyplot global state to release.
 
         print(f"✅ compare/spatial-agreement: {n_points} pts, "
               f"{n_models} models, +{hour}h, {variable}")
@@ -2240,7 +2352,7 @@ def categorical_metrics_endpoint():
     Request JSON:
         { model, variable, lat, lon, threshold_mm_6h, hour_min, hour_max }
     """
-    body              = request.get_json(force=True)
+    body              = request.get_json(silent=True)
     if not isinstance(body, dict):
         return jsonify({'error': 'Request body must be a JSON object'}), 400
     model_name        = body.get('model',            'AIFS')
@@ -2468,7 +2580,7 @@ def region_categorical_metrics_endpoint():
         { model, variable, min_lat, max_lat, min_lon, max_lon,
           threshold_mm_6h, hour_min, hour_max }
     """
-    body            = request.get_json(force=True)
+    body            = request.get_json(silent=True)
     if not isinstance(body, dict):
         return jsonify({'error': 'Request body must be a JSON object'}), 400
     model_name      = body.get('model', 'AIFS')
@@ -2631,12 +2743,18 @@ def region_categorical_metrics_endpoint():
             h_fbi = round(h_n_fcst_yes / h_n_obs_yes, 4) if h_n_obs_yes > 0 else None
             h_bs  = round(h_brier_sum / h_n_pts, 6)
 
-            # FSS
+            # FSS on domain-average fractions. Roberts & Lean (2008) reference
+            # is MSE_ref = mean(f²) + mean(o²); with a single domain-wide
+            # fraction that reduces to f² + o² (the previous 0.5 factor was
+            # non-standard). NOTE: this is a domain-aggregate fractions score,
+            # not a true neighbourhood FSS. When neither field has any event
+            # (f = o = 0) the score is mathematically undefined (0/0) — report
+            # None rather than a misleading 1.0 ("perfect").
             fcst_frac = sum(h_fcst_binary) / h_n_pts
             obs_frac  = sum(h_obs_binary)  / h_n_pts
             mse_f   = (fcst_frac - obs_frac) ** 2
-            mse_ref = 0.5 * (fcst_frac**2 + obs_frac**2)
-            fss_hour = round(1.0 - mse_f / mse_ref, 4) if mse_ref > 1e-10 else 1.0
+            mse_ref = fcst_frac**2 + obs_frac**2
+            fss_hour = round(1.0 - mse_f / mse_ref, 4) if mse_ref > 1e-10 else None
 
             hours_data.append({
                 'hour': hour, 'n_pts': h_n_pts,
@@ -2720,6 +2838,198 @@ def region_categorical_metrics_endpoint():
     except Exception as e:
         import traceback; traceback.print_exc()
         print(f"❌ Error in region-categorical-metrics: {e}")
+        return jsonify({'error': 'Internal server error'}), 500
+    finally:
+        cursor.close()
+        return_db_connection(conn)
+
+
+def _categorical_hours_for_box(cursor, model_name, fcst_var, obs_var, obs_src,
+                               min_lat, max_lat, min_lon, max_lon,
+                               hour_min, hour_max, threshold_rate, accum_h):
+    """Per-hour CSI/POD/FAR/FSS over a bbox for a single model.
+
+    Returns a list of {hour, csi, pod, far, fss, n_pts}; [] if no data/obs.
+    Shares the domain-fractions FSS convention (MSE_ref = f²+o², undefined when
+    both fractions are 0) with region_categorical_metrics_endpoint.
+    """
+    cursor.execute("""
+        SELECT rf.forecast_hour, rf.latitude, rf.longitude,
+               rf.mean_value, rf.std_dev, fr.initialization_time
+        FROM regridded_forecast rf
+        JOIN models m  ON m.model_name = rf.model_name
+        JOIN forecast_runs fr
+            ON fr.model_id = m.model_id
+           AND fr.run_id = (
+               SELECT run_id FROM forecast_runs fr2
+               JOIN models m2 ON m2.model_id = fr2.model_id
+               WHERE m2.model_name = rf.model_name
+               ORDER BY fr2.initialization_time DESC LIMIT 1
+           )
+        WHERE rf.model_name    = %s
+          AND rf.variable_name = %s
+          AND rf.forecast_hour BETWEEN %s AND %s
+          AND rf.latitude  BETWEEN %s AND %s
+          AND rf.longitude BETWEEN %s AND %s
+          AND rf.mean_value IS NOT NULL AND rf.std_dev IS NOT NULL
+        ORDER BY rf.forecast_hour, rf.latitude, rf.longitude
+    """, (model_name, fcst_var, hour_min, hour_max,
+          min_lat, max_lat, min_lon, max_lon))
+    fcst_rows = cursor.fetchall()
+    if not fcst_rows:
+        return []
+
+    valid_times = [r['initialization_time'] + timedelta(hours=r['forecast_hour'])
+                   for r in fcst_rows]
+    min_obs_t = min(valid_times) - timedelta(hours=accum_h - 1)
+    max_obs_t = max(valid_times)
+
+    cursor.execute("""
+        SELECT obs_time, latitude, longitude, AVG(value) AS obs_val
+        FROM regridded_observation
+        WHERE variable_name = %s AND source = %s
+          AND obs_time BETWEEN %s AND %s
+          AND latitude  BETWEEN %s AND %s
+          AND longitude BETWEEN %s AND %s
+        GROUP BY obs_time, latitude, longitude
+    """, (obs_var, obs_src, min_obs_t, max_obs_t,
+          min_lat, max_lat, min_lon, max_lon))
+    obs_dict = {
+        (round(float(r['latitude']), 2), round(float(r['longitude']), 2), r['obs_time']): float(r['obs_val'])
+        for r in cursor.fetchall()
+    }
+    if not obs_dict:
+        return []
+
+    from collections import defaultdict
+    hours_dict = defaultdict(list)
+    for row in fcst_rows:
+        hours_dict[row['forecast_hour']].append(row)
+
+    out = []
+    for hour in sorted(hours_dict.keys()):
+        h_hits = h_misses = h_fa = h_cn = 0
+        h_fcst_binary, h_obs_binary, h_n_pts = [], [], 0
+        for row in hours_dict[hour]:
+            lat_k = round(float(row['latitude']),  2)
+            lon_k = round(float(row['longitude']), 2)
+            mean  = float(row['mean_value'])
+            vt    = row['initialization_time'] + timedelta(hours=hour)
+            obs_window = [
+                obs_dict[(lat_k, lon_k, vt - timedelta(hours=dh))]
+                for dh in range(accum_h - 1, -1, -1)
+                if (lat_k, lon_k, vt - timedelta(hours=dh)) in obs_dict
+            ]
+            if not obs_window:
+                continue
+            obs_rate  = sum(obs_window) / len(obs_window)
+            mean_rate = mean / accum_h
+            is_fcst = mean_rate > threshold_rate
+            is_obs  = obs_rate  > threshold_rate
+            if   is_fcst and     is_obs:  h_hits   += 1
+            elif is_fcst and not is_obs:  h_fa     += 1
+            elif not is_fcst and is_obs:  h_misses += 1
+            else:                         h_cn     += 1
+            h_fcst_binary.append(float(is_fcst))
+            h_obs_binary.append(float(is_obs))
+            h_n_pts += 1
+
+        if h_n_pts == 0:
+            continue
+        n_obs_yes   = h_hits + h_misses
+        n_fcst_yes  = h_hits + h_fa
+        n_denom_csi = h_hits + h_misses + h_fa
+        csi = round(h_hits / n_denom_csi, 4) if n_denom_csi > 0 else None
+        pod = round(h_hits / n_obs_yes,   4) if n_obs_yes   > 0 else None
+        far = round(h_fa   / n_fcst_yes,  4) if n_fcst_yes  > 0 else None
+        f   = sum(h_fcst_binary) / h_n_pts
+        o   = sum(h_obs_binary)  / h_n_pts
+        mse_ref = f * f + o * o
+        fss = round(1.0 - ((f - o) ** 2) / mse_ref, 4) if mse_ref > 1e-10 else None
+        out.append({'hour': hour, 'n_pts': h_n_pts,
+                    'csi': csi, 'pod': pod, 'far': far, 'fss': fss})
+    return out
+
+
+@app.route('/api/compare/categorical', methods=['POST'])
+def compare_categorical():
+    """Per-model categorical skill (CSI/POD/FAR/FSS) over lead time, evaluated
+    over a small neighbourhood around a point so FSS is meaningful.
+
+    Request JSON:
+        { models: [..], lat, lon, hour_min, hour_max, variable,
+          threshold_mm_6h | threshold_ms, fss_window }
+    Response JSON:
+        { models: { AIFS: [{hour, csi, pod, far, fss, n_pts}], .. },
+          threshold_info, fss_window, bbox }
+    """
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({'error': 'Request body must be a JSON object'}), 400
+    models   = body.get('models', [])
+    variable = body.get('variable', 'precipitation')
+    if not isinstance(models, list) or not models:
+        return jsonify({'error': 'models must be a non-empty list'}), 400
+    if not all(isinstance(m, str) for m in models):
+        return jsonify({'error': 'models must be a list of strings'}), 400
+    if _bad_token(*models, variable):
+        return jsonify({'error': 'Invalid model or variable'}), 400
+    try:
+        lat        = float(body.get('lat',       35.0))
+        lon        = float(body.get('lon',      -75.0))
+        hour_min   = int(body.get('hour_min',    0))
+        hour_max   = int(body.get('hour_max',    168))
+        fss_window = int(body.get('fss_window',  3))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'lat, lon, hour_min, hour_max, fss_window must be numeric'}), 400
+    fss_window = max(1, min(fss_window, 21))     # clamp to a sane neighbourhood
+
+    is_wind = (variable == 'wind')
+    try:
+        if is_wind:
+            fcst_var, obs_var, obs_src = 'wind_u_10m', 'wind_speed', 'ERA5_WIND'
+            threshold_rate = float(body.get('threshold_ms', 10.0))
+        else:
+            fcst_var, obs_var, obs_src = variable, 'precipitation', 'GPM_IMERG_V07B'
+            threshold_rate = float(body.get('threshold_mm_6h', 25.0)) / 6.0
+    except (TypeError, ValueError):
+        return jsonify({'error': 'threshold must be numeric'}), 400
+
+    # Neighbourhood box: fss_window grid cells of ~0.5° → half-width, min one cell.
+    hw = max(fss_window * 0.25, 0.26)
+    min_lat, max_lat = lat - hw, lat + hw
+    min_lon, max_lon = lon - hw, lon + hw
+
+    conn   = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        per_model = {}
+        for m in models:
+            accum_h = 1 if is_wind else MODEL_ACCUM_HOURS.get(m, 1)
+            per_model[m] = _categorical_hours_for_box(
+                cursor, m, fcst_var, obs_var, obs_src,
+                min_lat, max_lat, min_lon, max_lon,
+                hour_min, hour_max, threshold_rate, accum_h)
+
+        threshold_info = ({'threshold_ms': threshold_rate, 'unit': 'm/s'} if is_wind
+                          else {'threshold_mm_6h': round(threshold_rate * 6, 2), 'unit': 'mm/6h'})
+        threshold_info['threshold_rate'] = round(threshold_rate, 4)
+
+        total = sum(len(v) for v in per_model.values())
+        print(f"✅ compare/categorical: {len(models)} models, "
+              f"{total} model-hours, ({lat},{lon}) window={fss_window} "
+              f"thr={threshold_info.get('unit')}")
+
+        return jsonify({
+            'models':         per_model,
+            'threshold_info': threshold_info,
+            'fss_window':     fss_window,
+            'bbox':           [round(min_lat, 3), round(max_lat, 3),
+                               round(min_lon, 3), round(max_lon, 3)],
+        })
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        print(f"❌ Error in compare/categorical: {e}")
         return jsonify({'error': 'Internal server error'}), 500
     finally:
         cursor.close()

@@ -14,7 +14,7 @@ import { fetchSpatialMetric } from './api/spatialApi';
 
 // ── Layer renderers ───────────────────────────────────────────────────────────
 import { drawOnMap }            from './layers/idwLayer';
-import { drawWindArrows, startStreamlines, stopStreamlines } from './layers/windLayer';
+import { drawWindArrows, stopWindArrows, startStreamlines, stopStreamlines } from './layers/windLayer';
 import { drawUncertaintyBoxes, stopUncertainty } from './layers/vsupLayer';
 import { drawBivariateLayer, stopBivariate } from './layers/bivariateLayer';
 import { drawTextureLayer, stopTexture }         from './layers/textureLayer';
@@ -118,6 +118,10 @@ function App() {
   const dragStartRef          = useRef({ mouseX: 0, mouseY: 0, panelX: 0, panelY: 0 });
   const uncertaintyModeRef      = useRef(null);
   const invertUncertaintyRef    = useRef(false);
+  // Monotonic id for the main map fetch. Rapid model/hour/member changes fire
+  // overlapping fetches; without this guard a slow earlier response can resolve
+  // last and overwrite newer data + repaint the map with stale values.
+  const loadSeqRef              = useRef(0);
 
   const currentModel = MODELS[selectedModel];
 
@@ -210,12 +214,11 @@ function App() {
     const map = mapInstanceRef.current;
     if (selectedVariable === 'wind' && dataRef.current?.length && map) {
       if (showWindArrows) drawWindArrows(map, dataRef.current, arrowsCanvasRef);
-      else { arrowsCanvasRef.current?.remove(); arrowsCanvasRef.current = null; }
+      else stopWindArrows(map, arrowsCanvasRef);
       if (showWindLines) startStreamlines(map, dataRef.current, animationFrameRef, showWindLinesRef);
       else stopStreamlines(animationFrameRef);
     } else {
-      arrowsCanvasRef.current?.remove();
-      arrowsCanvasRef.current = null;
+      stopWindArrows(map, arrowsCanvasRef);
       stopStreamlines(animationFrameRef);
     }
   }, [showWindArrows, showWindLines, selectedVariable, selectedHour, selectedModel, selectedMember]); // eslint-disable-line
@@ -264,9 +267,11 @@ function App() {
   // ── Data fetch ────────────────────────────────────────────────────────────────
   const loadDataForHour = async () => {
     if (!mapInstanceRef.current) return;
+    const seq = ++loadSeqRef.current;      // this call's ticket
     setLoading(true); setError('');
     try {
       const data = await fetchForecastData(currentModel.name, selectedVariable, selectedHour, selectedMember);
+      if (seq !== loadSeqRef.current) return;   // a newer load started — drop this stale response
       dataRef.current = data;
 
       // Single pass — avoids spreading a large array into Math.min/max (RangeError
@@ -290,6 +295,7 @@ function App() {
       setLoading(false);
 
       setTimeout(() => {
+        if (seq !== loadSeqRef.current) return;   // superseded before the deferred draw ran
         const map = mapInstanceRef.current;
         drawOnMap(map, data, selectedColormap, selectedMember === 'std', { min: minVal, max: maxVal }, { canvasRef, drawFnRef, uncertaintyModeRef }, { flipColormap, gridOpacity, numBuckets });
         if (selectedVariable === 'wind') {
@@ -304,6 +310,7 @@ function App() {
           drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, true, invertUncertaintyRef.current, numBuckets > 1 ? numBuckets : 4), setBivariateRanges, numBuckets, selectedColormap, true, invertUncertaintyRef.current, flipColormap, gridOpacity);
       }, 300);
     } catch (err) {
+      if (seq !== loadSeqRef.current) return;   // stale failure from a superseded load
       console.error('Load error:', err);
       setError(`Could not load: ${err.message}`);
       setLoading(false);
@@ -329,10 +336,16 @@ function App() {
   useEffect(() => {
     if (!clickedPoint) return;
     const { lat, lon } = clickedPoint;
+    // Guard against out-of-order responses and setState-after-unmount: the
+    // cleanup flips `cancelled`, so a superseded (or unmounted) fetch's
+    // handlers become no-ops. Clicking points quickly no longer lets a slow
+    // earlier response overwrite the newer point's charts.
+    let cancelled = false;
 
     setTimeseriesLoading(true); setTimeseriesData(null);
     apiFetchTimeseries(currentModel.name, selectedVariable, lat, lon)
       .then(data => {
+        if (cancelled) return;
         if (Array.isArray(data) && data.length) {
           setTimeseriesData(data.map(d => ({
             hour:    d.hour,
@@ -345,14 +358,16 @@ function App() {
           })));
         }
       })
-      .catch(err => console.error('Timeseries error:', err))
-      .finally(() => setTimeseriesLoading(false));
+      .catch(err => { if (!cancelled) console.error('Timeseries error:', err); })
+      .finally(() => { if (!cancelled) setTimeseriesLoading(false); });
 
     setSsrLoading(true); setSsrData(null);
     apiFetchSpreadSkill(currentModel.name, selectedVariable, lat, lon)
-      .then(data => { if (data?.hours) setSsrData(data); })
-      .catch(err => console.error('Spread-skill error:', err))
-      .finally(() => setSsrLoading(false));
+      .then(data => { if (!cancelled && data?.hours) setSsrData(data); })
+      .catch(err => { if (!cancelled) console.error('Spread-skill error:', err); })
+      .finally(() => { if (!cancelled) setSsrLoading(false); });
+
+    return () => { cancelled = true; };
   }, [clickedPoint, selectedModel, selectedVariable]); // eslint-disable-line
 
   // ── Spatial metric computation ────────────────────────────────────────────────
