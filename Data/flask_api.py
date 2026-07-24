@@ -251,6 +251,33 @@ def get_model_run_id(cursor, model_name):
     return run_id
 
 
+def _latest_init_time(cursor, model_name):
+    """Initialization time of the most recent run for a model (or None).
+
+    Resolving this once per model lets forecast queries drop the per-row
+    correlated subquery that re-derived the latest run for every returned row.
+    Cached per-request in Flask g.
+    """
+    cache = g.get('init_time_cache')
+    if cache is None:
+        g.init_time_cache = {}
+        cache = g.init_time_cache
+    if model_name in cache:
+        return cache[model_name]
+    cursor.execute("""
+        SELECT fr.initialization_time
+        FROM forecast_runs fr
+        JOIN models m ON fr.model_id = m.model_id
+        WHERE m.model_name = %s
+        ORDER BY fr.initialization_time DESC
+        LIMIT 1
+    """, (model_name,))
+    row = cursor.fetchone()
+    init_time = row['initialization_time'] if row else None
+    cache[model_name] = init_time
+    return init_time
+
+
 def _compute_ssr_points(cursor, run_id, variable_id, init_time, hour,
                         min_lat, max_lat, min_lon, max_lon, obs_col):
     """SSR at a single forecast hour from ensemble_statistics + observation_data."""
@@ -1238,59 +1265,70 @@ def get_spread_skill():
         if not available_hours:
             return jsonify({'hours': [], 'correlation': None, 'n_cases': 0})
 
-        results = []
-        for hour in available_hours:
-            # Fetch ensemble members at this hour
-            if variable == 'wind':
-                cursor.execute("""
-                    SELECT SQRT(POWER(u.value, 2) + POWER(v.value, 2)) AS member_val
-                    FROM forecast_data u
-                    JOIN forecast_data v
-                        ON u.run_id = v.run_id AND u.forecast_hour = v.forecast_hour
-                       AND u.ensemble_member = v.ensemble_member
-                       AND u.latitude = v.latitude AND u.longitude = v.longitude
-                    WHERE u.run_id = %s AND u.forecast_hour = %s
-                      AND u.variable_id = (SELECT variable_id FROM variables WHERE variable_name = 'wind_u_10m')
-                      AND v.variable_id = (SELECT variable_id FROM variables WHERE variable_name = 'wind_v_10m')
-                      AND ABS(u.latitude  - %s) <= %s
-                      AND ABS(u.longitude - %s) <= %s
-                      AND u.ensemble_member IS NOT NULL
-                """, (run_id, hour, lat, radius, lon, radius))
-            else:
-                cursor.execute("""
-                    SELECT value AS member_val FROM forecast_data
-                    WHERE run_id = %s AND forecast_hour = %s
-                      AND variable_id = (SELECT variable_id FROM variables WHERE variable_name = %s)
-                      AND ABS(latitude  - %s) <= %s
-                      AND ABS(longitude - %s) <= %s
-                      AND ensemble_member IS NOT NULL
-                    ORDER BY ensemble_member
-                """, (run_id, hour, variable, lat, radius, lon, radius))
+        # Precipitation members are period-accumulated totals (mm/6h for AIFS,
+        # mm/3h for GEFS, mm/h for UKMO); IMERG obs are mm/h. Divide by accum_h so
+        # values are mm/h before computing spread/error. Wind is instantaneous.
+        accum_h = MODEL_ACCUM_HOURS.get(model_name, 1) if variable == 'precipitation' else 1
 
-            # Precipitation members are period-accumulated totals (mm/6h for AIFS,
-            # mm/3h for GEFS, mm/h for UKMO). IMERG observations are in mm/h.
-            # Divide by accum_h so all values are in mm/h before computing
-            # spread/error. Wind and other instantaneous variables use accum_h=1.
-            accum_h = MODEL_ACCUM_HOURS.get(model_name, 1) if variable == 'precipitation' else 1
-            members = [float(r['member_val']) / accum_h for r in cursor.fetchall()]
-
-            # Fetch matched observation (average within radius at the valid time)
+        # Batch-fetch members for ALL hours in one query (was a per-hour query →
+        # N+1). Then group in Python.
+        from collections import defaultdict
+        members_by_hour = defaultdict(list)
+        if variable == 'wind':
             cursor.execute("""
-                SELECT AVG(""" + obs_col + """) AS obs_val
-                FROM observation_data
-                WHERE obs_time = %s::timestamp + (%s || ' hours')::interval
+                SELECT u.forecast_hour,
+                       SQRT(POWER(u.value, 2) + POWER(v.value, 2)) AS member_val
+                FROM forecast_data u
+                JOIN forecast_data v
+                    ON u.run_id = v.run_id AND u.forecast_hour = v.forecast_hour
+                   AND u.ensemble_member = v.ensemble_member
+                   AND u.latitude = v.latitude AND u.longitude = v.longitude
+                WHERE u.run_id = %s AND u.forecast_hour = ANY(%s)
+                  AND u.variable_id = (SELECT variable_id FROM variables WHERE variable_name = 'wind_u_10m')
+                  AND v.variable_id = (SELECT variable_id FROM variables WHERE variable_name = 'wind_v_10m')
+                  AND ABS(u.latitude  - %s) <= %s
+                  AND ABS(u.longitude - %s) <= %s
+                  AND u.ensemble_member IS NOT NULL
+            """, (run_id, available_hours, lat, radius, lon, radius))
+        else:
+            cursor.execute("""
+                SELECT forecast_hour, value AS member_val FROM forecast_data
+                WHERE run_id = %s AND forecast_hour = ANY(%s)
+                  AND variable_id = (SELECT variable_id FROM variables WHERE variable_name = %s)
                   AND ABS(latitude  - %s) <= %s
                   AND ABS(longitude - %s) <= %s
-                  AND """ + obs_col + """ IS NOT NULL
-            """, (str(init_time), hour, lat, radius, lon, radius))
+                  AND ensemble_member IS NOT NULL
+                ORDER BY forecast_hour, ensemble_member
+            """, (run_id, available_hours, variable, lat, radius, lon, radius))
+        for r in cursor.fetchall():
+            members_by_hour[r['forecast_hour']].append(float(r['member_val']) / accum_h)
 
-            obs_row = cursor.fetchone()
-            if not members or not obs_row or obs_row['obs_val'] is None:
+        # Batch-fetch matched observations (averaged within radius) for every valid
+        # time at once, then map each back to its forecast hour.
+        valid_time_to_hour = {init_time + timedelta(hours=h): h for h in available_hours}
+        cursor.execute(
+            "SELECT obs_time, AVG(" + obs_col + ") AS obs_val"
+            " FROM observation_data"
+            " WHERE obs_time = ANY(%s)"
+            "   AND ABS(latitude  - %s) <= %s AND ABS(longitude - %s) <= %s"
+            "   AND " + obs_col + " IS NOT NULL"
+            " GROUP BY obs_time",
+            (list(valid_time_to_hour.keys()), lat, radius, lon, radius)
+        )
+        obs_by_hour = {}
+        for r in cursor.fetchall():
+            h = valid_time_to_hour.get(r['obs_time'])
+            if h is not None and r['obs_val'] is not None:
+                obs_by_hour[h] = float(r['obs_val'])
+
+        results = []
+        for hour in available_hours:
+            members = members_by_hour.get(hour, [])
+            if not members or hour not in obs_by_hour:
                 continue
-
-            obs      = float(obs_row['obs_val'])
-            n        = len(members)
-            ens_mean = sum(members) / n
+            obs       = obs_by_hour[hour]
+            n         = len(members)
+            ens_mean  = sum(members) / n
             spread_sq = sum((x - ens_mean) ** 2 for x in members) / n   # population variance
             spread    = math.sqrt(spread_sq)
             error     = abs(ens_mean - obs)
@@ -1877,24 +1915,21 @@ def compare_skill():
         # ------------------------------------------------------------------
         # 1. Fetch forecast rows for all requested models
         # ------------------------------------------------------------------
+        # Resolve each model's latest-run init time once, then query without the
+        # per-row correlated subquery (regridded_forecast has no run_id column).
+        init_times = {m: _latest_init_time(cursor, m) for m in models}
+        init_times = {m: t for m, t in init_times.items() if t is not None}
+        if not init_times:
+            return jsonify({'models': {}, 'obs_hours': [],
+                            'obs_warning': 'No forecast data found for selected parameters.'})
+
         cursor.execute("""
             SELECT
                 rf.model_name,
                 rf.forecast_hour,
                 rf.mean_value,
-                rf.std_dev,
-                fr.initialization_time
+                rf.std_dev
             FROM regridded_forecast rf
-            JOIN models m  ON m.model_name = rf.model_name
-            JOIN forecast_runs fr
-                ON fr.model_id = m.model_id
-                AND fr.run_id = (
-                    SELECT run_id FROM forecast_runs fr2
-                    JOIN models m2 ON m2.model_id = fr2.model_id
-                    WHERE m2.model_name = rf.model_name
-                    ORDER BY fr2.initialization_time DESC
-                    LIMIT 1
-                )
             WHERE rf.model_name = ANY(%s)
               AND rf.variable_name = %s
               AND rf.forecast_hour BETWEEN %s AND %s
@@ -1904,7 +1939,7 @@ def compare_skill():
               AND rf.std_dev    IS NOT NULL
             ORDER BY rf.model_name, rf.forecast_hour
         """, (
-            models, fcst_var, hour_min, hour_max,
+            list(init_times.keys()), fcst_var, hour_min, hour_max,
             lat - 0.26, lat + 0.26,
             lon - 0.26, lon + 0.26,
         ))
@@ -1922,7 +1957,7 @@ def compare_skill():
         # window.  Expand the obs query backward by max(accum_h) - 1 hours.
         valid_times_set = set()
         for row in fcst_rows:
-            vt = row['initialization_time'] + timedelta(hours=row['forecast_hour'])
+            vt = init_times[row['model_name']] + timedelta(hours=row['forecast_hour'])
             valid_times_set.add(vt)
 
         if not valid_times_set:
@@ -1974,7 +2009,7 @@ def compare_skill():
             hour    = row['forecast_hour']
             mean    = float(row['mean_value'])
             std     = float(row['std_dev'])
-            vt      = row['initialization_time'] + timedelta(hours=hour)
+            vt      = init_times[m_name] + timedelta(hours=hour)
             accum_h = MODEL_ACCUM_HOURS.get(m_name, 1)
 
             # Collect hourly obs in the half-open window (vt - accum_h, vt]
@@ -2385,22 +2420,15 @@ def categorical_metrics_endpoint():
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
         # ── 1. Forecast rows ─────────────────────────────────────────────────
+        init_time_val = _latest_init_time(cursor, model_name)
+        if init_time_val is None:
+            return jsonify({'error': 'No forecast data found for the selected parameters.'}), 404
         cursor.execute("""
             SELECT
                 rf.forecast_hour,
                 rf.mean_value,
-                rf.std_dev,
-                fr.initialization_time
+                rf.std_dev
             FROM regridded_forecast rf
-            JOIN models m  ON m.model_name = rf.model_name
-            JOIN forecast_runs fr
-                ON fr.model_id = m.model_id
-               AND fr.run_id = (
-                       SELECT run_id FROM forecast_runs fr2
-                       JOIN models m2 ON m2.model_id = fr2.model_id
-                       WHERE m2.model_name = rf.model_name
-                       ORDER BY fr2.initialization_time DESC LIMIT 1
-                   )
             WHERE rf.model_name   = %s
               AND rf.variable_name = %s
               AND rf.forecast_hour BETWEEN %s AND %s
@@ -2417,7 +2445,7 @@ def categorical_metrics_endpoint():
 
         # ── 2. Observations (extended window for accumulation) ────────────────
         valid_times = [
-            r['initialization_time'] + timedelta(hours=r['forecast_hour'])
+            init_time_val + timedelta(hours=r['forecast_hour'])
             for r in fcst_rows
         ]
         min_obs_t = min(valid_times) - timedelta(hours=accum_h - 1)
@@ -2450,7 +2478,7 @@ def categorical_metrics_endpoint():
             hour     = row['forecast_hour']
             mean     = float(row['mean_value'])
             std      = float(row['std_dev'])
-            vt       = row['initialization_time'] + timedelta(hours=hour)
+            vt       = init_time_val + timedelta(hours=hour)
 
             obs_window = [
                 obs_by_time[vt - timedelta(hours=dh)]
@@ -2614,19 +2642,13 @@ def region_categorical_metrics_endpoint():
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
         # ── 1. Fetch all forecast grid points in bbox ─────────────────────────
+        init_time_val = _latest_init_time(cursor, model_name)
+        if init_time_val is None:
+            return jsonify({'error': 'No forecast data found for the selected region.'}), 404
         cursor.execute("""
             SELECT rf.forecast_hour, rf.latitude, rf.longitude,
-                   rf.mean_value, rf.std_dev, fr.initialization_time
+                   rf.mean_value, rf.std_dev
             FROM regridded_forecast rf
-            JOIN models m  ON m.model_name = rf.model_name
-            JOIN forecast_runs fr
-                ON fr.model_id = m.model_id
-               AND fr.run_id = (
-                   SELECT run_id FROM forecast_runs fr2
-                   JOIN models m2 ON m2.model_id = fr2.model_id
-                   WHERE m2.model_name = rf.model_name
-                   ORDER BY fr2.initialization_time DESC LIMIT 1
-               )
             WHERE rf.model_name    = %s
               AND rf.variable_name = %s
               AND rf.forecast_hour BETWEEN %s AND %s
@@ -2643,7 +2665,7 @@ def region_categorical_metrics_endpoint():
 
         # ── 2. Fetch per-(lat,lon) observations for the extended time window ──
         valid_times = [
-            r['initialization_time'] + timedelta(hours=r['forecast_hour'])
+            init_time_val + timedelta(hours=r['forecast_hour'])
             for r in fcst_rows
         ]
         min_obs_t = min(valid_times) - timedelta(hours=accum_h - 1)
@@ -2695,7 +2717,7 @@ def region_categorical_metrics_endpoint():
                 lon_k   = round(float(row['longitude']), 2)
                 mean    = float(row['mean_value'])
                 std     = float(row['std_dev'])
-                vt      = row['initialization_time'] + timedelta(hours=hour)
+                vt      = init_time_val + timedelta(hours=hour)
 
                 obs_window = [
                     obs_dict[(lat_k, lon_k, vt - timedelta(hours=dh))]
@@ -2853,19 +2875,13 @@ def _categorical_hours_for_box(cursor, model_name, fcst_var, obs_var, obs_src,
     Shares the domain-fractions FSS convention (MSE_ref = f²+o², undefined when
     both fractions are 0) with region_categorical_metrics_endpoint.
     """
+    init_time_val = _latest_init_time(cursor, model_name)
+    if init_time_val is None:
+        return []
     cursor.execute("""
         SELECT rf.forecast_hour, rf.latitude, rf.longitude,
-               rf.mean_value, rf.std_dev, fr.initialization_time
+               rf.mean_value, rf.std_dev
         FROM regridded_forecast rf
-        JOIN models m  ON m.model_name = rf.model_name
-        JOIN forecast_runs fr
-            ON fr.model_id = m.model_id
-           AND fr.run_id = (
-               SELECT run_id FROM forecast_runs fr2
-               JOIN models m2 ON m2.model_id = fr2.model_id
-               WHERE m2.model_name = rf.model_name
-               ORDER BY fr2.initialization_time DESC LIMIT 1
-           )
         WHERE rf.model_name    = %s
           AND rf.variable_name = %s
           AND rf.forecast_hour BETWEEN %s AND %s
@@ -2879,7 +2895,7 @@ def _categorical_hours_for_box(cursor, model_name, fcst_var, obs_var, obs_src,
     if not fcst_rows:
         return []
 
-    valid_times = [r['initialization_time'] + timedelta(hours=r['forecast_hour'])
+    valid_times = [init_time_val + timedelta(hours=r['forecast_hour'])
                    for r in fcst_rows]
     min_obs_t = min(valid_times) - timedelta(hours=accum_h - 1)
     max_obs_t = max(valid_times)
@@ -2914,7 +2930,7 @@ def _categorical_hours_for_box(cursor, model_name, fcst_var, obs_var, obs_src,
             lat_k = round(float(row['latitude']),  2)
             lon_k = round(float(row['longitude']), 2)
             mean  = float(row['mean_value'])
-            vt    = row['initialization_time'] + timedelta(hours=hour)
+            vt    = init_time_val + timedelta(hours=hour)
             obs_window = [
                 obs_dict[(lat_k, lon_k, vt - timedelta(hours=dh))]
                 for dh in range(accum_h - 1, -1, -1)

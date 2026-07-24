@@ -242,7 +242,7 @@ function App() {
       if (canvasRef.current) canvasRef.current.style.display = 'none';
       drawBivariateLayer(
         map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour,
-        buildColorMatrix(selectedColormap, showFanChart, invertUncertainty, numBuckets || 4),
+        null,  // colorMatrix is unused downstream — color comes from continuousColor()
         setBivariateRanges, numBuckets, selectedColormap, showFanChart,
         invertUncertainty, flipColormap, gridOpacity,
       );
@@ -305,9 +305,9 @@ function App() {
         if (uncertaintyModeRef.current === 'vsup')
           drawUncertaintyBoxes(map, uncertaintyLayerRef, uncertaintyCanvasRef, currentModel.name, selectedVariable, selectedHour, selectedColormap, invertUncertaintyRef.current, numBuckets, flipColormap, gridOpacity, setBivariateRanges);
         if (uncertaintyModeRef.current === 'bivariate')
-          drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, false, invertUncertaintyRef.current, numBuckets > 1 ? numBuckets : 4), setBivariateRanges, numBuckets, selectedColormap, false, invertUncertaintyRef.current, flipColormap, gridOpacity);
+          drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, null, setBivariateRanges, numBuckets, selectedColormap, false, invertUncertaintyRef.current, flipColormap, gridOpacity);
         if (uncertaintyModeRef.current === 'fan')
-          drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, true, invertUncertaintyRef.current, numBuckets > 1 ? numBuckets : 4), setBivariateRanges, numBuckets, selectedColormap, true, invertUncertaintyRef.current, flipColormap, gridOpacity);
+          drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, null, setBivariateRanges, numBuckets, selectedColormap, true, invertUncertaintyRef.current, flipColormap, gridOpacity);
       }, 300);
     } catch (err) {
       if (seq !== loadSeqRef.current) return;   // stale failure from a superseded load

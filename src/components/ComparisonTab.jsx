@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   ComposedChart, LineChart, Line, BarChart, Bar,
   Area, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -406,13 +406,21 @@ export function ComparisonTab({
     }
   };
 
-  // Derived chart data
-  const mergedTs = buildMergedTimeseries(tsData, selectedModels, normalizeScales, selectedVariable);
+  // Derived chart data. Memoised: buildMergedTimeseries is O(hours × models) with
+  // a per-hour .find, and previously reran on every render (incl. unrelated state
+  // like share/advanced toggles).
+  const mergedTs = useMemo(
+    () => buildMergedTimeseries(tsData, selectedModels, normalizeScales, selectedVariable),
+    [tsData, selectedModels, normalizeScales, selectedVariable],
+  );
   // For precipitation, all display values are in mm/h (rate) after accum conversion
   const yAxisUnit     = selectedVariable === 'wind' ? 'm/s' : 'mm/h';
   const thresholdUnit = selectedVariable === 'wind' ? 'm/s' : 'mm/6h';
   // After the accum conversion the ratio should be much smaller than the raw ratio
-  const scaleRatio = tsData ? computeScaleRatio(tsData, selectedModels, selectedVariable) : 1;
+  const scaleRatio = useMemo(
+    () => (tsData ? computeScaleRatio(tsData, selectedModels, selectedVariable) : 1),
+    [tsData, selectedModels, selectedVariable],
+  );
   const hasScaleMismatch = scaleRatio > 5; // still >5× after unit fix → warn
 
   // Defer chart mount one frame after the tab becomes active so Recharts measures
