@@ -52,22 +52,42 @@ export const drawOnMap = (map, data, colormapName, isStdDev, range, refs, option
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Project all data points to screen coords once.
-    const spatialData = data.map(p => {
-      try {
-        const pt = map.latLngToContainerPoint([parseFloat(p.lat), parseFloat(p.lon)]);
-        return {
-          x: pt.x, y: pt.y,
-          value: p.speed !== undefined ? parseFloat(p.speed) : parseFloat(p.value),
-          lat: parseFloat(p.lat), lon: parseFloat(p.lon),
-        };
-      } catch { return null; }
-    }).filter(Boolean);
+    // Project all data points to screen coords once, tracking lat/lon bounds in
+    // a single pass (avoids spreading a large array into Math.min/max, which can
+    // throw RangeError on fine grids).
+    let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+    const spatialData = [];
+    for (const p of data) {
+      const lat = parseFloat(p.lat), lon = parseFloat(p.lon);
+      let pt;
+      try { pt = map.latLngToContainerPoint([lat, lon]); } catch { continue; }
+      spatialData.push({
+        x: pt.x, y: pt.y,
+        value: p.speed !== undefined ? parseFloat(p.speed) : parseFloat(p.value),
+      });
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+      if (lon < minLon) minLon = lon;
+      if (lon > maxLon) maxLon = lon;
+    }
+    if (!spatialData.length) return;
 
-    const allLats = spatialData.map(p => p.lat);
-    const allLons = spatialData.map(p => p.lon);
-    const topLeft     = map.latLngToContainerPoint([Math.max(...allLats), Math.min(...allLons)]);
-    const bottomRight = map.latLngToContainerPoint([Math.min(...allLats), Math.max(...allLons)]);
+    const topLeft     = map.latLngToContainerPoint([maxLat, minLon]);
+    const bottomRight = map.latLngToContainerPoint([minLat, maxLon]);
+
+    // Uniform-grid spatial index (cell = influenceRadius) so each pixel tests only
+    // the points in its 3×3 neighbourhood of cells instead of every point. The
+    // d2 < influenceRadiusSq cutoff is unchanged, and a point within that radius is
+    // at most one cell away, so the rendered output matches the old full scan
+    // (float summation order may differ by <1 ULP — imperceptible after byte quantisation).
+    const cell = influenceRadius;
+    const buckets = new Map();
+    for (const point of spatialData) {
+      const key = Math.floor(point.x / cell) + ',' + Math.floor(point.y / cell);
+      let arr = buckets.get(key);
+      if (!arr) { arr = []; buckets.set(key, arr); }
+      arr.push(point);
+    }
 
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width  = Math.ceil(size.x / pixelSize);
@@ -85,17 +105,24 @@ export const drawOnMap = (map, data, colormapName, isStdDev, range, refs, option
         if (screenX < topLeft.x || screenX > bottomRight.x ||
             screenY < topLeft.y || screenY > bottomRight.y) continue;
 
+        const bx = Math.floor(screenX / cell);
+        const by = Math.floor(screenY / cell);
         let weightedSum = 0, totalWeight = 0;
-        for (const point of spatialData) {
-          const dx  = point.x - screenX;
-          const dy  = point.y - screenY;
-          const d2  = dx * dx + dy * dy;
-          if (d2 < influenceRadiusSq) {
-            // Avoid sqrt — compare squared distance, compute weight from d2.
-            // weight = 1/d^4 = 1/(d2^2). For d < 1px use weight=1.
-            const weight = d2 < 1 ? 1 : 1 / (d2 * d2);
-            weightedSum += point.value * weight;
-            totalWeight += weight;
+        for (let cx = bx - 1; cx <= bx + 1; cx++) {
+          for (let cy = by - 1; cy <= by + 1; cy++) {
+            const arr = buckets.get(cx + ',' + cy);
+            if (!arr) continue;
+            for (const point of arr) {
+              const dx = point.x - screenX;
+              const dy = point.y - screenY;
+              const d2 = dx * dx + dy * dy;
+              if (d2 < influenceRadiusSq) {
+                // Avoid sqrt — compare squared distance, weight = 1/d^4 = 1/(d2^2).
+                const weight = d2 < 1 ? 1 : 1 / (d2 * d2);
+                weightedSum += point.value * weight;
+                totalWeight += weight;
+              }
+            }
           }
         }
 
