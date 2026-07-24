@@ -529,8 +529,8 @@ export function AnalysisTab({
                                   labelFormatter={h => `Forecast +${h}h — ${ssrData.hours.find(r => r.hour === h)?.n_members} members`} />
                                 <ReferenceLine y={1} stroke="rgba(255,255,255,0.5)" strokeDasharray="6 3" label={{ value: 'SSR=1', position: 'right', fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} />
                                 <Bar dataKey="ssr" radius={[4, 4, 0, 0]} name="SSR">
-                                  {ssrData.hours.map(entry => (
-                                    <Cell key={entry.hour} fill={ssrBarColor(entry.ssr)} />
+                                  {ssrData.hours.map((entry, i) => (
+                                    <Cell key={`${entry.hour}-${i}`} fill={ssrBarColor(entry.ssr)} />
                                   ))}
                                 </Bar>
                               </BarChart>
@@ -642,7 +642,8 @@ export function AnalysisTab({
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }} title="Separate from the Region spatial-maps threshold above">Threshold</span>
                       <input
-                        type="number" min="0" step={selectedVariable === 'wind' ? '1' : '1'} value={catThreshold}
+                        type="number" min="0" step="1" value={catThreshold}
+                        aria-label={`Threshold (${selectedVariable === 'wind' ? 'm/s' : 'mm/6h'})`}
                         onChange={e => setCatThreshold(e.target.value)}
                         style={{ width: '72px', padding: '4px 8px', fontSize: t.fontSize.base, fontWeight: '600', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'right', outline: 'none' }}
                       />

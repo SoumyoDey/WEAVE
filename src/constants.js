@@ -53,6 +53,7 @@ export const buildColorMatrix = (colormapName, vsup = false, invertUncertainty =
   const toHex   = (r, g, b) =>
     '#' + [r, g, b].map(v => Math.max(0, Math.min(255, v)).toString(16).padStart(2, '0')).join('');
   const cmapRgb = (t) => {
+    t = Math.min(Math.max(t, 0), 1);   // guard against out-of-range → colors[undefined] = NaN
     const seg = colors.length - 1;
     const si  = Math.min(Math.floor(t * seg), seg - 1);
     const lt  = t * seg - si;

@@ -55,6 +55,10 @@ function App() {
   const [selectedColormap, setSelectedColormap] = useState('Viridis');  // CVD-safe, perceptually-uniform default
   const [showWindArrows, setShowWindArrows]     = useState(false);
   const [showWindLines, setShowWindLines]       = useState(false);
+  // Reactive flag set once the Leaflet map exists. Effects that attach map
+  // handlers key off this instead of the non-reactive mapInstanceRef.current,
+  // which is null on first render and never triggers a re-run.
+  const [mapReady, setMapReady]                 = useState(false);
 
   // ── Uncertainty overlay state (mutually exclusive) ───────────────────────────
   const [uncertaintyMode, setUncertaintyMode]   = useState(null);  // null | 'vsup' | 'bivariate' | 'fan' | 'texture'
@@ -155,6 +159,7 @@ function App() {
       L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap, &copy; CartoDB' }).addTo(map);
       L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png',   { attribution: '' }).addTo(map);
       mapInstanceRef.current = map;
+      setMapReady(true);
       setTimeout(() => { map.invalidateSize(); loadDataForHour(); }, 100);
     }, 100);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -331,7 +336,7 @@ function App() {
     };
     map.on('click', handleClick);
     return () => map.off('click', handleClick);
-  }, [mapInstanceRef.current]); // eslint-disable-line
+  }, [mapReady]); // eslint-disable-line
 
   useEffect(() => {
     if (!clickedPoint) return;
@@ -434,7 +439,7 @@ function App() {
       map.dragging.enable(); map.scrollWheelZoom.enable(); map.doubleClickZoom.enable();
       map.getContainer().style.cursor = '';
     };
-  }, [selectionMode, mapInstanceRef.current]); // eslint-disable-line
+  }, [selectionMode, mapReady]); // eslint-disable-line
 
   // ── Polygon selection ─────────────────────────────────────────────────────────
   useEffect(() => { // eslint-disable-line react-hooks/exhaustive-deps
@@ -475,7 +480,7 @@ function App() {
       map.dragging.enable(); map.scrollWheelZoom.enable(); map.doubleClickZoom.enable();
       map.getContainer().style.cursor = '';
     };
-  }, [selectionMode, mapInstanceRef.current]); // eslint-disable-line
+  }, [selectionMode, mapReady]); // eslint-disable-line
 
   // ── Redraw metric canvas on map move/zoom ─────────────────────────────────────
   useEffect(() => { // eslint-disable-line react-hooks/exhaustive-deps
@@ -487,7 +492,7 @@ function App() {
     };
     map.on('moveend', redraw); map.on('zoomend', redraw);
     return () => { map.off('moveend', redraw); map.off('zoomend', redraw); };
-  }, [mapInstanceRef.current]); // eslint-disable-line
+  }, [mapReady]); // eslint-disable-line
 
   // ── Draggable panel (window-level mouse handlers) ────────────────────────────
   useEffect(() => {
