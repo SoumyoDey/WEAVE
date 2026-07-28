@@ -280,17 +280,77 @@ def _latest_init_time(cursor, model_name):
     return init_time
 
 
+def _fcst_speed_sql(is_wind, base_cols):
+    """SQL fragments to select forecast mean/std from regridded_forecast (aliased
+    `u`), deriving wind SPEED from the u/v component rows for wind.
+
+    Verification/comparison compares against the observed scalar wind_speed, so
+    the forecast side must also be a speed — not the raw u-component (the old
+    bug). On the aggregate tables there are no per-member speeds, so speed is
+    approximated from the component means/spreads:
+        mean ≈ |mean vector| = √(mean_u² + mean_v²)
+        std  ≈ √(σu² + σv²)
+    (The point SSR path via forecast_data computes the exact per-member speed.)
+
+    Returns (select_cols, from_clause, var_predicate, v_notnull). Callers keep
+    their own WHERE using `u.*` columns; for precipitation the variable name is a
+    bound param, for wind it is hard-coded so no extra param is needed. Every
+    returned fragment is a controlled literal — no user input is interpolated.
+    """
+    if is_wind:
+        select_cols = (f"{base_cols}, "
+                       "SQRT(POWER(u.mean_value, 2) + POWER(v.mean_value, 2)) AS mean_value, "
+                       "SQRT(POWER(u.std_dev, 2)    + POWER(v.std_dev, 2))    AS std_dev")
+        from_clause = ("regridded_forecast u "
+                       "JOIN regridded_forecast v "
+                       "ON v.model_name = u.model_name AND v.forecast_hour = u.forecast_hour "
+                       "AND v.latitude = u.latitude AND v.longitude = u.longitude "
+                       "AND v.variable_name = 'wind_v_10m'")
+        return (select_cols, from_clause, "u.variable_name = 'wind_u_10m'",
+                "AND v.mean_value IS NOT NULL AND v.std_dev IS NOT NULL")
+    return (f"{base_cols}, u.mean_value, u.std_dev",
+            "regridded_forecast u", "u.variable_name = %s", "")
+
+
+def _ensemble_speed_rows(cursor, run_id, variable_id, hour,
+                         min_lat, max_lat, min_lon, max_lon, is_wind):
+    """ensemble_statistics forecast rows (latitude, longitude, mean_value,
+    std_dev) at one hour. For wind, forecast SPEED is derived from the u/v
+    component rows (variable_id is the u-component id; v = wind_v_10m) — the same
+    |mean vector| approximation used on the regridded tables — so it can be
+    compared against the observed scalar wind_speed rather than the raw
+    u-component (the old bug)."""
+    if is_wind:
+        cursor.execute("""
+            SELECT u.latitude, u.longitude,
+                   SQRT(POWER(u.mean_value, 2) + POWER(v.mean_value, 2)) AS mean_value,
+                   SQRT(POWER(u.std_dev, 2)    + POWER(v.std_dev, 2))    AS std_dev
+            FROM ensemble_statistics u
+            JOIN ensemble_statistics v
+              ON v.run_id = u.run_id AND v.forecast_hour = u.forecast_hour
+             AND v.latitude = u.latitude AND v.longitude = u.longitude
+             AND v.variable_id = (SELECT variable_id FROM variables WHERE variable_name = 'wind_v_10m')
+            WHERE u.run_id = %s AND u.variable_id = %s AND u.forecast_hour = %s
+              AND u.latitude BETWEEN %s AND %s AND u.longitude BETWEEN %s AND %s
+              AND u.std_dev IS NOT NULL AND v.std_dev IS NOT NULL
+        """, (run_id, variable_id, hour, min_lat, max_lat, min_lon, max_lon))
+    else:
+        cursor.execute("""
+            SELECT latitude, longitude, mean_value, std_dev
+            FROM ensemble_statistics
+            WHERE run_id = %s AND variable_id = %s AND forecast_hour = %s
+              AND latitude BETWEEN %s AND %s AND longitude BETWEEN %s AND %s
+              AND std_dev IS NOT NULL
+        """, (run_id, variable_id, hour, min_lat, max_lat, min_lon, max_lon))
+    return cursor.fetchall()
+
+
 def _compute_ssr_points(cursor, run_id, variable_id, init_time, hour,
                         min_lat, max_lat, min_lon, max_lon, obs_col):
     """SSR at a single forecast hour from ensemble_statistics + observation_data."""
-    cursor.execute("""
-        SELECT latitude, longitude, mean_value, std_dev
-        FROM ensemble_statistics
-        WHERE run_id = %s AND variable_id = %s AND forecast_hour = %s
-          AND latitude BETWEEN %s AND %s AND longitude BETWEEN %s AND %s
-          AND std_dev IS NOT NULL
-    """, (run_id, variable_id, hour, min_lat, max_lat, min_lon, max_lon))
-    ens_rows = cursor.fetchall()
+    ens_rows = _ensemble_speed_rows(cursor, run_id, variable_id, hour,
+                                    min_lat, max_lat, min_lon, max_lon,
+                                    obs_col == 'wind_speed')
 
     valid_time = init_time + timedelta(hours=hour)
     cursor.execute(
@@ -335,17 +395,12 @@ def _compute_correlation_points(cursor, run_id, variable_id, init_time,
                                  min_lat, max_lat, min_lon, max_lon, obs_col):
     """Spread-skill correlation across verified hours from ensemble_statistics + observation_data."""
     candidate_hours = [0, 6, 12, 18, 24, 48, 72, 96, 120, 144, 168]
+    is_wind = (obs_col == 'wind_speed')
     hour_data = {}
     for hour in candidate_hours:
         valid_time = init_time + timedelta(hours=hour)
-        cursor.execute("""
-            SELECT latitude, longitude, mean_value, std_dev
-            FROM ensemble_statistics
-            WHERE run_id = %s AND variable_id = %s AND forecast_hour = %s
-              AND latitude BETWEEN %s AND %s AND longitude BETWEEN %s AND %s
-              AND std_dev IS NOT NULL
-        """, (run_id, variable_id, hour, min_lat, max_lat, min_lon, max_lon))
-        ens_rows = cursor.fetchall()
+        ens_rows = _ensemble_speed_rows(cursor, run_id, variable_id, hour,
+                                        min_lat, max_lat, min_lon, max_lon, is_wind)
         if not ens_rows:
             continue
         cursor.execute(
@@ -514,18 +569,19 @@ def _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
         return {}
     init_time_val = run_row['initialization_time']
 
-    cursor.execute("""
-        SELECT latitude, longitude, forecast_hour, mean_value, std_dev
-        FROM regridded_forecast
-        WHERE model_name    = %s
-          AND variable_name = %s
-          AND forecast_hour BETWEEN %s AND %s
-          AND latitude  BETWEEN %s AND %s
-          AND longitude BETWEEN %s AND %s
-          AND mean_value IS NOT NULL AND std_dev IS NOT NULL
-        ORDER BY latitude, longitude, forecast_hour
-    """, (model_name, fcst_var, hour_min, hour_max,
-          min_lat, max_lat, min_lon, max_lon))
+    # Forecast mean/std (wind → speed via u/v self-join; see _fcst_speed_sql).
+    _sel, _frm, _varw, _vnn = _fcst_speed_sql(is_wind, "u.latitude, u.longitude, u.forecast_hour")
+    cursor.execute(f"""
+        SELECT {_sel}
+        FROM {_frm}
+        WHERE u.model_name = %s AND {_varw}
+          AND u.forecast_hour BETWEEN %s AND %s
+          AND u.latitude  BETWEEN %s AND %s
+          AND u.longitude BETWEEN %s AND %s
+          AND u.mean_value IS NOT NULL AND u.std_dev IS NOT NULL {_vnn}
+        ORDER BY u.latitude, u.longitude, u.forecast_hour
+    """, (model_name, *(() if is_wind else (fcst_var,)),
+          hour_min, hour_max, min_lat, max_lat, min_lon, max_lon))
     fcst_rows = cursor.fetchall()
     if not fcst_rows:
         return {}
@@ -1829,8 +1885,10 @@ def compare_timeseries():
     except (TypeError, ValueError):
         return jsonify({'error': 'lat, lon, hour_min, hour_max must be numeric'}), 400
 
-    # Map 'wind' shorthand to the u-component stored in regridded_forecast
-    var_name = 'wind_u_10m' if variable == 'wind' else variable
+    # Wind → forecast SPEED via u/v self-join (see _fcst_speed_sql); precip → the
+    # variable itself. (Was: raw u-component, which isn't a speed.)
+    is_wind = (variable == 'wind')
+    var_name = variable
 
     if not models:
         return jsonify({'error': 'No models specified'}), 400
@@ -1838,17 +1896,17 @@ def compare_timeseries():
     conn   = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
-        cursor.execute("""
-            SELECT model_name, forecast_hour, mean_value, std_dev
-            FROM regridded_forecast
-            WHERE model_name = ANY(%s)
-              AND variable_name = %s
-              AND forecast_hour BETWEEN %s AND %s
-              AND latitude  BETWEEN %s AND %s
-              AND longitude BETWEEN %s AND %s
-            ORDER BY model_name, forecast_hour
+        _sel, _frm, _varw, _vnn = _fcst_speed_sql(is_wind, "u.model_name, u.forecast_hour")
+        cursor.execute(f"""
+            SELECT {_sel}
+            FROM {_frm}
+            WHERE u.model_name = ANY(%s) AND {_varw}
+              AND u.forecast_hour BETWEEN %s AND %s
+              AND u.latitude  BETWEEN %s AND %s
+              AND u.longitude BETWEEN %s AND %s
+            ORDER BY u.model_name, u.forecast_hour
         """, (
-            models, var_name, hour_min, hour_max,
+            models, *(() if is_wind else (var_name,)), hour_min, hour_max,
             lat - 0.26, lat + 0.26,
             lon - 0.26, lon + 0.26,
         ))
@@ -1928,25 +1986,22 @@ def compare_skill():
             return jsonify({'models': {}, 'obs_hours': [],
                             'obs_warning': 'No forecast data found for selected parameters.'})
 
-        cursor.execute("""
-            SELECT
-                rf.model_name,
-                rf.forecast_hour,
-                rf.mean_value,
-                rf.std_dev
-            FROM regridded_forecast rf
-            WHERE rf.model_name = ANY(%s)
-              AND rf.variable_name = %s
-              AND rf.forecast_hour BETWEEN %s AND %s
-              AND rf.latitude  BETWEEN %s AND %s
-              AND rf.longitude BETWEEN %s AND %s
-              AND rf.mean_value IS NOT NULL
-              AND rf.std_dev    IS NOT NULL
-            ORDER BY rf.model_name, rf.forecast_hour
+        # Wind → forecast SPEED via u/v self-join (see _fcst_speed_sql).
+        is_wind = (variable == 'wind')
+        _sel, _frm, _varw, _vnn = _fcst_speed_sql(is_wind, "u.model_name, u.forecast_hour")
+        cursor.execute(f"""
+            SELECT {_sel}
+            FROM {_frm}
+            WHERE u.model_name = ANY(%s) AND {_varw}
+              AND u.forecast_hour BETWEEN %s AND %s
+              AND u.latitude  BETWEEN %s AND %s
+              AND u.longitude BETWEEN %s AND %s
+              AND u.mean_value IS NOT NULL
+              AND u.std_dev    IS NOT NULL {_vnn}
+            ORDER BY u.model_name, u.forecast_hour
         """, (
-            list(init_times.keys()), fcst_var, hour_min, hour_max,
-            lat - 0.26, lat + 0.26,
-            lon - 0.26, lon + 0.26,
+            list(init_times.keys()), *(() if is_wind else (fcst_var,)),
+            hour_min, hour_max, lat - 0.26, lat + 0.26, lon - 0.26, lon + 0.26,
         ))
         fcst_rows = cursor.fetchall()
 
@@ -2015,7 +2070,10 @@ def compare_skill():
             mean    = float(row['mean_value'])
             std     = float(row['std_dev'])
             vt      = init_times[m_name] + timedelta(hours=hour)
-            accum_h = MODEL_ACCUM_HOURS.get(m_name, 1)
+            # Wind is instantaneous (m/s) — accum_h must be 1. Only precipitation
+            # is period-accumulated; applying the precip factor to wind divided
+            # wind speed by 6/3 and corrupted MAE/RMSE/CRPS/bias.
+            accum_h = 1 if is_wind else MODEL_ACCUM_HOURS.get(m_name, 1)
 
             # Collect hourly obs in the half-open window (vt - accum_h, vt]
             # e.g. AIFS +6h  →  obs at vt-5h, vt-4h, vt-3h, vt-2h, vt-1h, vt
@@ -2181,7 +2239,8 @@ def compare_spatial_agreement():
     except (TypeError, ValueError):
         return jsonify({'error': 'min_lat, max_lat, min_lon, max_lon, hour must be numeric'}), 400
 
-    var_name = 'wind_u_10m' if variable == 'wind' else variable
+    is_wind  = (variable == 'wind')
+    var_name = variable   # precip path; wind derives speed from u/v (below)
 
     VAR_UNITS = {
         'precipitation': 'mm/h',
@@ -2211,23 +2270,50 @@ def compare_spatial_agreement():
     conn   = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
-        cursor.execute("""
-            SELECT
-                latitude,
-                longitude,
-                STDDEV(mean_value)          AS disagreement,
-                AVG(mean_value)             AS avg_mean,
-                COUNT(DISTINCT model_name)  AS n_models
-            FROM regridded_forecast
-            WHERE model_name    = ANY(%s)
-              AND variable_name = %s
-              AND forecast_hour = %s
-              AND latitude  BETWEEN %s AND %s
-              AND longitude BETWEEN %s AND %s
-            GROUP BY latitude, longitude
-            HAVING COUNT(DISTINCT model_name) >= 2
-            ORDER BY latitude, longitude
-        """, (models, var_name, hour, min_lat, max_lat, min_lon, max_lon))
+        if is_wind:
+            # Inter-model disagreement of forecast wind SPEED. Derive per-model
+            # speed √(mean_u²+mean_v²) in a subquery, then aggregate across models.
+            cursor.execute("""
+                SELECT latitude, longitude,
+                       STDDEV(speed)              AS disagreement,
+                       AVG(speed)                 AS avg_mean,
+                       COUNT(DISTINCT model_name) AS n_models
+                FROM (
+                    SELECT u.model_name, u.latitude, u.longitude,
+                           SQRT(POWER(u.mean_value, 2) + POWER(v.mean_value, 2)) AS speed
+                    FROM regridded_forecast u
+                    JOIN regridded_forecast v
+                      ON v.model_name = u.model_name AND v.forecast_hour = u.forecast_hour
+                     AND v.latitude = u.latitude AND v.longitude = u.longitude
+                     AND v.variable_name = 'wind_v_10m'
+                    WHERE u.model_name = ANY(%s) AND u.variable_name = 'wind_u_10m'
+                      AND u.forecast_hour = %s
+                      AND u.latitude  BETWEEN %s AND %s
+                      AND u.longitude BETWEEN %s AND %s
+                      AND u.mean_value IS NOT NULL AND v.mean_value IS NOT NULL
+                ) s
+                GROUP BY latitude, longitude
+                HAVING COUNT(DISTINCT model_name) >= 2
+                ORDER BY latitude, longitude
+            """, (models, hour, min_lat, max_lat, min_lon, max_lon))
+        else:
+            cursor.execute("""
+                SELECT
+                    latitude,
+                    longitude,
+                    STDDEV(mean_value)          AS disagreement,
+                    AVG(mean_value)             AS avg_mean,
+                    COUNT(DISTINCT model_name)  AS n_models
+                FROM regridded_forecast
+                WHERE model_name    = ANY(%s)
+                  AND variable_name = %s
+                  AND forecast_hour = %s
+                  AND latitude  BETWEEN %s AND %s
+                  AND longitude BETWEEN %s AND %s
+                GROUP BY latitude, longitude
+                HAVING COUNT(DISTINCT model_name) >= 2
+                ORDER BY latitude, longitude
+            """, (models, var_name, hour, min_lat, max_lat, min_lon, max_lon))
 
         rows = cursor.fetchall()
         if not rows:
@@ -2428,20 +2514,18 @@ def categorical_metrics_endpoint():
         init_time_val = _latest_init_time(cursor, model_name)
         if init_time_val is None:
             return jsonify({'error': 'No forecast data found for the selected parameters.'}), 404
-        cursor.execute("""
-            SELECT
-                rf.forecast_hour,
-                rf.mean_value,
-                rf.std_dev
-            FROM regridded_forecast rf
-            WHERE rf.model_name   = %s
-              AND rf.variable_name = %s
-              AND rf.forecast_hour BETWEEN %s AND %s
-              AND rf.latitude  BETWEEN %s AND %s
-              AND rf.longitude BETWEEN %s AND %s
-              AND rf.mean_value IS NOT NULL AND rf.std_dev IS NOT NULL
-            ORDER BY rf.forecast_hour
-        """, (model_name, fcst_var, hour_min, hour_max,
+        # Wind → forecast SPEED via u/v self-join (see _fcst_speed_sql).
+        _sel, _frm, _varw, _vnn = _fcst_speed_sql(is_wind, "u.forecast_hour")
+        cursor.execute(f"""
+            SELECT {_sel}
+            FROM {_frm}
+            WHERE u.model_name = %s AND {_varw}
+              AND u.forecast_hour BETWEEN %s AND %s
+              AND u.latitude  BETWEEN %s AND %s
+              AND u.longitude BETWEEN %s AND %s
+              AND u.mean_value IS NOT NULL AND u.std_dev IS NOT NULL {_vnn}
+            ORDER BY u.forecast_hour
+        """, (model_name, *(() if is_wind else (fcst_var,)), hour_min, hour_max,
               lat - 0.26, lat + 0.26, lon - 0.26, lon + 0.26))
         fcst_rows = cursor.fetchall()
 
@@ -2650,18 +2734,18 @@ def region_categorical_metrics_endpoint():
         init_time_val = _latest_init_time(cursor, model_name)
         if init_time_val is None:
             return jsonify({'error': 'No forecast data found for the selected region.'}), 404
-        cursor.execute("""
-            SELECT rf.forecast_hour, rf.latitude, rf.longitude,
-                   rf.mean_value, rf.std_dev
-            FROM regridded_forecast rf
-            WHERE rf.model_name    = %s
-              AND rf.variable_name = %s
-              AND rf.forecast_hour BETWEEN %s AND %s
-              AND rf.latitude  BETWEEN %s AND %s
-              AND rf.longitude BETWEEN %s AND %s
-              AND rf.mean_value IS NOT NULL AND rf.std_dev IS NOT NULL
-            ORDER BY rf.forecast_hour, rf.latitude, rf.longitude
-        """, (model_name, fcst_var, hour_min, hour_max,
+        # Wind → forecast SPEED via u/v self-join (see _fcst_speed_sql).
+        _sel, _frm, _varw, _vnn = _fcst_speed_sql(is_wind, "u.forecast_hour, u.latitude, u.longitude")
+        cursor.execute(f"""
+            SELECT {_sel}
+            FROM {_frm}
+            WHERE u.model_name = %s AND {_varw}
+              AND u.forecast_hour BETWEEN %s AND %s
+              AND u.latitude  BETWEEN %s AND %s
+              AND u.longitude BETWEEN %s AND %s
+              AND u.mean_value IS NOT NULL AND u.std_dev IS NOT NULL {_vnn}
+            ORDER BY u.forecast_hour, u.latitude, u.longitude
+        """, (model_name, *(() if is_wind else (fcst_var,)), hour_min, hour_max,
               min_lat, max_lat, min_lon, max_lon))
         fcst_rows = cursor.fetchall()
 
@@ -2883,18 +2967,19 @@ def _categorical_hours_for_box(cursor, model_name, fcst_var, obs_var, obs_src,
     init_time_val = _latest_init_time(cursor, model_name)
     if init_time_val is None:
         return []
-    cursor.execute("""
-        SELECT rf.forecast_hour, rf.latitude, rf.longitude,
-               rf.mean_value, rf.std_dev
-        FROM regridded_forecast rf
-        WHERE rf.model_name    = %s
-          AND rf.variable_name = %s
-          AND rf.forecast_hour BETWEEN %s AND %s
-          AND rf.latitude  BETWEEN %s AND %s
-          AND rf.longitude BETWEEN %s AND %s
-          AND rf.mean_value IS NOT NULL AND rf.std_dev IS NOT NULL
-        ORDER BY rf.forecast_hour, rf.latitude, rf.longitude
-    """, (model_name, fcst_var, hour_min, hour_max,
+    # Wind → forecast SPEED via u/v self-join (see _fcst_speed_sql).
+    is_wind = (fcst_var == 'wind_u_10m')
+    _sel, _frm, _varw, _vnn = _fcst_speed_sql(is_wind, "u.forecast_hour, u.latitude, u.longitude")
+    cursor.execute(f"""
+        SELECT {_sel}
+        FROM {_frm}
+        WHERE u.model_name = %s AND {_varw}
+          AND u.forecast_hour BETWEEN %s AND %s
+          AND u.latitude  BETWEEN %s AND %s
+          AND u.longitude BETWEEN %s AND %s
+          AND u.mean_value IS NOT NULL AND u.std_dev IS NOT NULL {_vnn}
+        ORDER BY u.forecast_hour, u.latitude, u.longitude
+    """, (model_name, *(() if is_wind else (fcst_var,)), hour_min, hour_max,
           min_lat, max_lat, min_lon, max_lon))
     fcst_rows = cursor.fetchall()
     if not fcst_rows:
