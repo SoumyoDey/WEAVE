@@ -346,8 +346,14 @@ def _ensemble_speed_rows(cursor, run_id, variable_id, hour,
 
 
 def _compute_ssr_points(cursor, run_id, variable_id, init_time, hour,
-                        min_lat, max_lat, min_lon, max_lon, obs_col):
-    """SSR at a single forecast hour from ensemble_statistics + observation_data."""
+                        min_lat, max_lat, min_lon, max_lon, obs_col, accum_h=1):
+    """SSR at a single forecast hour from ensemble_statistics + observation_data.
+
+    Forecast precip in ensemble_statistics is a period-accumulated total
+    (mm/6h for AIFS, mm/3h GEFS) while the observation is a rate (mm/h), so the
+    forecast mean/std are divided by accum_h to compare like-for-like. Wind uses
+    accum_h=1 (already a speed via _ensemble_speed_rows).
+    """
     ens_rows = _ensemble_speed_rows(cursor, run_id, variable_id, hour,
                                     min_lat, max_lat, min_lon, max_lon,
                                     obs_col == 'wind_speed')
@@ -374,7 +380,8 @@ def _compute_ssr_points(cursor, run_id, variable_id, init_time, hour,
         std  = float(row['std_dev'])
         if mean is None:
             continue
-        mean = float(mean)
+        mean = float(mean) / accum_h        # → mm/h rate (obs is a rate)
+        std  = std / accum_h
         obs  = obs_lookup.get((round(lat * 4) / 4, round(lon * 4) / 4))
         if obs is None:
             continue
@@ -392,8 +399,10 @@ def _compute_ssr_points(cursor, run_id, variable_id, init_time, hour,
 
 
 def _compute_correlation_points(cursor, run_id, variable_id, init_time,
-                                 min_lat, max_lat, min_lon, max_lon, obs_col):
-    """Spread-skill correlation across verified hours from ensemble_statistics + observation_data."""
+                                 min_lat, max_lat, min_lon, max_lon, obs_col, accum_h=1):
+    """Spread-skill correlation across verified hours from ensemble_statistics +
+    observation_data. Precip forecast mean/std are divided by accum_h to match
+    the observed mm/h rate (wind uses accum_h=1)."""
     candidate_hours = [0, 6, 12, 18, 24, 48, 72, 96, 120, 144, 168]
     is_wind = (obs_col == 'wind_speed')
     hour_data = {}
@@ -426,7 +435,8 @@ def _compute_correlation_points(cursor, run_id, variable_id, init_time,
             std  = float(row['std_dev'])
             if mean is None:
                 continue
-            mean = float(mean)
+            mean = float(mean) / accum_h        # → mm/h rate (obs is a rate)
+            std  = std / accum_h
             key  = (round(lat * 4) / 4, round(lon * 4) / 4)
             obs  = obs_lookup.get(key)
             if obs is None:
@@ -799,11 +809,20 @@ def _compute_brier_points_rf(cursor, model_name, variable,
     return points
 
 
+def _ssr_accum_h(args, obs_col):
+    """Accumulation hours for the ensemble SSR/correlation path: 1 for wind
+    (instantaneous), else the model's precip accumulation period."""
+    if obs_col == 'wind_speed':
+        return 1
+    return MODEL_ACCUM_HOURS.get(args.get('model', 'AIFS'), 1)
+
+
 def _dispatch_ssr(cursor, run_id, variable_id, init_time, args,
                   min_lat, max_lat, min_lon, max_lon, obs_col):
     hour   = int(args.get('hour', 6))
     points = _compute_ssr_points(cursor, run_id, variable_id, init_time, hour,
-                                  min_lat, max_lat, min_lon, max_lon, obs_col)
+                                  min_lat, max_lat, min_lon, max_lon, obs_col,
+                                  accum_h=_ssr_accum_h(args, obs_col))
     return points, {'hour': hour}
 
 
@@ -812,6 +831,7 @@ def _dispatch_correlation(cursor, run_id, variable_id, init_time, args,
     points, n_hours = _compute_correlation_points(
         cursor, run_id, variable_id, init_time,
         min_lat, max_lat, min_lon, max_lon, obs_col,
+        accum_h=_ssr_accum_h(args, obs_col),
     )
     return points, {'n_hours': n_hours}
 
