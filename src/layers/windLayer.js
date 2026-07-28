@@ -98,10 +98,16 @@ export const startStreamlines = (map, data, animationFrameRef, showWindLinesRef)
   stopStreamlines(animationFrameRef);
 
   const container = map.getContainer();
-  const lats = data.map(p => parseFloat(p.lat));
-  const lons = data.map(p => parseFloat(p.lon));
-  const minLat = Math.min(...lats), maxLat = Math.max(...lats);
-  const minLon = Math.min(...lons), maxLon = Math.max(...lons);
+  // Single-pass bounds — avoids spreading a large point array into Math.min/max
+  // (RangeError on fine grids).
+  let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+  for (const p of data) {
+    const la = parseFloat(p.lat), lo = parseFloat(p.lon);
+    if (la < minLat) minLat = la;
+    if (la > maxLat) maxLat = la;
+    if (lo < minLon) minLon = lo;
+    if (lo > maxLon) maxLon = lo;
+  }
 
   const getBounds = () => {
     const tl  = map.latLngToContainerPoint([maxLat, minLon]);
