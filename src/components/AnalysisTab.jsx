@@ -206,7 +206,7 @@ export function AnalysisTab({
 
     const bounds = selectedRegion.bounds;
 
-    await Promise.all(REGION_METRICS.map(async (m) => {
+    const computeOne = async (m) => {
       try {
         const pts = await fetchSpatialMetric({
           metric:    m.key,
@@ -241,7 +241,21 @@ export function AnalysisTab({
           [m.key]: { loading: false, url: null, error: err.message },
         }));
       }
-    }));
+    };
+
+    // Throttle to a small concurrency pool: firing all ~10 metrics at once
+    // sent a burst of simultaneous requests that could exhaust the DB pool.
+    // A 4-worker pool keeps peak concurrency bounded while still overlapping work.
+    const CONCURRENCY = 4;
+    let next = 0;
+    const worker = async () => {
+      while (next < REGION_METRICS.length) {
+        await computeOne(REGION_METRICS[next++]);
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, REGION_METRICS.length) }, worker)
+    );
 
     setRegionRunning(false);
   };
