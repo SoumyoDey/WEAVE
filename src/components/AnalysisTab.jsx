@@ -10,6 +10,11 @@ import { fetchSpatialMetric, fetchSpatialMetricPlot } from '../api/spatialApi';
 import { METRIC_CONFIG } from '../constants';
 import { t } from '../theme';
 
+// Format signed lat/lon with hemisphere suffixes (so -75.5 reads "75.5°W", not
+// "-75.5°E"). Accepts numbers or numeric strings.
+const fmtLat = (v, p = 3) => { const n = parseFloat(v); return `${Math.abs(n).toFixed(p)}°${n >= 0 ? 'N' : 'S'}`; };
+const fmtLon = (v, p = 3) => { const n = parseFloat(v); return `${Math.abs(n).toFixed(p)}°${n >= 0 ? 'E' : 'W'}`; };
+
 // ── Region metric definitions (defined outside component to avoid recreation) ──
 const REGION_METRICS = [
   { key: 'ssr_agg',     group: 'calibration',  label: 'Spread-Skill Ratio',         requiresHour: false, requiresThreshold: false },
@@ -298,8 +303,8 @@ export function AnalysisTab({
           <h2 style={{ color: 'white', margin: '0 0 3px 0', fontSize: t.fontSize.xl, fontWeight: '600', display: 'flex', alignItems: 'center', gap: '8px' }}><BarChart3 size={18} />Forecast Analysis</h2>
           <p style={{ color: 'rgba(255,255,255,0.4)', margin: 0, fontSize: t.fontSize.sm }}>
             {analysisMode === 'point'
-              ? (clickedPoint ? `Point: ${clickedPoint.lat}°N, ${clickedPoint.lon}°E — ${currentModel?.name} — ${selectedVariable}` : 'Click anywhere on the map to analyse a location')
-              : (selectedRegion?.bounds ? `Region: ${selectedRegion.bounds.min_lat?.toFixed(1)}°–${selectedRegion.bounds.max_lat?.toFixed(1)}°N · ${selectedRegion.bounds.min_lon?.toFixed(1)}°–${selectedRegion.bounds.max_lon?.toFixed(1)}°E — ${currentModel?.name}` : 'Draw a region on the map to compute spatial metrics')}
+              ? (clickedPoint ? `Point: ${fmtLat(clickedPoint.lat)}, ${fmtLon(clickedPoint.lon)} — ${currentModel?.name} — ${selectedVariable}` : 'Click anywhere on the map to analyse a location')
+              : (selectedRegion?.bounds ? `Region: ${fmtLat(selectedRegion.bounds.min_lat, 1)}–${fmtLat(selectedRegion.bounds.max_lat, 1)} · ${fmtLon(selectedRegion.bounds.min_lon, 1)}–${fmtLon(selectedRegion.bounds.max_lon, 1)} — ${currentModel?.name}` : 'Draw a region on the map to compute spatial metrics')}
           </p>
         </div>
         {/* Point / Region toggle */}
@@ -473,12 +478,19 @@ export function AnalysisTab({
                   {!ssrLoading && ssrData && ssrData.n_cases > 0 && (() => {
                     const corrVal      = ssrData.correlation;
                     const corrColor    = corrVal === null ? '#aaa' : corrVal >= 0.7 ? '#2ecc71' : corrVal >= 0.4 ? '#f39c12' : '#e74c3c';
-                    const meanSSR = ssrData.hours.filter(h => h.ssr !== null).reduce((a, h, _, arr) => a + h.ssr / arr.length, 0);
+                    // Mean over hours that actually have an SSR. If none do, SSR is
+                    // undefined (no matched obs / zero error everywhere) — must not
+                    // collapse to 0 and read as "severely overconfident".
+                    const validSSR = ssrData.hours.filter(h => h.ssr !== null);
+                    const meanSSR = validSSR.length
+                      ? validSSR.reduce((a, h) => a + h.ssr, 0) / validSSR.length
+                      : null;
                     // Mirrors the 5-tier SSR scale used by the backend's map legend
                     // (flask_api.py PLOT_STYLE_REGISTRY['ssr']) for colors/thresholds,
                     // but uses plain confidence language (matching the readout sentence
                     // below) instead of "-dispersive" jargon.
                     const ssrTier = (
+                      meanSSR === null ? { label: 'Undefined', color: '#95a5a6' } :
                       meanSSR < 0.5 ? { label: 'Severely overconfident', color: '#c00000' } :
                       meanSSR < 0.8 ? { label: 'Overconfident', color: '#e74c3c' } :
                       meanSSR <= 1.2 ? { label: 'Well calibrated', color: '#27ae60' } :
@@ -493,7 +505,7 @@ export function AnalysisTab({
                         <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', flexWrap: 'wrap' }}>
                           {[
                             { label: 'Spread-Skill Correlation', value: corrVal !== null ? corrVal.toFixed(3) : 'N/A', color: corrColor, hint: 'corr(σ, |ε|) across lead times' },
-                            { label: 'Mean SSR',         value: meanSSR.toFixed(3), color: meanSSRColor, hint: ssrInterpret },
+                            { label: 'Mean SSR',         value: meanSSR !== null ? meanSSR.toFixed(3) : 'N/A', color: meanSSRColor, hint: ssrInterpret },
                             { label: 'Verified Hours',   value: ssrData.n_cases,    color: '#3498db',    hint: 'Lead times with matching observations' },
                           ].map(({ label, value, color, hint }) => (
                             <div key={label} style={{ background: 'rgba(255,255,255,0.06)', borderRadius: '10px', padding: '12px 18px', minWidth: '140px', borderLeft: `3px solid ${color}` }}>
@@ -508,7 +520,9 @@ export function AnalysisTab({
                         <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', marginBottom: '20px', padding: '10px 14px', background: `${meanSSRColor}22`, border: `1px solid ${meanSSRColor}55`, borderRadius: t.radius, fontSize: t.fontSize.base, color: 'rgba(255,255,255,0.85)', lineHeight: 1.5 }}>
                           <span style={{ fontSize: t.fontSize.lg, lineHeight: 1.2 }}>ℹ️</span>
                           <span>
-                            {meanSSR >= 0.8 && meanSSR <= 1.2
+                            {meanSSR === null
+                              ? "Not enough matched observations here to assess calibration — the spread-skill ratio is undefined."
+                              : meanSSR >= 0.8 && meanSSR <= 1.2
                               ? "The ensemble spread here looks about right — its uncertainty roughly matches its actual errors."
                               : meanSSR < 0.5
                                 ? "The forecast looks severely overconfident here — the members agree far more closely than the model's real errors justify."
@@ -640,7 +654,7 @@ export function AnalysisTab({
                       const mw = b.minLon ?? b.min_lon, me = b.maxLon ?? b.max_lon;
                       return (
                         <span style={{ fontSize: t.fontSize.xs, color: 'rgba(52,152,219,0.8)', background: 'rgba(52,152,219,0.10)', padding: '3px 10px', borderRadius: '10px', border: '1px solid rgba(52,152,219,0.25)' }}>
-                          {mn?.toFixed(1)}°–{mx?.toFixed(1)}°N · {mw?.toFixed(1)}°–{me?.toFixed(1)}°E
+                          {fmtLat(mn, 1)}–{fmtLat(mx, 1)} · {fmtLon(mw, 1)}–{fmtLon(me, 1)}
                         </span>
                       );
                     })()}
@@ -674,7 +688,7 @@ export function AnalysisTab({
                         style={{ width: '60px', padding: '4px 6px', fontSize: t.fontSize.sm, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'center', outline: 'none' }} />
                       <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.sm }}>–</span>
                       <input type="number" min="0" step="24" value={catHourMax}
-                        onChange={e => setCatHourMax(parseInt(e.target.value, 10) || 240)}
+                        onChange={e => { const n = parseInt(e.target.value, 10); setCatHourMax(Number.isNaN(n) ? 240 : n); }}
                         style={{ width: '60px', padding: '4px 6px', fontSize: t.fontSize.sm, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'center', outline: 'none' }} />
                       <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.sm }}>h</span>
                     </div>
@@ -782,7 +796,7 @@ export function AnalysisTab({
                           {badges.map(({ key, label, hint, val }) => (
                             <div key={key} style={{ background: 'rgba(255,255,255,0.06)', borderRadius: '10px', padding: '12px 16px', minWidth: '100px', borderLeft: `3px solid ${metricColor(key, val)}` }}>
                               <div style={{ color: metricColor(key, val), fontSize: t.fontSize.stat, fontWeight: '700', lineHeight: 1 }}>
-                                {val != null ? val.toFixed(3) : 'N/A'}
+                                {Number.isFinite(val) ? val.toFixed(3) : 'N/A'}
                               </div>
                               <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: t.fontSize.sm, marginTop: '4px', fontWeight: '600' }}>{label}</div>
                               <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.micro, marginTop: '2px' }}>{hint}</div>
@@ -791,13 +805,13 @@ export function AnalysisTab({
 
                           {/* Composite Confidence */}
                           <div style={{
-                            background: cc != null ? `rgba(${cc >= 0.6 ? '46,204,113' : cc >= 0.4 ? '243,156,18' : '231,76,60'},0.10)` : 'rgba(255,255,255,0.06)',
+                            background: Number.isFinite(cc) ? `rgba(${cc >= 0.6 ? '46,204,113' : cc >= 0.4 ? '243,156,18' : '231,76,60'},0.10)` : 'rgba(255,255,255,0.06)',
                             borderRadius: '10px', padding: '12px 16px', minWidth: '130px',
                             borderLeft: `3px solid ${metricColor('cc', cc)}`,
                             borderTop: `1px solid ${metricColor('cc', cc)}33`,
                           }}>
                             <div style={{ color: metricColor('cc', cc), fontSize: t.fontSize.statLg, fontWeight: '800', lineHeight: 1 }}>
-                              {cc != null ? cc.toFixed(3) : 'N/A'}
+                              {Number.isFinite(cc) ? cc.toFixed(3) : 'N/A'}
                             </div>
                             <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: t.fontSize.sm, marginTop: '4px', fontWeight: '700' }}>Composite Confidence</div>
                             <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.micro, marginTop: '2px' }}>
@@ -893,7 +907,7 @@ export function AnalysisTab({
                                     <YAxis domain={[0, 1]} stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }} label={{ value: 'Score', angle: -90, position: 'insideLeft', fill: 'rgba(255,255,255,0.4)', fontSize: 11 }} />
                                     <Tooltip
                                       contentStyle={{ background: '#1a2535', border: '1px solid rgba(255,255,255,0.15)', borderRadius: t.radius, color: 'white', fontSize: t.fontSize.sm }}
-                                      formatter={(v, n) => [v != null ? v.toFixed(3) : 'N/A', n]}
+                                      formatter={(v, n) => [Number.isFinite(v) ? v.toFixed(3) : 'N/A', n]}
                                       labelFormatter={h => `Cumulative through +${h}h`}
                                     />
                                     <ReferenceLine y={0.5} stroke="rgba(255,255,255,0.10)" strokeDasharray="4 4" />
@@ -953,7 +967,7 @@ export function AnalysisTab({
                                     <YAxis domain={[0, 1]} stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} label={{ value: 'Score', angle: -90, position: 'insideLeft', fill: 'rgba(255,255,255,0.4)', fontSize: 10 }} />
                                     <Tooltip
                                       contentStyle={{ background: '#1a2535', border: '1px solid rgba(255,255,255,0.15)', borderRadius: t.radius, color: 'white', fontSize: t.fontSize.sm }}
-                                      formatter={(v, n) => [v != null ? Number(v).toFixed(3) : 'N/A', n]}
+                                      formatter={(v, n) => [Number.isFinite(Number(v)) ? Number(v).toFixed(3) : 'N/A', n]}
                                       labelFormatter={h => `+${h}h`}
                                     />
                                     <ReferenceLine y={0.5} stroke="rgba(255,255,255,0.12)" strokeDasharray="4 4" />
@@ -1018,7 +1032,7 @@ export function AnalysisTab({
                       style={{ width: '52px', padding: '4px 6px', fontSize: t.fontSize.sm, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'center', outline: 'none' }} />
                     <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.xs }}>–</span>
                     <input type="number" min="0" step="24" value={regionHourMax}
-                      onChange={e => setRegionHourMax(parseInt(e.target.value, 10) || 168)}
+                      onChange={e => { const n = parseInt(e.target.value, 10); setRegionHourMax(Number.isNaN(n) ? 168 : n); }}
                       style={{ width: '52px', padding: '4px 6px', fontSize: t.fontSize.sm, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'center', outline: 'none' }} />
                     <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.xs }}>h</span>
                   </div>
