@@ -8,6 +8,7 @@ import base64
 import os
 import json
 import hashlib
+import time
 from datetime import timedelta
 import scipy.stats
 
@@ -146,6 +147,24 @@ connection_pool = psycopg2.pool.ThreadedConnectionPool(
 )
 
 
+def _pool_getconn():
+    """getconn with a short bounded retry. ThreadedConnectionPool.getconn raises
+    PoolError immediately when every connection is checked out; a brief wait lets
+    an in-flight request return one instead of surfacing an instant 500. Tuned
+    for the region 'Compute All Maps' burst (several concurrent requests)."""
+    retries = int(os.environ.get('DB_POOL_RETRIES', 5))
+    delay   = float(os.environ.get('DB_POOL_RETRY_DELAY', 0.25))
+    last_err = None
+    for attempt in range(retries):
+        try:
+            return connection_pool.getconn()
+        except psycopg2.pool.PoolError as e:
+            last_err = e
+            if attempt < retries - 1:
+                time.sleep(delay)
+    raise last_err
+
+
 def get_db_connection():
     # This API is read-only, so we run every pooled connection in autocommit
     # mode. Without it, psycopg2 opens an implicit transaction on the first
@@ -154,7 +173,7 @@ def get_db_connection():
     # reuses it fails with "current transaction is aborted" — one bad request
     # poisons the pool. Autocommit means a failed statement rolls itself back
     # and the connection stays usable.
-    conn = connection_pool.getconn()
+    conn = _pool_getconn()
     try:
         if not conn.autocommit:
             conn.rollback()          # clear any half-open txn before switching
@@ -165,7 +184,7 @@ def get_db_connection():
             connection_pool.putconn(conn, close=True)
         except Exception:
             pass
-        conn = connection_pool.getconn()
+        conn = _pool_getconn()
         conn.autocommit = True
     return conn
 
@@ -2336,6 +2355,15 @@ def compare_spatial_agreement():
             """, (models, var_name, hour, min_lat, max_lat, min_lon, max_lon))
 
         rows = cursor.fetchall()
+        # All DB access is complete — release the pooled connection BEFORE the
+        # multi-second Cartopy render so it isn't held idle during rendering.
+        # (Held connections during renders starved the pool under the region
+        # "Compute All Maps" burst.) The finally block stays safe: closing an
+        # already-closed cursor is a no-op and return_db_connection(None) is guarded.
+        cursor.close()
+        return_db_connection(conn)
+        conn = None
+
         if not rows:
             return jsonify({'error': 'No overlapping data for selected models/hour/bounds'}), 404
 
