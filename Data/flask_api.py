@@ -676,10 +676,11 @@ def _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
 
 def _compute_bias_points_rf(cursor, model_name, variable,
                              min_lat, max_lat, min_lon, max_lon,
-                             hour_min=0, hour_max=168, **_kw):
-    pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
-                                           min_lat, max_lat, min_lon, max_lon,
-                                           hour_min, hour_max)
+                             hour_min=0, hour_max=168, pairs=None, **_kw):
+    if pairs is None:
+        pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
+                                              min_lat, max_lat, min_lon, max_lon,
+                                              hour_min, hour_max)
     points = []
     for (lat, lon), entries in pairs.items():
         if entries:
@@ -690,10 +691,11 @@ def _compute_bias_points_rf(cursor, model_name, variable,
 
 def _compute_mae_points_rf(cursor, model_name, variable,
                             min_lat, max_lat, min_lon, max_lon,
-                            hour_min=0, hour_max=168, **_kw):
-    pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
-                                           min_lat, max_lat, min_lon, max_lon,
-                                           hour_min, hour_max)
+                            hour_min=0, hour_max=168, pairs=None, **_kw):
+    if pairs is None:
+        pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
+                                              min_lat, max_lat, min_lon, max_lon,
+                                              hour_min, hour_max)
     points = []
     for (lat, lon), entries in pairs.items():
         if entries:
@@ -704,10 +706,11 @@ def _compute_mae_points_rf(cursor, model_name, variable,
 
 def _compute_rmse_points_rf(cursor, model_name, variable,
                              min_lat, max_lat, min_lon, max_lon,
-                             hour_min=0, hour_max=168, **_kw):
-    pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
-                                           min_lat, max_lat, min_lon, max_lon,
-                                           hour_min, hour_max)
+                             hour_min=0, hour_max=168, pairs=None, **_kw):
+    if pairs is None:
+        pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
+                                              min_lat, max_lat, min_lon, max_lon,
+                                              hour_min, hour_max)
     points = []
     for (lat, lon), entries in pairs.items():
         if entries:
@@ -718,10 +721,11 @@ def _compute_rmse_points_rf(cursor, model_name, variable,
 
 def _compute_crps_points_rf(cursor, model_name, variable,
                              min_lat, max_lat, min_lon, max_lon,
-                             hour_min=0, hour_max=168, **_kw):
-    pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
-                                           min_lat, max_lat, min_lon, max_lon,
-                                           hour_min, hour_max)
+                             hour_min=0, hour_max=168, pairs=None, **_kw):
+    if pairs is None:
+        pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
+                                              min_lat, max_lat, min_lon, max_lon,
+                                              hour_min, hour_max)
     points = []
     for (lat, lon), entries in pairs.items():
         if not entries:
@@ -745,10 +749,11 @@ def _compute_crps_points_rf(cursor, model_name, variable,
 def _compute_csi_points_rf(cursor, model_name, variable,
                             min_lat, max_lat, min_lon, max_lon,
                             hour_min=0, hour_max=168,
-                            threshold_rate=25.0 / 6.0, **_kw):
-    pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
-                                           min_lat, max_lat, min_lon, max_lon,
-                                           hour_min, hour_max)
+                            threshold_rate=25.0 / 6.0, pairs=None, **_kw):
+    if pairs is None:
+        pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
+                                              min_lat, max_lat, min_lon, max_lon,
+                                              hour_min, hour_max)
     points = []
     for (lat, lon), entries in pairs.items():
         hits = misses = fa = 0
@@ -766,10 +771,11 @@ def _compute_csi_points_rf(cursor, model_name, variable,
 def _compute_pod_points_rf(cursor, model_name, variable,
                             min_lat, max_lat, min_lon, max_lon,
                             hour_min=0, hour_max=168,
-                            threshold_rate=25.0 / 6.0, **_kw):
-    pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
-                                           min_lat, max_lat, min_lon, max_lon,
-                                           hour_min, hour_max)
+                            threshold_rate=25.0 / 6.0, pairs=None, **_kw):
+    if pairs is None:
+        pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
+                                              min_lat, max_lat, min_lon, max_lon,
+                                              hour_min, hour_max)
     points = []
     for (lat, lon), entries in pairs.items():
         hits = misses = 0
@@ -786,10 +792,11 @@ def _compute_pod_points_rf(cursor, model_name, variable,
 def _compute_far_points_rf(cursor, model_name, variable,
                             min_lat, max_lat, min_lon, max_lon,
                             hour_min=0, hour_max=168,
-                            threshold_rate=25.0 / 6.0, **_kw):
-    pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
-                                           min_lat, max_lat, min_lon, max_lon,
-                                           hour_min, hour_max)
+                            threshold_rate=25.0 / 6.0, pairs=None, **_kw):
+    if pairs is None:
+        pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
+                                              min_lat, max_lat, min_lon, max_lon,
+                                              hour_min, hour_max)
     points = []
     for (lat, lon), entries in pairs.items():
         hits = fa = 0
@@ -806,10 +813,11 @@ def _compute_far_points_rf(cursor, model_name, variable,
 def _compute_brier_points_rf(cursor, model_name, variable,
                               min_lat, max_lat, min_lon, max_lon,
                               hour_min=0, hour_max=168,
-                              threshold_rate=25.0 / 6.0, **_kw):
-    pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
-                                           min_lat, max_lat, min_lon, max_lon,
-                                           hour_min, hour_max)
+                              threshold_rate=25.0 / 6.0, pairs=None, **_kw):
+    if pairs is None:
+        pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
+                                              min_lat, max_lat, min_lon, max_lon,
+                                              hour_min, hour_max)
     points = []
     for (lat, lon), entries in pairs.items():
         if not entries:
@@ -959,15 +967,16 @@ def _dispatch_brier(cursor, run_id, variable_id, init_time, args,
 #   4. Add a matching entry to PLOT_STYLE_REGISTRY below.
 def _compute_ssr_agg_points_rf(cursor, model_name, variable,
                                 min_lat, max_lat, min_lon, max_lon,
-                                hour_min=0, hour_max=168, **_kw):
+                                hour_min=0, hour_max=168, pairs=None, **_kw):
     """
     Time-aggregated SSR using regridded tables.
     SSR = mean(σ²) / mean(ε²) across all matched lead times per grid point.
     Requires ≥2 matched pairs to be meaningful.
     """
-    pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
-                                           min_lat, max_lat, min_lon, max_lon,
-                                           hour_min, hour_max)
+    if pairs is None:
+        pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
+                                              min_lat, max_lat, min_lon, max_lon,
+                                              hour_min, hour_max)
     points = []
     for (lat, lon), entries in pairs.items():
         if len(entries) < 2:
@@ -3249,6 +3258,204 @@ def compare_categorical():
         return_db_connection(conn)
 
 
+# ── Region-level model comparison ─────────────────────────────────────────────
+# The metric suite the Comparison tab's region mode offers. `ssr` (single-hour)
+# is deliberately absent: region views aggregate over a lead-time range, which
+# is what `ssr_agg` does. `correlation` runs the ensemble path and so is not in
+# the pairs-based table below.
+COMPARE_REGION_METRIC_FNS = {
+    'ssr_agg': _compute_ssr_agg_points_rf,
+    'bias':    _compute_bias_points_rf,
+    'mae':     _compute_mae_points_rf,
+    'rmse':    _compute_rmse_points_rf,
+    'crps':    _compute_crps_points_rf,
+    'csi':     _compute_csi_points_rf,
+    'pod':     _compute_pod_points_rf,
+    'far':     _compute_far_points_rf,
+    'brier':   _compute_brier_points_rf,
+}
+COMPARE_REGION_METRICS = ['ssr_agg', 'correlation', 'bias', 'mae', 'rmse',
+                          'crps', 'csi', 'pod', 'far', 'brier']
+
+
+def _region_metric_points(cursor, model_name, variable, metrics,
+                          min_lat, max_lat, min_lon, max_lon,
+                          hour_min, hour_max, threshold_rate):
+    """Per-cell points for each pairs-based metric, for one model.
+
+    Every metric here derives from the same fcst↔obs match, so the two queries
+    behind it run once per model instead of once per (model, metric) — nine
+    metrics × three models would otherwise be 27 round trips per request.
+    Returns (points_by_metric, n_matched_cells).
+    """
+    wanted = [m for m in metrics if m in COMPARE_REGION_METRIC_FNS]
+    if not wanted:
+        return {}, 0
+    pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
+                                          min_lat, max_lat, min_lon, max_lon,
+                                          hour_min, hour_max)
+    out = {}
+    for m in wanted:
+        out[m] = COMPARE_REGION_METRIC_FNS[m](
+            cursor, model_name, variable,
+            min_lat, max_lat, min_lon, max_lon,
+            hour_min, hour_max, threshold_rate=threshold_rate, pairs=pairs)
+    return out, len(pairs)
+
+
+def _region_mean(points):
+    """Region-mean scalar over a metric's per-cell values (None if empty)."""
+    if not points:
+        return None
+    return round(float(np.mean([p['value'] for p in points])), 4)
+
+
+@app.route('/api/compare/region-metrics', methods=['POST'])
+def compare_region_metrics():
+    """Region-mean verification metrics for several models over one bbox.
+
+    Request JSON:
+        { models, variable, min_lat, max_lat, min_lon, max_lon,
+          hour_min, hour_max, metrics?, threshold_mm_6h | threshold_ms }
+    Response JSON:
+        { models:   { AIFS: {mae: 2.1, bias: -0.3, ...}, .. },
+          n_points: { AIFS: {mae: 812, ...}, .. },   # grid cells behind each mean
+          n_cells:  { AIFS: 812, .. },               # matched fcst↔obs cells
+          metrics, threshold_info, bbox, hour_min, hour_max, warnings }
+
+    A model whose forecast and observation grids don't overlap yields all-None
+    metrics plus an entry in `warnings`, so the UI can say so rather than draw
+    an empty chart.
+    """
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({'error': 'Request body must be a JSON object'}), 400
+
+    models   = body.get('models', [])
+    variable = body.get('variable', 'precipitation')
+    if not isinstance(models, list) or not models:
+        return jsonify({'error': 'models must be a non-empty list'}), 400
+    if not all(isinstance(m, str) for m in models):
+        return jsonify({'error': 'models must be a list of strings'}), 400
+    if _bad_token(*models, variable):
+        return jsonify({'error': 'Invalid model or variable'}), 400
+
+    metrics = body.get('metrics') or COMPARE_REGION_METRICS
+    if not isinstance(metrics, list) or not all(isinstance(m, str) for m in metrics):
+        return jsonify({'error': 'metrics must be a list of strings'}), 400
+    unknown = [m for m in metrics if m not in COMPARE_REGION_METRICS]
+    if unknown:
+        return jsonify({'error': f'Unknown metric(s): {unknown}. '
+                        f'Available: {COMPARE_REGION_METRICS}'}), 400
+
+    bbox, err = _parse_bbox(body)
+    if err:
+        return err
+    min_lat, max_lat = bbox['min_lat'], bbox['max_lat']
+    min_lon, max_lon = bbox['min_lon'], bbox['max_lon']
+
+    try:
+        hour_min = int(body.get('hour_min', 0))
+        hour_max = int(body.get('hour_max', 168))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'hour_min and hour_max must be numeric'}), 400
+    if hour_min >= hour_max:
+        return jsonify({'error': 'hour_min must be less than hour_max'}), 400
+
+    is_wind = (variable == 'wind')
+    try:
+        threshold_rate = _resolve_threshold_rate(body)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'threshold must be numeric'}), 400
+
+    obs_col    = 'wind_speed' if is_wind else 'precipitation'
+    var_lookup = 'wind_u_10m' if is_wind else variable
+    need_corr  = 'correlation' in metrics
+
+    conn   = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        variable_id = None
+        if need_corr:
+            cursor.execute(
+                "SELECT variable_id FROM variables WHERE variable_name = %s", (var_lookup,))
+            var_row = cursor.fetchone()
+            if not var_row:
+                return jsonify({'error': f'Variable {var_lookup} not found'}), 404
+            variable_id = var_row['variable_id']
+
+        per_model  = {}
+        per_counts = {}
+        n_cells    = {}
+        warnings   = {}
+
+        for m in models:
+            points_by_metric, matched = _region_metric_points(
+                cursor, m, variable, metrics,
+                min_lat, max_lat, min_lon, max_lon,
+                hour_min, hour_max, threshold_rate)
+
+            values = {k: _region_mean(v) for k, v in points_by_metric.items()}
+            counts = {k: len(v) for k, v in points_by_metric.items()}
+
+            if need_corr:
+                run_id = get_model_run_id(cursor, m)
+                corr_points = []
+                if run_id:
+                    cursor.execute(
+                        "SELECT initialization_time FROM forecast_runs WHERE run_id = %s",
+                        (run_id,))
+                    init_row = cursor.fetchone()
+                    if init_row:
+                        corr_points, _n_hours = _compute_correlation_points(
+                            cursor, run_id, variable_id, init_row['initialization_time'],
+                            min_lat, max_lat, min_lon, max_lon, obs_col,
+                            accum_h=1 if is_wind else MODEL_ACCUM_HOURS.get(m, 1))
+                values['correlation'] = _region_mean(corr_points)
+                counts['correlation'] = len(corr_points)
+
+            # Distinguish "grids don't line up" from "genuinely no data": the
+            # fcst↔obs join is rounded-key equality, so a misaligned grid gives
+            # zero matches and every metric silently comes back None.
+            if matched == 0:
+                warnings[m] = ('No forecast/observation grid cells matched in this '
+                               'region and lead-time range (no overlap or grid '
+                               'misalignment).')
+
+            per_model[m]  = {k: values.get(k) for k in metrics}
+            per_counts[m] = {k: counts.get(k, 0) for k in metrics}
+            n_cells[m]    = matched
+
+        threshold_info = ({'threshold_ms': threshold_rate, 'unit': 'm/s'} if is_wind
+                          else {'threshold_mm_6h': round(threshold_rate * 6, 2),
+                                'unit': 'mm/6h'})
+        threshold_info['threshold_rate'] = round(threshold_rate, 4)
+
+        print(f"✅ compare/region-metrics: {len(models)} models × {len(metrics)} metrics, "
+              f"bbox [{min_lat},{max_lat}]×[{min_lon},{max_lon}] "
+              f"{hour_min}-{hour_max}h, cells={n_cells}")
+
+        return jsonify({
+            'models':         per_model,
+            'n_points':       per_counts,
+            'n_cells':        n_cells,
+            'metrics':        metrics,
+            'threshold_info': threshold_info,
+            'bbox':           [min_lat, max_lat, min_lon, max_lon],
+            'hour_min':       hour_min,
+            'hour_max':       hour_max,
+            'warnings':       warnings,
+        })
+
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        print(f"❌ Error in compare/region-metrics: {e}")
+        return jsonify({'error': 'Internal server error'}), 500
+    finally:
+        cursor.close()
+        return_db_connection(conn)
+
+
 if __name__ == '__main__':
     print("🚀 Flask API Starting...")
     print("=" * 60)
@@ -3268,6 +3475,7 @@ if __name__ == '__main__':
     print("  • POST /api/compare/spatial-agreement  {models, min_lat, max_lat, min_lon, max_lon, hour, variable}")
     print("  • POST /api/categorical-metrics        {model, variable, lat, lon, threshold_mm_6h, hour_min, hour_max}")
     print("  • POST /api/region-categorical-metrics {model, variable, min_lat, max_lat, min_lon, max_lon, threshold_mm_6h, hour_min, hour_max}")
+    print("  • POST /api/compare/region-metrics     {models, variable, min_lat, max_lat, min_lon, max_lon, hour_min, hour_max, metrics}")
     print("=" * 60)
     print("✅ Optimized with connection pooling")
     print("🌬️  Wind: speed = √(u² + v²), direction = atan2(u,v)")

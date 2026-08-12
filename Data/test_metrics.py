@@ -217,6 +217,63 @@ def test_categorical_hours_and_fss():
     assert h["fss"] == 0.8
 
 
+# ── Region aggregation (compare/region-metrics) ───────────────────────────────
+class TestRegionMetrics:
+    def test_region_mean_averages_cells(self):
+        assert api._region_mean([{"value": 1.0}, {"value": 2.0}, {"value": 6.0}]) == 3.0
+
+    def test_region_mean_none_when_empty(self):
+        assert api._region_mean([]) is None
+        assert api._region_mean(None) is None
+
+    def test_one_fetch_shared_by_every_pairs_metric(self, monkeypatch):
+        """The fcst↔obs match is fetched once per model, not once per metric."""
+        calls = []
+        monkeypatch.setattr(api, "_fetch_fcst_obs_pairs_spatial",
+                            lambda *a, **k: (calls.append(a), PAIRS)[1])
+        points, n_cells = api._region_metric_points(
+            None, "AIFS", "precipitation",
+            ["bias", "mae", "rmse", "correlation"],
+            0, 1, 0, 1, 0, 24, threshold_rate=1.5)
+        assert len(calls) == 1
+        assert n_cells == 1
+        # correlation runs the ensemble path, so it isn't in the pairs table
+        assert set(points) == {"bias", "mae", "rmse"}
+        assert api._region_mean(points["bias"]) == 1.5   # mean(+1, +2)
+        assert api._region_mean(points["mae"]) == 1.5
+        assert api._region_mean(points["rmse"]) == round(math.sqrt(2.5), 4)
+
+    def test_threshold_reaches_categorical_metrics(self, monkeypatch):
+        monkeypatch.setattr(api, "_fetch_fcst_obs_pairs_spatial",
+                            lambda *a, **k: CAT_PAIRS)
+        points, _ = api._region_metric_points(
+            None, "AIFS", "precipitation", ["csi", "pod", "far"],
+            0, 1, 0, 1, 0, 24, threshold_rate=1.5)
+        assert api._region_mean(points["csi"]) == round(1 / 3, 4)
+        assert api._region_mean(points["pod"]) == 0.5
+        assert api._region_mean(points["far"]) == 0.5
+
+    def test_mean_is_over_cells_not_lead_times(self, monkeypatch):
+        """Two cells with different sample counts still weigh equally — the
+        region value is the mean of per-cell metrics, matching the maps."""
+        monkeypatch.setattr(api, "_fetch_fcst_obs_pairs_spatial", lambda *a, **k: {
+            (36.0, -79.5): [(6, 2.0, 1.0, 1.0)],                       # bias +1
+            (36.5, -79.5): [(6, 4.0, 1.0, 1.0), (12, 4.0, 1.0, 1.0)],  # bias +3
+        })
+        points, n_cells = api._region_metric_points(
+            None, "AIFS", "precipitation", ["bias"],
+            0, 1, 0, 1, 0, 24, threshold_rate=1.5)
+        assert n_cells == 2
+        assert api._region_mean(points["bias"]) == 2.0   # mean(1, 3), not 7/3
+
+    def test_no_pairs_metrics_skips_the_fetch(self, monkeypatch):
+        monkeypatch.setattr(api, "_fetch_fcst_obs_pairs_spatial",
+                            lambda *a, **k: pytest.fail("should not query"))
+        assert api._region_metric_points(
+            None, "AIFS", "precipitation", ["correlation"],
+            0, 1, 0, 1, 0, 24, threshold_rate=1.5) == ({}, 0)
+
+
 # ── Pooled categorical summary (compare/categorical `summaries`) ──────────────
 class TestCategoricalSummary:
     def test_none_for_empty(self):
