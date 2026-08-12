@@ -1,9 +1,13 @@
 # Plan — Comparison Tab: Point + Region model-comparison analytics
 
 > **Status 2026-08-12: all five increments implemented and verified live**
-> (precipitation + wind) on `p0-reliability` — commits `b2cfa57`, `62cba8e`,
-> `b5bb0bd`, `7bb87cd`, `2d15edf`. Backend suite 46 passed. Not pushed.
+> (precipitation + wind) on `p0-reliability` — commits `c7deddd`, `662a299`,
+> `eba8d03`, `64ac3d3`, `c7bf365`, pushed as part of PR #2.
 > Deviations from the spec are noted inline below.
+>
+> A later metric audit (`METRICS_AUDIT.md`) changed the numbers these views
+> report — precipitation unit handling, the SSR convention, FSS and the region
+> estimator all moved — so treat any figure quoted below as of its writing.
 >
 > Feature plan/spec. Self-contained; executable in a fresh session.
 > Companion to `SYSTEM_DESIGN_PLAN.md`. Written 2026-07-28.
