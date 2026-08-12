@@ -65,13 +65,17 @@ export async function fetchCategoricalMetrics({
  *   variable: string,
  *   minLat: number, maxLat: number, minLon: number, maxLon: number,
  *   thresholdMm6h: number,
- *   hourMin: number, hourMax: number
+ *   hourMin: number, hourMax: number,
+ *   fssWindow?: number
  * }} params
+ *   fssWindow is the FSS neighbourhood width in grid cells. FSS is only
+ *   meaningful relative to a spatial scale, so this is a real parameter of the
+ *   score rather than a display option — omitting it takes the backend default.
  */
 export async function fetchRegionCategoricalMetrics({
   model, variable,
   minLat, maxLat, minLon, maxLon,
-  thresholdMm6h, hourMin, hourMax,
+  thresholdMm6h, hourMin, hourMax, fssWindow,
 }) {
   const thresholdField = variable === 'wind'
     ? { threshold_ms: thresholdMm6h }
@@ -85,6 +89,7 @@ export async function fetchRegionCategoricalMetrics({
       min_lat: minLat, max_lat: maxLat,
       min_lon: minLon, max_lon: maxLon,
       hour_min: hourMin, hour_max: hourMax,
+      ...(fssWindow != null ? { fss_window: fssWindow } : {}),
       ...thresholdField,
     }),
   });
