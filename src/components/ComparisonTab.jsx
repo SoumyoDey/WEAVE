@@ -68,6 +68,10 @@ const REGION_METRIC_GROUPS = [
       { key: 'pod',   label: 'POD',   hint: 'higher is better', decimals: 3 },
       { key: 'far',   label: 'FAR',   hint: 'lower is better',  decimals: 3 },
       { key: 'brier', label: 'Brier', hint: '0 is perfect',     decimals: 4 },
+      // FSS is a property of the whole field at a lead time, so it has a
+      // region value but no per-cell value — hence no map (noMap).
+      { key: 'fss',   label: 'FSS',   hint: 'placement skill · higher is better',
+        decimals: 3, noMap: true },
     ],
   },
 ];
@@ -75,11 +79,13 @@ const REGION_METRIC_GROUPS = [
 // Metrics offered by the per-model spatial small-multiples. Same suite as the
 // region bars; the categorical four need the threshold passed through.
 const SPATIAL_MAP_METRICS = REGION_METRIC_GROUPS.flatMap(g =>
-  g.metrics.map(m => ({
-    key: m.key,
-    label: m.label,
-    requiresThreshold: g.id === 'categorical',
-  })),
+  g.metrics
+    .filter(m => !m.noMap)          // no per-cell value → nothing to draw
+    .map(m => ({
+      key: m.key,
+      label: m.label,
+      requiresThreshold: g.id === 'categorical',
+    })),
 );
 
 // Categorical scores pooled over lead times (compare/categorical `summaries`).
@@ -470,9 +476,16 @@ export function ComparisonTab({
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [threshold, setThreshold] = useState(selectedVariable === 'wind' ? 10 : 25);
   const [fssWindow, setFssWindow] = useState(5);
+  // The area scored around the point, in grid cells. Deliberately separate from
+  // fssWindow: widening the neighbourhood used to widen the box too, which moved
+  // CSI/POD/FAR when only the FSS scale was meant to change.
+  const [boxCells, setBoxCells] = useState(9);
   // Region mode keeps its own threshold: it drives the region-metric and map
   // views, while `threshold` above drives point-mode advanced metrics.
   const [regionThreshold, setRegionThreshold] = useState(selectedVariable === 'wind' ? 10 : 25);
+  // FSS neighbourhood width in grid cells. Separate from the drawn region: it
+  // sets the spatial scale the placement score is judged at, not the domain.
+  const [regionFssWindow, setRegionFssWindow] = useState(3);
 
   // Loading
   const [tsLoading, setTsLoading] = useState(false);
@@ -611,6 +624,7 @@ export function ComparisonTab({
         bounds: selectedRegion.bounds,
         hourMin, hourMax,
         threshold: Number(regionThreshold),
+        fssWindow: Number(regionFssWindow),
       });
       if (seq !== regionSeqRef.current) return;   // a newer run superseded this one
       setRegionData(result);
@@ -736,7 +750,7 @@ export function ComparisonTab({
       const result = await fetchComparisonCategorical({
         models: selectedModels, lat: parsedLat, lon: parsedLon,
         hourMin, hourMax, variable: selectedVariable,
-        threshold: thr, fssWindow,
+        threshold: thr, fssWindow, boxCells,
       });
       if (seq !== catSeqRef.current) return;   // a newer run superseded this one
       setCatData(result);
@@ -1114,7 +1128,31 @@ export function ComparisonTab({
                 <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: t.fontSize.sm }}>{thresholdUnit}</span>
               </div>
               <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.micro, marginTop: '5px' }}>
-                CSI · POD · FAR · Brier only
+                CSI · POD · FAR · Brier · FSS only
+              </div>
+            </div>
+          )}
+
+          {/* FSS NEIGHBOURHOOD (region mode) — the spatial scale FSS is judged
+              at. Separate from the drawn region, which is the domain. */}
+          {isRegionMode && (
+            <div>
+              <div style={LABEL}>FSS neighbourhood</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <input
+                  type="number"
+                  min={1} max={21} step={2}
+                  value={regionFssWindow}
+                  onChange={e => setRegionFssWindow(Math.max(1, Math.min(21, Number(e.target.value) || 1)))}
+                  aria-label="FSS neighbourhood width (grid cells)"
+                  style={{ ...INPUT, width: '64px' }}
+                />
+                <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: t.fontSize.sm }}>
+                  cells (≈{(regionFssWindow * 0.5).toFixed(1)}°)
+                </span>
+              </div>
+              <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.micro, marginTop: '5px' }}>
+                Wider forgives displacement
               </div>
             </div>
           )}
@@ -1708,17 +1746,34 @@ export function ComparisonTab({
                     </div>
                   </div>
                   <div>
-                    <div style={LABEL}>FSS Window</div>
+                    <div style={LABEL}>FSS neighbourhood</div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <input
                         type="number"
                         value={fssWindow}
-                        min={1}
-                        onChange={e => setFssWindow(Math.max(1, Number(e.target.value)))}
+                        min={1} max={21} step={2}
+                        aria-label="FSS neighbourhood width (grid cells)"
+                        onChange={e => setFssWindow(Math.max(1, Math.min(21, Number(e.target.value) || 1)))}
                         style={{ ...INPUT, width: '56px' }}
                       />
                       <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: t.fontSize.sm }}>
-                        × {fssWindow} grid points (= {(fssWindow * 0.5).toFixed(1)}°)
+                        cells (≈{(fssWindow * 0.5).toFixed(1)}°) — the scale FSS is judged at
+                      </span>
+                    </div>
+                  </div>
+                  <div>
+                    <div style={LABEL}>Verification box</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <input
+                        type="number"
+                        value={boxCells}
+                        min={1} max={41} step={2}
+                        aria-label="Verification box width (grid cells)"
+                        onChange={e => setBoxCells(Math.max(1, Math.min(41, Number(e.target.value) || 1)))}
+                        style={{ ...INPUT, width: '56px' }}
+                      />
+                      <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: t.fontSize.sm }}>
+                        cells (≈{(boxCells * 0.5).toFixed(1)}°) — the area scored around the point
                       </span>
                     </div>
                   </div>
@@ -1741,7 +1796,8 @@ export function ComparisonTab({
                     {catLoading ? '⏳ Computing…' : '▶ Run advanced metrics'}
                   </button>
                   <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.sm }}>
-                    CSI · POD · FAR · FSS per model, over a {fssWindow}×{fssWindow}-cell neighbourhood at the point
+                    CSI · POD · FAR · Brier over a {boxCells}×{boxCells}-cell box at the point;
+                    FSS at a {fssWindow}×{fssWindow}-cell neighbourhood inside it
                   </span>
                 </div>
 

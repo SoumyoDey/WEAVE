@@ -413,7 +413,35 @@ def _region_mean(points):
     return round(float(np.mean([p['value'] for p in points])), 4)
 
 
-def _region_pooled_metrics(pairs, metrics, threshold_rate, n_members=None):
+def _fss_from_pairs(pairs, threshold_rate, window):
+    """Aggregated FSS over a region, from matched fcst/obs pairs.
+
+    FSS has no per-cell value — it is a property of a whole field at a lead
+    time — so it can't be averaged out of a points list the way the other
+    region metrics are. This rebuilds the binary forecast/observed fields for
+    each lead time, takes that hour's numerator and denominator, and forms the
+    ratio once over all of them (the standard multi-case aggregation).
+
+    Returns None when no lead time has an event in either field.
+    """
+    by_hour = {}
+    for (lat, lon), entries in pairs.items():
+        for hour, mean_rate, _std_rate, obs_rate in entries:
+            f, o = by_hour.setdefault(hour, ({}, {}))
+            f[(lat, lon)] = float(mean_rate > threshold_rate)
+            o[(lat, lon)] = float(obs_rate  > threshold_rate)
+
+    total_num = total_den = 0.0
+    for f, o in by_hour.values():
+        num, den, n = _fss_components(f, o, window)
+        if n:
+            total_num += num
+            total_den += den
+    return _fss_from_components(total_num, total_den)
+
+
+def _region_pooled_metrics(pairs, metrics, threshold_rate, n_members=None,
+                           fss_window=3):
     """Region metrics pooled over every (cell, lead time) sample.
 
     Averaging per-cell scores gives a cell with two samples the same weight as
@@ -472,6 +500,11 @@ def _region_pooled_metrics(pairs, metrics, threshold_rate, n_members=None):
                                         mean_sq_err, n_members)
                     if variances else None),
     }
+    # FSS is spatial and per-lead-time, so it is built from the fields rather
+    # than pooled from the flat sample above. Only compute it when asked, since
+    # it walks the pairs a second time.
+    if 'fss' in metrics:
+        out['fss'] = _fss_from_pairs(pairs, threshold_rate, fss_window)
     return {k: v for k, v in out.items() if k in metrics}
 
 

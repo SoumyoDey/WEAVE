@@ -65,7 +65,7 @@ export async function fetchComparisonSkill({ models, lat, lon, hourMin, hourMax,
  * @returns {Promise<{ models: Object, threshold_info: Object, fss_window: number, bbox: number[] }>}
  *   models is e.g. { AIFS: [{hour, csi, pod, far, fss, n_pts}], ... }
  */
-export async function fetchComparisonCategorical({ models, lat, lon, hourMin, hourMax, variable, threshold, fssWindow }) {
+export async function fetchComparisonCategorical({ models, lat, lon, hourMin, hourMax, variable, threshold, fssWindow, boxCells }) {
   const body = {
     models,
     lat,
@@ -74,6 +74,9 @@ export async function fetchComparisonCategorical({ models, lat, lon, hourMin, ho
     hour_max: hourMax,
     variable,
     fss_window: fssWindow,
+    // The verification box is separate from the FSS neighbourhood — widening
+    // the neighbourhood must not silently change the sample CSI/POD/FAR use.
+    ...(boxCells != null ? { box_cells: boxCells } : {}),
   };
   // Threshold units differ by variable: m/s for wind, mm/6h for precipitation.
   if (variable === 'wind') body.threshold_ms = threshold;
@@ -103,7 +106,7 @@ export async function fetchComparisonCategorical({ models, lat, lon, hourMin, ho
  *                     metrics: string[], threshold_info: Object, warnings: Object }>}
  *   models is e.g. { AIFS: { mae: 2.1, bias: -0.3, ... }, GEFS: {...} }
  */
-export async function fetchComparisonRegionMetrics({ models, variable, bounds, hourMin, hourMax, threshold, metrics }) {
+export async function fetchComparisonRegionMetrics({ models, variable, bounds, hourMin, hourMax, threshold, metrics, fssWindow }) {
   const body = {
     models,
     variable,
@@ -113,6 +116,8 @@ export async function fetchComparisonRegionMetrics({ models, variable, bounds, h
     max_lon: bounds.max_lon ?? bounds.maxLon,
     hour_min: hourMin,
     hour_max: hourMax,
+    // Neighbourhood width for FSS. Independent of the bbox above.
+    ...(fssWindow != null ? { fss_window: fssWindow } : {}),
   };
   if (metrics) body.metrics = metrics;
   // Threshold units differ by variable: m/s for wind, mm/6h for precipitation.
