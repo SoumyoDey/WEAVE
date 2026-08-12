@@ -79,6 +79,33 @@ function Spinner() {
   );
 }
 
+// Shown wherever region mode needs a bbox that hasn't been drawn yet.
+function RegionNudge() {
+  return (
+    <div style={{
+      borderRadius: '10px',
+      padding: '20px 24px',
+      border: '1px dashed rgba(255,255,255,0.15)',
+      background: 'rgba(255,255,255,0.02)',
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: '12px',
+      color: 'rgba(255,255,255,0.35)',
+      fontSize: t.fontSize.base,
+      lineHeight: 1.6,
+    }}>
+      <span style={{ lineHeight: 1, display: 'inline-flex' }}><MapPin size={18} /></span>
+      <div>
+        <div style={{ fontWeight: '600', color: 'rgba(255,255,255,0.5)', marginBottom: '4px' }}>
+          No region selected
+        </div>
+        Switch to the <strong style={{ color: 'rgba(255,255,255,0.6)' }}>Visualization</strong> tab,
+        use the selection toolbar to draw a rectangle or polygon, then return here.
+      </div>
+    </div>
+  );
+}
+
 function ssrColor(ssr) {
   if (ssr == null) return '#aaa';
   if (ssr >= 0.8 && ssr <= 1.2) return '#2ecc71';
@@ -223,6 +250,9 @@ export function ComparisonTab({
   active = true,
 }) {
   // Controls
+  // Point vs region analytics (mirrors AnalysisTab's catMode). Point mode compares
+  // models at a single lat/lon; region mode compares them over the drawn bbox.
+  const [compareMode, setCompareMode] = useState('point');   // 'point' | 'region'
   const [lat, setLat] = useState(defaultLocation ? String(defaultLocation.lat) : '');
   const [lon, setLon] = useState(defaultLocation ? String(defaultLocation.lon) : '');
   const [selectedModels, setSelectedModels] = useState(['AIFS', 'GEFS', 'UKMO']);
@@ -246,6 +276,7 @@ export function ComparisonTab({
   const [spatialLoading, setSpatialLoading] = useState(false);
   const [spatialShareState, setSpatialShareState] = useState('idle'); // 'idle' | 'copied'
   const [hasRun, setHasRun] = useState(false);
+  const [hasRunRegion, setHasRunRegion] = useState(false);
   const [catData, setCatData] = useState(null);
   const [catLoading, setCatLoading] = useState(false);
   const [catError, setCatError] = useState('');
@@ -268,7 +299,10 @@ export function ComparisonTab({
   const parsedLat = parseFloat(lat);
   const parsedLon = parseFloat(lon);
   const validLocation = !isNaN(parsedLat) && !isNaN(parsedLon);
-  const canRun = selectedModels.length >= 2 && validLocation && hourMin < hourMax;
+  const isRegionMode = compareMode === 'region';
+  const hasRegion = !!selectedRegion?.bounds;
+  const canRun = selectedModels.length >= 2 && hourMin < hourMax
+    && (isRegionMode ? hasRegion : validLocation);
 
   // Handlers
   const toggleModel = (m) => {
@@ -322,6 +356,13 @@ export function ComparisonTab({
     if (ts.status === 'rejected' && skill.status === 'rejected') {
       setRunError(ts.reason?.message || skill.reason?.message || 'Comparison request failed. Check API connectivity.');
     }
+  };
+
+  // Region mode's top-level Run. Region sections each have their own controls;
+  // this reveals them and (from Increment 3) fetches the region-metric aggregates.
+  const handleRunRegion = async () => {
+    if (!canRun) return;
+    setHasRunRegion(true);
   };
 
   const handleRunCategorical = async () => {
@@ -452,7 +493,7 @@ export function ComparisonTab({
           <Scale size={18} />Model comparison
         </h2>
         <p style={{ color: 'rgba(255,255,255,0.4)', margin: '0 0 8px 0', fontSize: t.fontSize.base }}>
-          Configure models, location and lead times then click Run.
+          Configure models, {isRegionMode ? 'region' : 'location'} and lead times then click Run.
         </p>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           {/* Variable badge */}
@@ -481,11 +522,58 @@ export function ComparisonTab({
 
         {/* ── Section 2: Configuration card ── */}
         <div style={{ ...CARD, marginBottom: '24px' }}>
+          {/* Point | Region mode toggle — decides which analytics sections show. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '18px', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', borderRadius: t.radius, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.15)' }}>
+              {['point', 'region'].map(mode => (
+                <button
+                  key={mode}
+                  onClick={() => setCompareMode(mode)}
+                  aria-pressed={compareMode === mode}
+                  style={{
+                    padding: '6px 18px', fontSize: t.fontSize.sm, fontWeight: '600', cursor: 'pointer',
+                    background: compareMode === mode ? 'rgba(52,152,219,0.25)' : 'rgba(255,255,255,0.04)',
+                    color: compareMode === mode ? 'rgba(52,152,219,0.95)' : 'rgba(255,255,255,0.4)',
+                    border: 'none', outline: 'none',
+                  }}
+                >
+                  {mode === 'point' ? 'Point' : 'Region'}
+                </button>
+              ))}
+            </div>
+            <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.xs }}>
+              {isRegionMode
+                ? 'Compare models over the region drawn on the map'
+                : 'Compare models at a single location'}
+            </span>
+          </div>
+
           {/* Location / Models / Lead times sit side by side on wide screens
               instead of stacking full-width with mostly-empty rows, and wrap
               back to a single column once the viewport gets too narrow. */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(260px, 100%), 1fr))', gap: '24px', marginBottom: '20px' }}>
-          {/* LOCATION */}
+          {/* LOCATION (point mode) / REGION (region mode) */}
+          {isRegionMode ? (
+          <div>
+            <div style={LABEL}>Region</div>
+            {hasRegion ? (
+              <span style={{
+                fontSize: t.fontSize.xs, fontWeight: '600', padding: '5px 12px', borderRadius: '20px',
+                background: 'rgba(230,126,34,0.12)', border: '1px solid rgba(230,126,34,0.3)',
+                color: '#e67e22', display: 'inline-block',
+              }}>
+                {selectedRegion.type === 'polygon' ? '⬡ Polygon' : '▭ Rectangle'}
+                {' '}
+                {selectedRegion.bounds.min_lat.toFixed(1)}°–{selectedRegion.bounds.max_lat.toFixed(1)}°N,{' '}
+                {selectedRegion.bounds.min_lon.toFixed(1)}°–{selectedRegion.bounds.max_lon.toFixed(1)}°E
+              </span>
+            ) : (
+              <span style={{ color: '#f39c12', fontSize: t.fontSize.sm }}>
+                ⚠️ Draw a region on the map first
+              </span>
+            )}
+          </div>
+          ) : (
           <div>
             <div style={LABEL}>Location</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
@@ -536,6 +624,7 @@ export function ComparisonTab({
               )}
             </div>
           </div>
+          )}
 
           {/* MODELS */}
           <div>
@@ -626,7 +715,7 @@ export function ComparisonTab({
           {/* Run button */}
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
             <button
-              onClick={handleRun}
+              onClick={isRegionMode ? handleRunRegion : handleRun}
               disabled={!canRun}
               style={{
                 background: canRun ? '#3498db' : 'rgba(255,255,255,0.08)',
@@ -643,7 +732,7 @@ export function ComparisonTab({
                 transition: 'background 0.15s',
               }}
             >
-              ▶ Run Comparison
+              ▶ {isRegionMode ? 'Run Region Comparison' : 'Run Comparison'}
             </button>
           </div>
         </div>
@@ -659,7 +748,7 @@ export function ComparisonTab({
         )}
 
         {/* ── Empty state (before first run) ── */}
-        {!hasRun && (
+        {!isRegionMode && !hasRun && (
           <div style={{
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             textAlign: 'center', color: 'rgba(255,255,255,0.25)',
@@ -675,8 +764,28 @@ export function ComparisonTab({
           </div>
         )}
 
-        {/* ── Section 3: Forecast Comparison ── */}
-        {hasRun && (
+        {/* ── Region mode: needs a bbox before anything can run ── */}
+        {isRegionMode && !hasRegion && <RegionNudge />}
+
+        {/* ── Region mode empty state (region drawn, nothing run yet) ── */}
+        {isRegionMode && hasRegion && !hasRunRegion && (
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            textAlign: 'center', color: 'rgba(255,255,255,0.25)',
+            padding: '60px 20px',
+          }}>
+            <div>
+              <div style={{ marginBottom: '16px', lineHeight: 1, color: 'rgba(255,255,255,0.3)' }}><MapPin size={52} /></div>
+              <p style={{ fontSize: t.fontSize.lg, margin: '0 0 8px 0', color: 'rgba(255,255,255,0.4)' }}>
+                Click Run Region Comparison to compare models over this region
+              </p>
+              <p style={{ fontSize: t.fontSize.base, margin: 0 }}>No results yet</p>
+            </div>
+          </div>
+        )}
+
+        {/* ── Section 3: Forecast Comparison (point mode) ── */}
+        {!isRegionMode && hasRun && (
           <div style={{ marginBottom: '28px' }}>
             <h3 style={{ ...SECTION_TITLE, marginBottom: '6px' }}>Forecast Comparison</h3>
             {/* Accumulation conversion note — always visible for precipitation */}
@@ -888,8 +997,8 @@ export function ComparisonTab({
           </div>
         )}
 
-        {/* ── Section 4: Skill Verification ── */}
-        {hasRun && (
+        {/* ── Section 4: Skill Verification (point mode) ── */}
+        {!isRegionMode && hasRun && (
           <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '24px', marginBottom: '28px' }}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', marginBottom: '14px' }}>
               <h3 style={{ ...SECTION_TITLE, margin: 0 }}>Skill Verification</h3>
@@ -1147,8 +1256,8 @@ export function ComparisonTab({
           </div>
         )}
 
-        {/* ── Section 5: Advanced Metrics (collapsible) ── */}
-        {hasRun && (
+        {/* ── Section 5: Advanced Metrics (collapsible, point mode) ── */}
+        {!isRegionMode && hasRun && (
           <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '20px', marginBottom: '28px' }}>
             <button
               onClick={() => setShowAdvanced(v => !v)}
@@ -1289,35 +1398,10 @@ export function ComparisonTab({
           </div>
         )}
 
-        {/* ── Section 6: Spatial Agreement ── */}
-        {hasRun && (
+        {/* ── Section 6: Spatial Agreement (region mode) ── */}
+        {isRegionMode && hasRegion && hasRunRegion && (
           <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '20px', marginBottom: '16px' }}>
             <h3 style={SECTION_TITLE}>Spatial Agreement Map</h3>
-
-            {/* No region drawn yet → nudge */}
-            {!selectedRegion && (
-              <div style={{
-                borderRadius: '10px',
-                padding: '20px 24px',
-                border: '1px dashed rgba(255,255,255,0.15)',
-                background: 'rgba(255,255,255,0.02)',
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: '12px',
-                color: 'rgba(255,255,255,0.35)',
-                fontSize: t.fontSize.base,
-                lineHeight: 1.6,
-              }}>
-                <span style={{ lineHeight: 1, display: 'inline-flex' }}><MapPin size={18} /></span>
-                <div>
-                  <div style={{ fontWeight: '600', color: 'rgba(255,255,255,0.5)', marginBottom: '4px' }}>
-                    No region selected
-                  </div>
-                  Switch to the <strong style={{ color: 'rgba(255,255,255,0.6)' }}>Visualization</strong> tab,
-                  use the selection toolbar to draw a rectangle or polygon, then return here.
-                </div>
-              </div>
-            )}
 
             {/* Region available → controls + map */}
             {selectedRegion && (
