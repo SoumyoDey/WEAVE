@@ -216,7 +216,10 @@ function corrColor(c) {
 // Y-axis tick labels in the narrow metric cards. A raw domain bound like
 // -0.4187 overflows the axis gutter and gets clipped to "4187", so round to a
 // width the gutter can actually show.
-const axisTick = (v) => {
+export const axisTick = (v) => {
+  // Guard null explicitly: Number(null) is 0, which would draw a spurious "0.00"
+  // label for a missing tick rather than no label at all.
+  if (v === null || v === undefined || v === '') return '';
   const n = Number(v);
   if (!Number.isFinite(n)) return '';
   const abs = Math.abs(n);
@@ -390,7 +393,7 @@ function ForecastTooltip({ active, payload, label, selectedModels, normalized, v
 // `mean`/`std` arrive from the API already as rates (mm/h or m/s) — the unit
 // conversion belongs to the backend, which knows each model's record semantics.
 // Optionally (normalize=true) scale each model to its [0,1] peak.
-function buildMergedTimeseries(tsData, selectedModels, normalize = false) {
+export function buildMergedTimeseries(tsData, selectedModels, normalize = false) {
   if (!tsData) return [];
 
   // Per-model peak for optional normalisation
@@ -433,7 +436,7 @@ function buildMergedTimeseries(tsData, selectedModels, normalize = false) {
 }
 
 // Ratio of max-to-min peak across models, on the rates the API returns.
-function computeScaleRatio(tsData, models) {
+export function computeScaleRatio(tsData, models) {
   const peaks = models
     .map(m => (tsData[m]
       ? Math.max(...tsData[m].map(r => (r.mean || 0) + (r.std || 0)))

@@ -1988,9 +1988,13 @@ def get_variables():
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    conn   = get_db_connection()
-    cursor = conn.cursor()
+    # Acquiring the connection is inside the try: an exhausted or unreachable
+    # pool is exactly the condition a health check exists to report, so it must
+    # answer "unhealthy" rather than fall through to the generic 500 handler.
+    conn = cursor = None
     try:
+        conn   = get_db_connection()
+        cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM forecast_data")
         count = cursor.fetchone()[0]
         return jsonify({
@@ -2004,8 +2008,10 @@ def health_check():
         print(f"❌ Health check failed: {e}")
         return jsonify({"status": "unhealthy", "database": "unavailable"}), 500
     finally:
-        cursor.close()
-        return_db_connection(conn)
+        if cursor is not None:
+            cursor.close()
+        if conn is not None:
+            return_db_connection(conn)
 
 
 
