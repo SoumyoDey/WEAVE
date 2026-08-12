@@ -365,17 +365,35 @@ def _ensemble_speed_rows(cursor, run_id, variable_id, hour,
 
 
 def _compute_ssr_points(cursor, run_id, variable_id, init_time, hour,
-                        min_lat, max_lat, min_lon, max_lon, obs_col, accum_h=1):
+                        min_lat, max_lat, min_lon, max_lon, obs_col,
+                        model_name=None):
     """SSR at a single forecast hour from ensemble_statistics + observation_data.
 
-    Forecast precip in ensemble_statistics is a period-accumulated total
-    (mm/6h for AIFS, mm/3h GEFS) while the observation is a rate (mm/h), so the
-    forecast mean/std are divided by accum_h to compare like-for-like. Wind uses
-    accum_h=1 (already a speed via _ensemble_speed_rows).
+    Forecast values are converted to mm/h with the model's own record semantics
+    (_precip_rate_series) rather than a single divisor — AIFS stores a running
+    total since init, GEFS alternates 3 h and 6 h buckets. Wind is already a
+    speed via _ensemble_speed_rows and passes through unchanged.
     """
-    ens_rows = _ensemble_speed_rows(cursor, run_id, variable_id, hour,
-                                    min_lat, max_lat, min_lon, max_lon,
-                                    obs_col == 'wind_speed')
+    is_wind  = (obs_col == 'wind_speed')
+    lookback = 0 if is_wind else _precip_lookback_hours(model_name)
+
+    raw_by_cell = {}
+    for h in ({hour, hour - lookback} if lookback else {hour}):
+        if h < 0:
+            continue
+        for row in _ensemble_speed_rows(cursor, run_id, variable_id, h,
+                                        min_lat, max_lat, min_lon, max_lon, is_wind):
+            if row['mean_value'] is None or row['std_dev'] is None:
+                continue
+            key = (float(row['latitude']), float(row['longitude']))
+            raw_by_cell.setdefault(key, {})[h] = (float(row['mean_value']),
+                                                  float(row['std_dev']))
+    ens_rows = [
+        {'latitude': lat, 'longitude': lon, 'rate': rates[hour]}
+        for (lat, lon), series in raw_by_cell.items()
+        for rates in [_precip_rate_series(model_name, series, is_wind)]
+        if hour in rates
+    ]
 
     valid_time = init_time + timedelta(hours=hour)
     cursor.execute(
@@ -395,13 +413,10 @@ def _compute_ssr_points(cursor, run_id, variable_id, init_time, hour,
     for row in ens_rows:
         lat  = float(row['latitude'])
         lon  = float(row['longitude'])
-        mean = row['mean_value']
-        std  = float(row['std_dev'])
-        if mean is None:
-            continue
-        mean = float(mean) / accum_h        # → mm/h rate (obs is a rate)
-        std  = std / accum_h
-        obs  = obs_lookup.get((round(lat * 4) / 4, round(lon * 4) / 4))
+        mean, std, _period = row['rate']
+        if std is None:
+            continue                        # spread not recoverable for this record
+        obs = obs_lookup.get((round(lat * 4) / 4, round(lon * 4) / 4))
         if obs is None:
             continue
         matched += 1
@@ -418,19 +433,49 @@ def _compute_ssr_points(cursor, run_id, variable_id, init_time, hour,
 
 
 def _compute_correlation_points(cursor, run_id, variable_id, init_time,
-                                 min_lat, max_lat, min_lon, max_lon, obs_col, accum_h=1):
+                                 min_lat, max_lat, min_lon, max_lon, obs_col,
+                                 model_name=None):
     """Spread-skill correlation across verified hours from ensemble_statistics +
-    observation_data. Precip forecast mean/std are divided by accum_h to match
-    the observed mm/h rate (wind uses accum_h=1)."""
+    observation_data.
+
+    Forecast values are converted to mm/h with the model's own record semantics
+    (_precip_rate_series): AIFS is differenced against the previous record,
+    GEFS divided by its own bucket length. Records whose spread isn't
+    recoverable are skipped, since this metric is entirely about spread.
+    """
     candidate_hours = [0, 6, 12, 18, 24, 48, 72, 96, 120, 144, 168]
     is_wind = (obs_col == 'wind_speed')
+
+    # Cumulative models need the record one period earlier to difference against.
+    lookback = 0 if is_wind else _precip_lookback_hours(model_name)
+    fetch_hours = sorted({h for hour in candidate_hours
+                          for h in (hour, hour - lookback) if h >= 0})
+
+    # Raw per-cell series across every hour we need (candidates + lookback).
+    raw_by_cell = {}
+    for hour in fetch_hours:
+        for row in _ensemble_speed_rows(cursor, run_id, variable_id, hour,
+                                        min_lat, max_lat, min_lon, max_lon, is_wind):
+            if row['mean_value'] is None or row['std_dev'] is None:
+                continue
+            key = (round(float(row['latitude']) * 4) / 4,
+                   round(float(row['longitude']) * 4) / 4)
+            entry = raw_by_cell.setdefault(key, {'lat': float(row['latitude']),
+                                                 'lon': float(row['longitude']),
+                                                 'series': {}})
+            entry['series'][hour] = (float(row['mean_value']), float(row['std_dev']))
+
+    if not raw_by_cell:
+        return [], 0
+
+    rates_by_cell = {
+        key: _precip_rate_series(model_name, entry['series'], is_wind)
+        for key, entry in raw_by_cell.items()
+    }
+
     hour_data = {}
     for hour in candidate_hours:
         valid_time = init_time + timedelta(hours=hour)
-        ens_rows = _ensemble_speed_rows(cursor, run_id, variable_id, hour,
-                                        min_lat, max_lat, min_lon, max_lon, is_wind)
-        if not ens_rows:
-            continue
         cursor.execute(
             "SELECT latitude, longitude, " + obs_col + " AS obs_val"
             " FROM observation_data"
@@ -447,22 +492,20 @@ def _compute_correlation_points(cursor, run_id, variable_id, init_time,
             for r in obs_rows
         }
         point_pairs = {}
-        for row in ens_rows:
-            lat  = float(row['latitude'])
-            lon  = float(row['longitude'])
-            mean = row['mean_value']
-            std  = float(row['std_dev'])
-            if mean is None:
+        for key, rates in rates_by_cell.items():
+            rec = rates.get(hour)
+            obs = obs_lookup.get(key)
+            if rec is None or obs is None:
                 continue
-            mean = float(mean) / accum_h        # → mm/h rate (obs is a rate)
-            std  = std / accum_h
-            key  = (round(lat * 4) / 4, round(lon * 4) / 4)
-            obs  = obs_lookup.get(key)
-            if obs is None:
-                continue
-            point_pairs[key] = {'lat': lat, 'lon': lon,
-                                 'spread': std, 'abs_error': abs(mean - obs)}
-        hour_data[hour] = point_pairs
+            mean_rate, std_rate, _period = rec
+            if std_rate is None:
+                continue                  # no spread → nothing to correlate
+            point_pairs[key] = {'lat': raw_by_cell[key]['lat'],
+                                'lon': raw_by_cell[key]['lon'],
+                                'spread': std_rate,
+                                'abs_error': abs(mean_rate - obs)}
+        if point_pairs:
+            hour_data[hour] = point_pairs
 
     all_keys = {}
     for _hour, pairs in hour_data.items():
@@ -572,13 +615,18 @@ def _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
     """
     Fetches per-(lat,lon) lists of (hour, mean_rate, std_rate, obs_rate) tuples
     from regridded_forecast + regridded_observation tables.
-    All rates are normalised to mm/h by dividing by MODEL_ACCUM_HOURS.
+
+    Rates are mm/h via _precip_rate_series(), which applies each model's own
+    record semantics (cumulative differencing for AIFS, per-record bucket length
+    for GEFS) rather than a single divisor — see the notes on that function.
+    `std_rate` is None when the spread isn't recoverable for that record;
+    spread-dependent metrics must skip those.
     Returns dict: {(lat_rounded, lon_rounded): [(hour, mean_rate, std_rate, obs_rate), ...]}
     """
     from collections import defaultdict
     is_wind = (variable == 'wind')
-    # Wind speed is instantaneous (m/s) — no accumulation period normalization.
-    accum_h = 1 if is_wind else MODEL_ACCUM_HOURS.get(model_name, 1)
+    # Cumulative models need one record below hour_min to difference against.
+    lookback = 0 if is_wind else _precip_lookback_hours(model_name)
     if is_wind:
         fcst_var, obs_var, obs_src = 'wind_u_10m', 'wind_speed', 'ERA5_WIND'
     else:
@@ -610,14 +658,30 @@ def _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
           AND u.mean_value IS NOT NULL AND u.std_dev IS NOT NULL {_vnn}
         ORDER BY u.latitude, u.longitude, u.forecast_hour
     """, (model_name, *(() if is_wind else (fcst_var,)),
-          hour_min, hour_max, min_lat, max_lat, min_lon, max_lon))
+          max(0, hour_min - lookback), hour_max, min_lat, max_lat, min_lon, max_lon))
     fcst_rows = cursor.fetchall()
     if not fcst_rows:
         return {}
 
-    valid_times = [init_time_val + timedelta(hours=r['forecast_hour'])
-                   for r in fcst_rows]
-    min_obs_t = min(valid_times) - timedelta(hours=accum_h - 1)
+    # Per-cell hour series, converted to rates with this model's own semantics.
+    raw_by_cell = defaultdict(dict)
+    for row in fcst_rows:
+        key = (round(float(row['latitude']), 2), round(float(row['longitude']), 2))
+        raw_by_cell[key][row['forecast_hour']] = (float(row['mean_value']),
+                                                  float(row['std_dev']))
+    rates_by_cell = {
+        cell: _precip_rate_series(model_name, series, is_wind)
+        for cell, series in raw_by_cell.items()
+    }
+
+    max_period = max((p for rates in rates_by_cell.values()
+                      for _, _, p in rates.values()), default=1)
+    in_range_hours = [h for rates in rates_by_cell.values() for h in rates
+                      if hour_min <= h <= hour_max]
+    if not in_range_hours:
+        return {}
+    valid_times = [init_time_val + timedelta(hours=h) for h in in_range_hours]
+    min_obs_t = min(valid_times) - timedelta(hours=max_period - 1)
     max_obs_t = max(valid_times)
 
     cursor.execute("""
@@ -640,33 +704,32 @@ def _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
         return {}
 
     result = defaultdict(list)
-    matched_rows = 0
-    for row in fcst_rows:
-        lat  = round(float(row['latitude']),  2)
-        lon  = round(float(row['longitude']), 2)
-        hour = row['forecast_hour']
-        mean = float(row['mean_value'])
-        std  = float(row['std_dev'])
-        vt   = init_time_val + timedelta(hours=hour)
-
-        obs_window = [
-            obs_dict[(lat, lon, vt - timedelta(hours=dh))]
-            for dh in range(accum_h - 1, -1, -1)
-            if (lat, lon, vt - timedelta(hours=dh)) in obs_dict
-        ]
-        if not obs_window:
-            continue
-        matched_rows += 1
-        obs_rate  = sum(obs_window) / len(obs_window)
-        mean_rate = mean / accum_h
-        std_rate  = std  / accum_h
-        result[(lat, lon)].append((hour, mean_rate, std_rate, obs_rate))
+    matched_rows = candidate_rows = 0
+    for (lat, lon), rates in rates_by_cell.items():
+        for hour, (mean_rate, std_rate, period) in sorted(rates.items()):
+            if not (hour_min <= hour <= hour_max):
+                continue                     # a lookback record, fetched only to difference
+            candidate_rows += 1
+            vt = init_time_val + timedelta(hours=hour)
+            # Observations averaged over the SAME period the record covers, so a
+            # 6-hourly AIFS record verifies against a 6 h mean rate and an hourly
+            # UKMO record against a 1 h rate.
+            obs_window = [
+                obs_dict[(lat, lon, vt - timedelta(hours=dh))]
+                for dh in range(period - 1, -1, -1)
+                if (lat, lon, vt - timedelta(hours=dh)) in obs_dict
+            ]
+            if not obs_window:
+                continue
+            matched_rows += 1
+            result[(lat, lon)].append((hour, mean_rate, std_rate,
+                                       sum(obs_window) / len(obs_window)))
 
     # Diagnose silent grid misalignment: the fcst↔obs join is pure rounded-key
     # (2 dp) equality, so if the two grids are offset, zero pairs match and every
     # dependent metric returns [] — indistinguishable from "no data" downstream.
     if matched_rows == 0:
-        print(f"⚠️  fcst↔obs join matched 0 of {len(fcst_rows)} forecast rows "
+        print(f"⚠️  fcst↔obs join matched 0 of {candidate_rows} forecast records "
               f"for {model_name}/{variable} — likely grid misalignment "
               f"({len(obs_dict)} obs keys, both rounded to 2 dp).")
     return dict(result)
@@ -732,6 +795,8 @@ def _compute_crps_points_rf(cursor, model_name, variable,
             continue
         crps_vals = []
         for _, mr, sr, orr in entries:
+            if sr is None:
+                continue          # spread not recoverable for this record
             if sr > 1e-10:
                 z    = (orr - mr) / sr
                 crps = sr * (z * (2 * scipy.stats.norm.cdf(z) - 1)
@@ -740,6 +805,8 @@ def _compute_crps_points_rf(cursor, model_name, variable,
             else:
                 crps = abs(mr - orr)
             crps_vals.append(max(0.0, crps))
+        if not crps_vals:
+            continue
         points.append({'lat': lat, 'lon': lon, 'value': round(float(np.mean(crps_vals)), 4)})
     return points
 
@@ -824,6 +891,8 @@ def _compute_brier_points_rf(cursor, model_name, variable,
             continue
         bs_vals = []
         for _, mr, sr, orr in entries:
+            if sr is None:
+                continue          # spread not recoverable for this record
             is_obs = float(orr > threshold_rate)
             if sr > 1e-10:
                 p_event = float(1.0 - scipy.stats.norm.cdf(threshold_rate,
@@ -831,17 +900,11 @@ def _compute_brier_points_rf(cursor, model_name, variable,
             else:
                 p_event = 1.0 if mr > threshold_rate else 0.0
             bs_vals.append((p_event - is_obs) ** 2)
+        if not bs_vals:
+            continue
         points.append({'lat': lat, 'lon': lon,
                        'value': round(float(np.mean(bs_vals)), 6)})
     return points
-
-
-def _ssr_accum_h(args, obs_col):
-    """Accumulation hours for the ensemble SSR/correlation path: 1 for wind
-    (instantaneous), else the model's precip accumulation period."""
-    if obs_col == 'wind_speed':
-        return 1
-    return MODEL_ACCUM_HOURS.get(args.get('model', 'AIFS'), 1)
 
 
 def _dispatch_ssr(cursor, run_id, variable_id, init_time, args,
@@ -849,7 +912,7 @@ def _dispatch_ssr(cursor, run_id, variable_id, init_time, args,
     hour   = int(args.get('hour', 6))
     points = _compute_ssr_points(cursor, run_id, variable_id, init_time, hour,
                                   min_lat, max_lat, min_lon, max_lon, obs_col,
-                                  accum_h=_ssr_accum_h(args, obs_col))
+                                  model_name=args.get('model', 'AIFS'))
     return points, {'hour': hour}
 
 
@@ -858,7 +921,7 @@ def _dispatch_correlation(cursor, run_id, variable_id, init_time, args,
     points, n_hours = _compute_correlation_points(
         cursor, run_id, variable_id, init_time,
         min_lat, max_lat, min_lon, max_lon, obs_col,
-        accum_h=_ssr_accum_h(args, obs_col),
+        model_name=args.get('model', 'AIFS'),
     )
     return points, {'n_hours': n_hours}
 
@@ -979,6 +1042,8 @@ def _compute_ssr_agg_points_rf(cursor, model_name, variable,
                                               hour_min, hour_max)
     points = []
     for (lat, lon), entries in pairs.items():
+        # Only records whose spread is available can contribute to a spread ratio.
+        entries = [e for e in entries if e[2] is not None]
         if len(entries) < 2:
             continue
         mean_var    = float(np.mean([sr ** 2 for _, _, sr, _   in entries]))
@@ -1280,28 +1345,48 @@ def point_timeseries():
                 ORDER BY fd.forecast_hour
             """, (run_id, variable, lat, radius, lon, radius))
 
-        # Precipitation is stored as period-accumulated totals; divide by accum_h
-        # to convert to mm/h rate. Wind, temperature, and pressure are
-        # instantaneous so no normalization is needed (accum_h = 1).
-        accum_h = MODEL_ACCUM_HOURS.get(model_name, 1) if variable == 'precipitation' else 1
+        # Convert to a mm/h rate using this model's record semantics: AIFS is a
+        # running total since init (difference consecutive records), GEFS uses
+        # 3 h / 6 h buckets, UKMO is already hourly. Wind, temperature and
+        # pressure are instantaneous, so they pass through untouched.
+        rows     = cursor.fetchall()
+        is_precip = (variable == 'precipitation')
+        by_hour   = {r['forecast_hour']: r for r in rows}
 
-        rows   = cursor.fetchall()
+        # Every distribution statistic scales the same way, so derive one factor
+        # and one offset per hour from the mean, then apply to all of them.
+        # (Percentiles of a difference are not differences of percentiles, but
+        # applying the period scaling keeps them on the reported unit.)
         result = []
-        for row in rows:
+        for hour in sorted(by_hour):
+            row   = by_hour[hour]
+            stats = {k: float(row[k] or 0) for k in
+                     ('mean_val', 'std_val', 'min_val', 'max_val', 'p10', 'p25', 'p75', 'p90')}
+            if not is_precip:
+                period, prev = 1, None
+            else:
+                period = _precip_period_hours(model_name, hour)
+                prev   = by_hour.get(hour - period) if model_name in CUMULATIVE_PRECIP_MODELS else None
+                if model_name in CUMULATIVE_PRECIP_MODELS and prev is None and hour - period > 0:
+                    continue          # can't de-accumulate this record
+            # Cumulative: subtract the previous total from the level statistics.
+            base = float(prev['mean_val'] or 0) if prev is not None else 0.0
             result.append({
-                'hour': row['forecast_hour'],
-                'mean': round(float(row['mean_val'] or 0) / accum_h, 4),
-                'std':  round(float(row['std_val']  or 0) / accum_h, 4),
-                'min':  round(float(row['min_val']  or 0) / accum_h, 4),
-                'max':  round(float(row['max_val']  or 0) / accum_h, 4),
-                'p10':  round(float(row['p10']       or 0) / accum_h, 4),
-                'p25':  round(float(row['p25']       or 0) / accum_h, 4),
-                'p75':  round(float(row['p75']       or 0) / accum_h, 4),
-                'p90':  round(float(row['p90']       or 0) / accum_h, 4),
+                'hour': hour,
+                'mean': round(max(0.0, stats['mean_val'] - base) / period, 4),
+                # Spread statistics are not differenced — see METRICS_AUDIT.md;
+                # for a cumulative model they describe the total, not the increment.
+                'std':  round(stats['std_val'] / period, 4),
+                'min':  round(max(0.0, stats['min_val'] - base) / period, 4),
+                'max':  round(max(0.0, stats['max_val'] - base) / period, 4),
+                'p10':  round(max(0.0, stats['p10'] - base) / period, 4),
+                'p25':  round(max(0.0, stats['p25'] - base) / period, 4),
+                'p75':  round(max(0.0, stats['p75'] - base) / period, 4),
+                'p90':  round(max(0.0, stats['p90'] - base) / period, 4),
             })
 
         print(f"✅ Timeseries: {len(result)} hours for {model_name} at ({lat}, {lon}) "
-              f"[accum_h={accum_h}]")
+              f"[precip={is_precip}]")
         return jsonify(result)
 
     except Exception as e:
@@ -1913,17 +1998,101 @@ def health_check():
         return_db_connection(conn)
 
 
-# ── Model accumulation periods (hours) ───────────────────────────────────────
-# AIFS outputs 6-hourly accumulated precipitation (mm/6h)
-# GEFS outputs 3-hourly accumulated precipitation (mm/3h)
-# UKMO outputs hourly instantaneous values (mm/h)
-# All skill metrics are computed in mm/h (rate) by dividing mean/std by this
-# factor and averaging observations over the same accumulation window.
+# ── Precipitation record semantics ───────────────────────────────────────────
+# Established from the stored data itself (see METRICS_AUDIT.md findings 1-2):
+# the loaders write provider values verbatim, and the three models do NOT share
+# a convention.
+#
+#   AIFS — a running total since initialisation. Its domain mean is monotone in
+#          lead time (0.335, 0.787, 1.198, 1.583, ...), which only happens for a
+#          cumulative field. Records are 6-hourly, so the amount falling in a
+#          period is v(h) - v(h-6).
+#   GEFS — buckets that reset every 6 h: records at h % 6 == 3 cover 3 h,
+#          records at h % 6 == 0 cover 6 h. Over ~100k records the h%6==0 mean
+#          is 1.86x the h%6==3 mean, i.e. ~2x, the standard NCEP pattern.
+#          Divide each record by its own period; no differencing.
+#   UKMO — an hourly mean rate, already mm/h.
+#
+# Everything downstream works in mm/h, verified against the mean observed rate
+# over the *same* period, so models with different cadences stay comparable.
+#
+# Nominal output cadence per model. This is the emit interval, NOT necessarily
+# the period a record covers — use _precip_period_hours() for that.
 MODEL_ACCUM_HOURS = {
     'AIFS': 6,
     'GEFS': 3,
     'UKMO': 1,
 }
+
+# Models whose stored precipitation value is a running total since init.
+CUMULATIVE_PRECIP_MODELS = {'AIFS'}
+
+
+def _precip_period_hours(model_name, forecast_hour):
+    """Hours covered by one precipitation record ending at `forecast_hour`."""
+    if model_name == 'GEFS':
+        # 0-3 / 0-6 / 6-9 / 6-12 ... — the bucket resets every 6 h.
+        return 3 if forecast_hour % 6 == 3 else 6
+    if model_name in CUMULATIVE_PRECIP_MODELS:
+        return MODEL_ACCUM_HOURS.get(model_name, 1)
+    return MODEL_ACCUM_HOURS.get(model_name, 1)
+
+
+def _precip_lookback_hours(model_name):
+    """Extra lead time to fetch below hour_min so the first in-range record of a
+    cumulative model still has the predecessor it needs to be differenced."""
+    return MODEL_ACCUM_HOURS.get(model_name, 1) if model_name in CUMULATIVE_PRECIP_MODELS else 0
+
+
+def _precip_rate_series(model_name, series, is_wind=False):
+    """{hour: (mean, std)} -> {hour: (mean_rate, std_rate|None, period_h)}, mm/h.
+
+    Wind is instantaneous and passes through unchanged (period 1).
+
+    Cumulative models are differenced against the record one period earlier;
+    bucketed models are divided by their own period. A cumulative record whose
+    predecessor is missing is dropped rather than guessed — except at the first
+    period of the run, where the predecessor is implicitly zero at init.
+
+    Spread: for a cumulative model the stored std is the spread of the *total*,
+    and the increment's spread is not exactly recoverable from it. Under
+    independent increments Var(inc) = Var(C_h) - Var(C_h-p), which comes out
+    negative for ~13% of AIFS records, so this is an approximation and those
+    records get std_rate None. Spread-dependent metrics (SSR, CRPS, Brier) skip
+    a None; the deterministic ones (bias/MAE/RMSE/CSI/POD/FAR) are unaffected
+    because they never touch the spread.
+    """
+    if is_wind:
+        return {h: (mean, std, 1) for h, (mean, std) in series.items()}
+
+    cumulative = model_name in CUMULATIVE_PRECIP_MODELS
+    out = {}
+    for hour in sorted(series):
+        mean, std = series[hour]
+        period    = _precip_period_hours(model_name, hour)
+        if not cumulative:
+            out[hour] = (mean / period, (std / period) if std is not None else None, period)
+            continue
+
+        prev_hour = hour - period
+        if prev_hour <= 0:
+            amount   = mean                       # accumulated from init; implicit 0 at t=0
+            variance = (std ** 2) if std is not None else None
+        elif prev_hour in series:
+            prev_mean, prev_std = series[prev_hour]
+            amount = mean - prev_mean
+            if std is None or prev_std is None:
+                variance = None
+            else:
+                variance = std ** 2 - prev_std ** 2
+        else:
+            continue                              # can't difference — drop the record
+
+        # Cumulative totals are non-decreasing; a small negative is rounding.
+        amount    = max(0.0, amount)
+        std_rate  = (math.sqrt(variance) / period) if (variance is not None and variance > 0) else None
+        out[hour] = (amount / period, std_rate, period)
+    return out
 
 # ── Comparison endpoints (multi-model, regridded_forecast / regridded_observation) ──
 
@@ -1937,7 +2106,12 @@ def compare_timeseries():
     Request JSON:
         { models, lat, lon, hour_min, hour_max, variable }
     Response:
-        { "AIFS": [{"hour": 6, "mean": 1.234, "std": 0.456}, ...], ... }
+        { "AIFS": [{"hour": 6, "mean": 1.234, "std": 0.456, "raw_mean": 7.4,
+                    "period_h": 6}, ...], ... }
+
+    `mean`/`std` are RATES (mm/h for precipitation, m/s for wind) — the backend
+    applies each model's record semantics so the client never has to. `raw_mean`
+    is the stored value, kept for the tooltip.
     """
     body     = request.get_json(silent=True)
     if not isinstance(body, dict):
@@ -1975,22 +2149,41 @@ def compare_timeseries():
               AND u.longitude BETWEEN %s AND %s
             ORDER BY u.model_name, u.forecast_hour
         """, (
-            models, *(() if is_wind else (var_name,)), hour_min, hour_max,
+            models, *(() if is_wind else (var_name,)),
+            max(0, hour_min - (0 if is_wind else max(
+                (_precip_lookback_hours(m) for m in models), default=0))),
+            hour_max,
             lat - 0.26, lat + 0.26,
             lon - 0.26, lon + 0.26,
         ))
         rows = cursor.fetchall()
 
-        result = {}
+        # Group per model, then convert to rates with that model's semantics.
+        # Multiple cells can fall in the box; keep the first per (model, hour)
+        # so the series stays one value per lead time.
+        raw_by_model = {}
         for row in rows:
-            m = row['model_name']
-            if m not in result:
-                result[m] = []
-            result[m].append({
-                'hour': row['forecast_hour'],
-                'mean': round(float(row['mean_value']), 4) if row['mean_value'] is not None else None,
-                'std':  round(float(row['std_dev']),    4) if row['std_dev']    is not None else None,
-            })
+            if row['mean_value'] is None:
+                continue
+            series = raw_by_model.setdefault(row['model_name'], {})
+            series.setdefault(row['forecast_hour'],
+                              (float(row['mean_value']),
+                               float(row['std_dev']) if row['std_dev'] is not None else None))
+
+        result = {}
+        for m, series in raw_by_model.items():
+            rates = _precip_rate_series(m, series, is_wind)
+            result[m] = [
+                {
+                    'hour':     hour,
+                    'mean':     round(mean_rate, 4),
+                    'std':      round(std_rate, 4) if std_rate is not None else None,
+                    'raw_mean': round(series[hour][0], 4),
+                    'period_h': period,
+                }
+                for hour, (mean_rate, std_rate, period) in sorted(rates.items())
+                if hour_min <= hour <= hour_max
+            ]
 
         print(f"✅ compare/timeseries: {sum(len(v) for v in result.values())} pts "
               f"for models {models} at ({lat},{lon})")
@@ -2045,158 +2238,153 @@ def compare_skill():
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
         # ------------------------------------------------------------------
-        # 1. Fetch forecast rows for all requested models
+        # 1. Resolve each model's nearest grid cell to the requested point
         # ------------------------------------------------------------------
-        # Resolve each model's latest-run init time once, then query without the
-        # per-row correlated subquery (regridded_forecast has no run_id column).
+        # A +/-0.26 degree box on a 0.5 degree grid catches one cell only when
+        # the point is grid-aligned; near a cell corner it catches four, which
+        # previously returned each lead time up to 4x and averaged the summary
+        # over rows rather than lead times. Pin one cell per model instead.
         init_times = {m: _latest_init_time(cursor, m) for m in models}
         init_times = {m: t for m, t in init_times.items() if t is not None}
         if not init_times:
             return jsonify({'models': {}, 'obs_hours': [],
                             'obs_warning': 'No forecast data found for selected parameters.'})
 
-        # Wind → forecast SPEED via u/v self-join (see _fcst_speed_sql).
         is_wind = (variable == 'wind')
-        _sel, _frm, _varw, _vnn = _fcst_speed_sql(is_wind, "u.model_name, u.forecast_hour")
-        cursor.execute(f"""
-            SELECT {_sel}
-            FROM {_frm}
-            WHERE u.model_name = ANY(%s) AND {_varw}
-              AND u.forecast_hour BETWEEN %s AND %s
-              AND u.latitude  BETWEEN %s AND %s
-              AND u.longitude BETWEEN %s AND %s
-              AND u.mean_value IS NOT NULL
-              AND u.std_dev    IS NOT NULL {_vnn}
-            ORDER BY u.model_name, u.forecast_hour
-        """, (
-            list(init_times.keys()), *(() if is_wind else (fcst_var,)),
-            hour_min, hour_max, lat - 0.26, lat + 0.26, lon - 0.26, lon + 0.26,
-        ))
-        fcst_rows = cursor.fetchall()
-
-        if not fcst_rows:
+        cell_of = {}
+        for m in list(init_times):
+            cursor.execute("""
+                SELECT latitude, longitude
+                FROM regridded_forecast
+                WHERE model_name = %s AND variable_name = %s
+                  AND latitude  BETWEEN %s AND %s
+                  AND longitude BETWEEN %s AND %s
+                ORDER BY POWER(latitude - %s, 2) + POWER(longitude - %s, 2)
+                LIMIT 1
+            """, (m, fcst_var, lat - 1.0, lat + 1.0, lon - 1.0, lon + 1.0, lat, lon))
+            row = cursor.fetchone()
+            if row:
+                cell_of[m] = (float(row['latitude']), float(row['longitude']))
+        if not cell_of:
             return jsonify({'models': {}, 'obs_hours': [],
                             'obs_warning': 'No forecast data found for selected parameters.'})
 
         # ------------------------------------------------------------------
-        # 2. Fetch observations covering the full accumulation window
+        # 2. Per-model hour series at that cell, converted to mm/h rates
         # ------------------------------------------------------------------
-        # For models with accumulation > 1h (AIFS=6h, GEFS=3h) we need obs
-        # at multiple hourly timestamps to compute the average rate in that
-        # window.  Expand the obs query backward by max(accum_h) - 1 hours.
-        valid_times_set = set()
-        for row in fcst_rows:
-            vt = init_times[row['model_name']] + timedelta(hours=row['forecast_hour'])
-            valid_times_set.add(vt)
-
-        if not valid_times_set:
-            return jsonify({'models': {}, 'obs_hours': [],
-                            'obs_warning': 'No observations found for this location/variable.'})
-
-        max_accum = max(MODEL_ACCUM_HOURS.get(m, 1) for m in models)
-        min_obs_t = min(valid_times_set) - timedelta(hours=max_accum - 1)
-        max_obs_t = max(valid_times_set)
-
-        cursor.execute("""
-            SELECT obs_time, AVG(value) AS obs_val
-            FROM regridded_observation
-            WHERE variable_name = %s
-              AND source        = %s
-              AND obs_time BETWEEN %s AND %s
-              AND latitude  BETWEEN %s AND %s
-              AND longitude BETWEEN %s AND %s
-            GROUP BY obs_time
-            ORDER BY obs_time
-        """, (
-            obs_var, obs_src, min_obs_t, max_obs_t,
-            lat - 0.26, lat + 0.26,
-            lon - 0.26, lon + 0.26,
-        ))
-        obs_rows     = cursor.fetchall()
-        # keyed by obs_time for O(1) lookup
-        obs_by_time  = {row['obs_time']: float(row['obs_val']) for row in obs_rows}
-
-        if not obs_by_time:
-            return jsonify({'models': {}, 'obs_hours': [],
-                            'obs_warning': 'No observations found for this location/variable.'})
-
-        # ------------------------------------------------------------------
-        # 3. Match forecasts to observations and compute rate-normalised metrics
-        # ------------------------------------------------------------------
-        # All metrics are computed in mm/h so cross-model comparisons are fair:
-        #   mean_rate = mean_value / accum_h
-        #   std_rate  = std_dev    / accum_h
-        #   obs_rate  = average of hourly IMERG values in the accum window (mm/h)
-        #
-        # SSR is scale-invariant (accum_h cancels), so the value is identical
-        # to computing on raw totals.  CRPS, bias, MAE, RMSE all scale with
-        # the unit, so normalising to mm/h makes them cross-model comparable.
-        model_data = {}  # model_name -> list of per-hour dicts
-
-        for row in fcst_rows:
-            m_name  = row['model_name']
-            hour    = row['forecast_hour']
-            mean    = float(row['mean_value'])
-            std     = float(row['std_dev'])
-            vt      = init_times[m_name] + timedelta(hours=hour)
-            # Wind is instantaneous (m/s) — accum_h must be 1. Only precipitation
-            # is period-accumulated; applying the precip factor to wind divided
-            # wind speed by 6/3 and corrupted MAE/RMSE/CRPS/bias.
-            accum_h = 1 if is_wind else MODEL_ACCUM_HOURS.get(m_name, 1)
-
-            # Collect hourly obs in the half-open window (vt - accum_h, vt]
-            # e.g. AIFS +6h  →  obs at vt-5h, vt-4h, vt-3h, vt-2h, vt-1h, vt
-            obs_window = []
-            for dh in range(accum_h - 1, -1, -1):
-                t = vt - timedelta(hours=dh)
-                if t in obs_by_time:
-                    obs_window.append(obs_by_time[t])
-
-            if not obs_window:
+        # Cumulative models need one record below hour_min to difference against.
+        _sel, _frm, _varw, _vnn = _fcst_speed_sql(is_wind, "u.forecast_hour")
+        rates_of, periods_used = {}, set()
+        for m, (m_lat, m_lon) in cell_of.items():
+            lookback = 0 if is_wind else _precip_lookback_hours(m)
+            cursor.execute(f"""
+                SELECT {_sel}
+                FROM {_frm}
+                WHERE u.model_name = %s AND {_varw}
+                  AND u.forecast_hour BETWEEN %s AND %s
+                  AND u.latitude = %s AND u.longitude = %s
+                  AND u.mean_value IS NOT NULL
+                  AND u.std_dev    IS NOT NULL {_vnn}
+                ORDER BY u.forecast_hour
+            """, (m, *(() if is_wind else (fcst_var,)),
+                  max(0, hour_min - lookback), hour_max, m_lat, m_lon))
+            series = {r['forecast_hour']: (float(r['mean_value']), float(r['std_dev']))
+                      for r in cursor.fetchall()}
+            if not series:
                 continue
+            rates = {h: v for h, v in _precip_rate_series(m, series, is_wind).items()
+                     if hour_min <= h <= hour_max}
+            if rates:
+                rates_of[m] = rates
+                periods_used.update(p for _, _, p in rates.values())
 
-            obs_rate  = sum(obs_window) / len(obs_window)  # avg mm/h in window
-            mean_rate = mean / accum_h                      # mm/h
-            std_rate  = std  / accum_h                      # mm/h
+        if not rates_of:
+            return jsonify({'models': {}, 'obs_hours': [],
+                            'obs_warning': 'No forecast data found for selected parameters.'})
 
-            err     = mean_rate - obs_rate
-            abs_err = abs(err)
-            err_sq  = err ** 2
+        # ------------------------------------------------------------------
+        # 3. Observations at the same cell, averaged over each record's period
+        # ------------------------------------------------------------------
+        valid_times = [init_times[m] + timedelta(hours=h)
+                       for m, rates in rates_of.items() for h in rates]
+        max_period  = max(periods_used, default=1)
+        min_obs_t   = min(valid_times) - timedelta(hours=max_period - 1)
+        max_obs_t   = max(valid_times)
 
-            # SSR (scale-invariant — same result as with raw totals)
-            ssr = _clamp_ssr(std_rate ** 2 / err_sq) if err_sq > 1e-10 else None
+        obs_of = {}
+        for m, (m_lat, m_lon) in cell_of.items():
+            if m not in rates_of:
+                continue
+            cursor.execute("""
+                SELECT obs_time, AVG(value) AS obs_val
+                FROM regridded_observation
+                WHERE variable_name = %s AND source = %s
+                  AND obs_time BETWEEN %s AND %s
+                  AND latitude = %s AND longitude = %s
+                GROUP BY obs_time
+            """, (obs_var, obs_src, min_obs_t, max_obs_t, m_lat, m_lon))
+            obs_of[m] = {r['obs_time']: float(r['obs_val']) for r in cursor.fetchall()}
 
-            # Gaussian CRPS (in mm/h — comparable across models)
-            if std_rate > 1e-10:
-                z    = (obs_rate - mean_rate) / std_rate
-                crps = float(std_rate * (
-                    z * (2.0 * scipy.stats.norm.cdf(z) - 1.0)
-                    + 2.0 * scipy.stats.norm.pdf(z)
-                    - 1.0 / math.sqrt(math.pi)
-                ))
-            else:
-                crps = abs_err
+        if not any(obs_of.values()):
+            return jsonify({'models': {}, 'obs_hours': [],
+                            'obs_warning': 'No observations found for this location/variable.'})
 
-            if m_name not in model_data:
-                model_data[m_name] = []
+        # ------------------------------------------------------------------
+        # 3b. Match and compute per-lead-time metrics
+        # ------------------------------------------------------------------
+        # All metrics are in mm/h so cross-model comparisons are fair. SSR is
+        # scale-invariant; CRPS/bias/MAE/RMSE scale with the unit, so the shared
+        # rate normalisation is what makes them comparable.
+        model_data = {}
 
-            model_data[m_name].append({
-                'hour':      hour,
-                'ssr':       round(ssr, 4)        if ssr is not None else None,
-                'crps':      round(crps, 6),
-                'bias':      round(err,  4),
-                'mae':       round(abs_err, 4),
-                'rmse':      round(math.sqrt(err_sq), 4),
-                # spread and obs in mm/h for display
-                'spread':    round(std_rate,  4),
-                'mean_val':  round(mean_rate, 4),
-                'obs':       round(obs_rate,  4),
-                # raw stored values for reference
-                'raw_mean':  round(mean, 4),
-                'raw_std':   round(std,  4),
-                'accum_h':   accum_h,
-                'n_obs_in_window': len(obs_window),
-            })
+        for m_name, rates in rates_of.items():
+            obs_by_time = obs_of.get(m_name) or {}
+            for hour in sorted(rates):
+                mean_rate, std_rate, period = rates[hour]
+                vt = init_times[m_name] + timedelta(hours=hour)
+
+                # Hourly obs over the same period the forecast record covers.
+                obs_window = [obs_by_time[vt - timedelta(hours=dh)]
+                              for dh in range(period - 1, -1, -1)
+                              if vt - timedelta(hours=dh) in obs_by_time]
+                if not obs_window:
+                    continue
+
+                obs_rate = sum(obs_window) / len(obs_window)
+                err      = mean_rate - obs_rate
+                abs_err  = abs(err)
+                err_sq   = err ** 2
+
+                # SSR and CRPS need the spread, which isn't recoverable for
+                # every record of a cumulative model (see _precip_rate_series).
+                if std_rate is None:
+                    ssr = crps = None
+                else:
+                    ssr = _clamp_ssr(std_rate ** 2 / err_sq) if err_sq > 1e-10 else None
+                    if std_rate > 1e-10:
+                        z    = (obs_rate - mean_rate) / std_rate
+                        crps = float(std_rate * (
+                            z * (2.0 * scipy.stats.norm.cdf(z) - 1.0)
+                            + 2.0 * scipy.stats.norm.pdf(z)
+                            - 1.0 / math.sqrt(math.pi)
+                        ))
+                    else:
+                        crps = abs_err
+
+                model_data.setdefault(m_name, []).append({
+                    'hour':      hour,
+                    'ssr':       round(ssr,  4) if ssr  is not None else None,
+                    'crps':      round(crps, 6) if crps is not None else None,
+                    'bias':      round(err,  4),
+                    'mae':       round(abs_err, 4),
+                    'rmse':      round(math.sqrt(err_sq), 4),
+                    # spread and obs in mm/h for display
+                    'spread':    round(std_rate, 4) if std_rate is not None else None,
+                    'mean_val':  round(mean_rate, 4),
+                    'obs':       round(obs_rate,  4),
+                    'period_h':  period,
+                    'n_obs_in_window': len(obs_window),
+                })
 
         # ------------------------------------------------------------------
         # 4. Compute per-model summaries
@@ -2206,24 +2394,36 @@ def compare_skill():
 
         for m_name, hours_list in model_data.items():
             n        = len(hours_list)
-            ssrs     = [h['ssr']  for h in hours_list if h['ssr']  is not None]
-            crpss    = [h['crps'] for h in hours_list]
+            crpss    = [h['crps'] for h in hours_list if h['crps'] is not None]
             biases   = [h['bias'] for h in hours_list]
             maes     = [h['mae']  for h in hours_list]
             rmses    = [h['rmse'] for h in hours_list]
-            spreads  = [h['spread'] for h in hours_list]
-            abs_errs = [h['mae']  for h in hours_list]
+            # Spread and |error| paired, keeping only records that have a spread.
+            paired   = [(h['spread'], h['mae']) for h in hours_list
+                        if h['spread'] is not None]
 
-            mean_ssr  = round(sum(ssrs)  / len(ssrs),  4) if ssrs  else None
-            mean_crps = round(sum(crpss) / n,          4) if crpss else None
+            mean_crps = round(sum(crpss) / len(crpss), 4) if crpss else None
             bias_val  = round(sum(biases) / n,         4) if biases else None
             mae_val   = round(sum(maes)  / n,          4) if maes  else None
             rmse_val  = round(math.sqrt(sum(r ** 2 for r in rmses) / n), 4) if rmses else None
 
+            # Aggregate SSR as mean(sigma^2)/mean(err^2), NOT the mean of the
+            # per-case ratios: E[X/Y] != E[X]/E[Y], and a single near-zero error
+            # sends its ratio to the clamp, which then drags the mean up. This
+            # matches the estimator the spatial ssr_agg metric already uses.
+            mean_ssr = None
+            if paired:
+                mean_var    = sum(s ** 2 for s, _ in paired) / len(paired)
+                mean_sq_err = sum(e ** 2 for _, e in paired) / len(paired)
+                if mean_sq_err > 1e-10:
+                    mean_ssr = _clamp_ssr(mean_var / mean_sq_err)
+
             # Spread-skill correlation (spread vs |error|)
             corr_val = None
-            if len(spreads) >= 2:
-                ns = len(spreads)
+            if len(paired) >= 2:
+                spreads  = [s for s, _ in paired]
+                abs_errs = [e for _, e in paired]
+                ns = len(paired)
                 ms = sum(spreads) / ns
                 me = sum(abs_errs) / ns
                 num = sum((spreads[i] - ms) * (abs_errs[i] - me) for i in range(ns))
@@ -2261,13 +2461,15 @@ def compare_skill():
 
         print(f"✅ compare/skill: {len(result_models)} models, "
               f"{len(obs_hours_sorted)} obs hours at ({lat},{lon}), "
-              f"accum_hours={MODEL_ACCUM_HOURS}")
+              f"cells={ {m: cell_of.get(m) for m in result_models} }")
         return jsonify({
             'models':             result_models,
             'obs_hours':          obs_hours_sorted,
             'obs_warning':        obs_warning,
             # Metadata so the frontend can display the conversion notes
             'model_accum_hours':  {m: MODEL_ACCUM_HOURS.get(m, 1) for m in models},
+            # The grid cell each model was actually verified at (finding 3).
+            'model_cells':        {m: list(cell_of[m]) for m in result_models if m in cell_of},
             'units':              'mm/h',  # all metrics are in mm/h after normalisation
         })
 
@@ -3035,7 +3237,7 @@ def region_categorical_metrics_endpoint():
 
 def _categorical_hours_for_box(cursor, model_name, fcst_var, obs_var, obs_src,
                                min_lat, max_lat, min_lon, max_lon,
-                               hour_min, hour_max, threshold_rate, accum_h):
+                               hour_min, hour_max, threshold_rate):
     """Per-hour CSI/POD/FAR/FSS over a bbox for a single model.
 
     Returns a list of {hour, csi, pod, far, fss, n_pts, hits, misses,
@@ -3049,7 +3251,8 @@ def _categorical_hours_for_box(cursor, model_name, fcst_var, obs_var, obs_src,
     if init_time_val is None:
         return []
     # Wind → forecast SPEED via u/v self-join (see _fcst_speed_sql).
-    is_wind = (fcst_var == 'wind_u_10m')
+    is_wind  = (fcst_var == 'wind_u_10m')
+    lookback = 0 if is_wind else _precip_lookback_hours(model_name)
     _sel, _frm, _varw, _vnn = _fcst_speed_sql(is_wind, "u.forecast_hour, u.latitude, u.longitude")
     cursor.execute(f"""
         SELECT {_sel}
@@ -3060,15 +3263,30 @@ def _categorical_hours_for_box(cursor, model_name, fcst_var, obs_var, obs_src,
           AND u.longitude BETWEEN %s AND %s
           AND u.mean_value IS NOT NULL AND u.std_dev IS NOT NULL {_vnn}
         ORDER BY u.forecast_hour, u.latitude, u.longitude
-    """, (model_name, *(() if is_wind else (fcst_var,)), hour_min, hour_max,
-          min_lat, max_lat, min_lon, max_lon))
+    """, (model_name, *(() if is_wind else (fcst_var,)),
+          max(0, hour_min - lookback), hour_max, min_lat, max_lat, min_lon, max_lon))
     fcst_rows = cursor.fetchall()
     if not fcst_rows:
         return []
 
-    valid_times = [init_time_val + timedelta(hours=r['forecast_hour'])
-                   for r in fcst_rows]
-    min_obs_t = min(valid_times) - timedelta(hours=accum_h - 1)
+    # Per-cell hour series → mm/h rates using this model's record semantics.
+    from collections import defaultdict
+    raw_by_cell = defaultdict(dict)
+    for row in fcst_rows:
+        key = (round(float(row['latitude']), 2), round(float(row['longitude']), 2))
+        raw_by_cell[key][row['forecast_hour']] = (float(row['mean_value']),
+                                                  float(row['std_dev']))
+    rates_by_cell = {cell: _precip_rate_series(model_name, series, is_wind)
+                     for cell, series in raw_by_cell.items()}
+
+    in_range = [(cell, h, v) for cell, rates in rates_by_cell.items()
+                for h, v in rates.items() if hour_min <= h <= hour_max]
+    if not in_range:
+        return []
+
+    max_period  = max(p for _, _, (_, _, p) in in_range)
+    valid_times = [init_time_val + timedelta(hours=h) for _, h, _ in in_range]
+    min_obs_t = min(valid_times) - timedelta(hours=max_period - 1)
     max_obs_t = max(valid_times)
 
     cursor.execute("""
@@ -3088,29 +3306,25 @@ def _categorical_hours_for_box(cursor, model_name, fcst_var, obs_var, obs_src,
     if not obs_dict:
         return []
 
-    from collections import defaultdict
     hours_dict = defaultdict(list)
-    for row in fcst_rows:
-        hours_dict[row['forecast_hour']].append(row)
+    for cell, hour, vals in in_range:
+        hours_dict[hour].append((cell, vals))
 
     out = []
     for hour in sorted(hours_dict.keys()):
         h_hits = h_misses = h_fa = h_cn = 0
         h_fcst_binary, h_obs_binary, h_n_pts = [], [], 0
-        for row in hours_dict[hour]:
-            lat_k = round(float(row['latitude']),  2)
-            lon_k = round(float(row['longitude']), 2)
-            mean  = float(row['mean_value'])
-            vt    = init_time_val + timedelta(hours=hour)
+        for (lat_k, lon_k), (mean_rate, _std_rate, period) in hours_dict[hour]:
+            vt = init_time_val + timedelta(hours=hour)
+            # Obs averaged over the same period the forecast record covers.
             obs_window = [
                 obs_dict[(lat_k, lon_k, vt - timedelta(hours=dh))]
-                for dh in range(accum_h - 1, -1, -1)
+                for dh in range(period - 1, -1, -1)
                 if (lat_k, lon_k, vt - timedelta(hours=dh)) in obs_dict
             ]
             if not obs_window:
                 continue
             obs_rate  = sum(obs_window) / len(obs_window)
-            mean_rate = mean / accum_h
             is_fcst = mean_rate > threshold_rate
             is_obs  = obs_rate  > threshold_rate
             if   is_fcst and     is_obs:  h_hits   += 1
@@ -3235,11 +3449,10 @@ def compare_categorical():
         per_model  = {}
         summaries  = {}
         for m in models:
-            accum_h = 1 if is_wind else MODEL_ACCUM_HOURS.get(m, 1)
             per_model[m] = _categorical_hours_for_box(
                 cursor, m, fcst_var, obs_var, obs_src,
                 min_lat, max_lat, min_lon, max_lon,
-                hour_min, hour_max, threshold_rate, accum_h)
+                hour_min, hour_max, threshold_rate)
             summary = _categorical_summary(per_model[m])
             if summary is not None:
                 # Brier is probabilistic (Gaussian exceedance from mean/spread),
@@ -3335,7 +3548,7 @@ def _single_metric_points(cursor, model_name, variable, metric,
         cursor, run_id, var_row['variable_id'], init_row['initialization_time'],
         min_lat, max_lat, min_lon, max_lon,
         'wind_speed' if is_wind else 'precipitation',
-        accum_h=1 if is_wind else MODEL_ACCUM_HOURS.get(model_name, 1))
+        model_name=model_name)
     return points
 
 

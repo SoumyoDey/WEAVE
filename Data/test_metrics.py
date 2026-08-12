@@ -186,12 +186,12 @@ class FakeCursor:
 
 
 def _run_box(fcst_rows, obs_rows, init):
-    """Drive _categorical_hours_for_box with canned rows (UKMO → accum_h=1)."""
+    """Drive _categorical_hours_for_box with canned rows (UKMO → hourly rates)."""
     cur = FakeCursor([[{"initialization_time": init}], fcst_rows, obs_rows])
     with api.app.app_context():
         return api._categorical_hours_for_box(
             cur, "UKMO", "precipitation", "precipitation", "GPM_IMERG_V07B",
-            35.0, 37.0, -80.5, -78.5, 0, 24, threshold_rate=5.0, accum_h=1)
+            35.0, 37.0, -80.5, -78.5, 0, 24, threshold_rate=5.0)
 
 
 def test_categorical_hours_and_fss():
@@ -215,6 +215,89 @@ def test_categorical_hours_and_fss():
     assert h["far"] == 0.0   # 0 / (1 hit + 0 fa)
     # fcst_frac = 0.5, obs_frac = 1.0 → 1 - (0.5-1)^2 / (0.5^2 + 1^2) = 1 - 0.25/1.25
     assert h["fss"] == 0.8
+
+
+# ── Precipitation record semantics (METRICS_AUDIT findings 1 & 2) ─────────────
+class TestPrecipPeriodHours:
+    def test_aifs_is_six_hourly(self):
+        assert api._precip_period_hours("AIFS", 6) == 6
+        assert api._precip_period_hours("AIFS", 24) == 6
+
+    def test_gefs_alternates_three_and_six(self):
+        # 0-3, 0-6, 6-9, 6-12 ... — the bucket resets every 6 h.
+        assert api._precip_period_hours("GEFS", 3) == 3
+        assert api._precip_period_hours("GEFS", 6) == 6
+        assert api._precip_period_hours("GEFS", 9) == 3
+        assert api._precip_period_hours("GEFS", 12) == 6
+
+    def test_ukmo_is_hourly(self):
+        assert api._precip_period_hours("UKMO", 5) == 1
+
+    def test_lookback_only_for_cumulative_models(self):
+        assert api._precip_lookback_hours("AIFS") == 6
+        assert api._precip_lookback_hours("GEFS") == 0
+        assert api._precip_lookback_hours("UKMO") == 0
+
+
+class TestPrecipRateSeries:
+    def test_aifs_cumulative_is_differenced(self):
+        """AIFS stores a running total, so the rate is the increment / 6 —
+        not the total / 6, which grows without bound with lead time."""
+        series = {6: (0.6, 0.0), 12: (1.2, 0.0), 18: (1.5, 0.0)}
+        rates = api._precip_rate_series("AIFS", series)
+        assert rates[6][0] == pytest.approx(0.6 / 6)    # from init
+        assert rates[12][0] == pytest.approx(0.6 / 6)   # (1.2 - 0.6) / 6
+        assert rates[18][0] == pytest.approx(0.3 / 6)   # (1.5 - 1.2) / 6
+
+    def test_aifs_drops_a_record_it_cannot_difference(self):
+        series = {24: (3.0, 0.1)}          # no h=18 to difference against
+        assert api._precip_rate_series("AIFS", series) == {}
+
+    def test_aifs_negative_increment_is_clamped(self):
+        """Cumulative totals are non-decreasing; a small dip is rounding."""
+        series = {6: (1.0, 0.0), 12: (0.999, 0.0)}
+        assert api._precip_rate_series("AIFS", series)[12][0] == 0.0
+
+    def test_gefs_uses_each_records_own_period(self):
+        # equal totals at h=3 (3 h) and h=6 (6 h) are NOT equal rates
+        series = {3: (0.9, 0.0), 6: (0.9, 0.0)}
+        rates = api._precip_rate_series("GEFS", series)
+        assert rates[3][0] == pytest.approx(0.3)   # 0.9 / 3
+        assert rates[6][0] == pytest.approx(0.15)  # 0.9 / 6
+        assert rates[3][2] == 3 and rates[6][2] == 6
+
+    def test_ukmo_passes_through(self):
+        series = {5: (2.0, 0.5)}
+        assert api._precip_rate_series("UKMO", series)[5] == (2.0, 0.5, 1)
+
+    def test_wind_is_never_rescaled(self):
+        series = {6: (12.0, 3.0), 12: (14.0, 4.0)}
+        rates = api._precip_rate_series("AIFS", series, is_wind=True)
+        assert rates == {6: (12.0, 3.0, 1), 12: (14.0, 4.0, 1)}
+
+    def test_cumulative_spread_uses_variance_difference(self):
+        # sigma 5 -> 13 : sqrt(169 - 25) = 12, then / 6
+        series = {6: (1.0, 5.0), 12: (2.0, 13.0)}
+        assert api._precip_rate_series("AIFS", series)[12][1] == pytest.approx(12.0 / 6)
+
+    def test_cumulative_spread_is_none_when_variance_shrinks(self):
+        """~13% of real AIFS records have a shrinking cumulative variance, where
+        the increment spread isn't recoverable — must be None, not fabricated."""
+        series = {6: (1.0, 9.0), 12: (2.0, 4.0)}
+        rate, std, _ = api._precip_rate_series("AIFS", series)[12]
+        assert std is None
+        assert rate == pytest.approx(1.0 / 6)   # the amount is still fine
+
+    def test_spread_none_is_skipped_by_spread_metrics(self, monkeypatch):
+        """A None spread must drop out of CRPS/Brier/ssr_agg, not crash them."""
+        pairs = {(36.0, -79.5): [(6, 2.0, None, 1.0), (12, 3.0, None, 1.0)]}
+        monkeypatch.setattr(api, "_fetch_fcst_obs_pairs_spatial", lambda *a, **k: pairs)
+        assert api._compute_crps_points_rf(None, "AIFS", "precipitation", 0, 1, 0, 1) == []
+        assert api._compute_brier_points_rf(None, "AIFS", "precipitation", 0, 1, 0, 1) == []
+        assert api._compute_ssr_agg_points_rf(None, "AIFS", "precipitation", 0, 1, 0, 1) == []
+        # deterministic metrics are unaffected — they never touch the spread
+        assert _single_value(
+            api._compute_bias_points_rf(None, "AIFS", "precipitation", 0, 1, 0, 1)) == 1.5
 
 
 # ── Region aggregation (compare/region-metrics) ───────────────────────────────

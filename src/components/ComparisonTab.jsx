@@ -92,13 +92,16 @@ const CAT_SUMMARY_METRICS = [
 ];
 const MODEL_NAMES  = ['AIFS', 'GEFS', 'UKMO'];
 
-// Temporal accumulation period for each model's precipitation output.
-// Values are divided by this factor to convert to mm/h rate before display
-// and before computing skill metrics, so cross-model comparisons are fair.
-//   AIFS → 6-hour accumulated totals (mm/6h)  ÷ 6 → mm/h
-//   GEFS → 3-hour accumulated totals (mm/3h)  ÷ 3 → mm/h
-//   UKMO → Hourly instantaneous values (mm/h) ÷ 1 → mm/h (unchanged)
-const MODEL_ACCUM_HOURS = { AIFS: 6, GEFS: 3, UKMO: 1 };
+// Nominal output cadence per model, used only for labelling. The unit
+// conversion itself lives in the backend (_precip_rate_series), because the
+// three models don't share a convention — AIFS stores a running total since
+// init and GEFS alternates 3 h and 6 h buckets, so a single client-side divisor
+// was wrong for both. /api/compare/timeseries now returns mm/h directly.
+const PRECIP_RECORD_NOTE = {
+  AIFS: '(6h, de-accumulated)',
+  GEFS: '(3h/6h buckets)',
+  UKMO: '(hourly)',
+};
 
 // ── Shared style tokens ──────────────────────────────────────────────────────
 const CARD = {
@@ -328,9 +331,8 @@ function AggregateBar({ label, hint, models, values, refLine, decimals = 3 }) {
 }
 
 // ── Custom Tooltip for Forecast Comparison chart ─────────────────────────────
-// For precipitation: divides raw accumulated values by MODEL_ACCUM_HOURS to get
-// mm/h rate, and shows both the converted rate and the raw stored value.
-// For wind/temperature/pressure: values are instantaneous — raw = displayed.
+// The API already returns rates (mm/h or m/s); `raw_mean` is the stored value,
+// shown underneath for precipitation so the conversion stays inspectable.
 function ForecastTooltip({ active, payload, label, selectedModels, normalized, variable = 'precipitation', displayUnit = 'mm/h' }) {
   if (!active || !payload || !payload.length) return null;
   const row = payload[0]?.payload || {};
@@ -338,13 +340,15 @@ function ForecastTooltip({ active, payload, label, selectedModels, normalized, v
 
   const means = selectedModels
     .map(m => {
-      const rawMean = row[`${m}_raw_mean`];
-      const rawStd  = row[`${m}_raw_std`];
-      if (rawMean == null) return null;
-      const accumH   = isPrecip ? (MODEL_ACCUM_HOURS[m] || 1) : 1;
-      const rateMean = rawMean / accumH;
-      const rateStd  = rawStd != null ? rawStd / accumH : null;
-      return { model: m, rateMean, rateStd, rawMean, rawStd, accumH };
+      const rateMean = row[`${m}_rate_mean`];
+      if (rateMean == null) return null;
+      return {
+        model: m,
+        rateMean,
+        rateStd: row[`${m}_rate_std`] ?? null,
+        rawMean: row[`${m}_raw_mean`] ?? null,
+        periodH: row[`${m}_period_h`] ?? 1,
+      };
     })
     .filter(Boolean);
 
@@ -356,7 +360,7 @@ function ForecastTooltip({ active, payload, label, selectedModels, normalized, v
         +{label}h forecast
         {normalized && <span style={{ color: '#f39c12', marginLeft: '6px' }}>· per-model normalised</span>}
       </div>
-      {means.map(({ model, rateMean, rateStd, rawMean, accumH }) => (
+      {means.map(({ model, rateMean, rateStd, rawMean, periodH }) => (
         <div key={model} style={{ marginBottom: '6px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <span style={{ display: 'inline-block', width: '10px', height: '10px', borderRadius: '2px', background: MODEL_COLORS[model] }} />
@@ -369,10 +373,11 @@ function ForecastTooltip({ active, payload, label, selectedModels, normalized, v
               <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.xs }}>±{rateStd.toFixed(3)}</span>
             )}
           </div>
-          {/* Raw stored value — only informative for precipitation (accum > 1) */}
-          {isPrecip && accumH > 1 && (
+          {/* Stored value — informative for precipitation, where it differs
+              from the rate (a running total for AIFS, a bucket for GEFS) */}
+          {isPrecip && rawMean != null && periodH > 1 && (
             <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.micro, marginLeft: '18px', marginTop: '1px' }}>
-              raw: {rawMean.toFixed(3)} mm/{accumH}h
+              stored: {rawMean.toFixed(3)} · {periodH}h period
             </div>
           )}
         </div>
@@ -382,23 +387,18 @@ function ForecastTooltip({ active, payload, label, selectedModels, normalized, v
 }
 
 // ── Build merged timeseries dataset ─────────────────────────────────────────
-// For precipitation: divide by MODEL_ACCUM_HOURS[m] to convert from the
-//   model's accumulated total (mm/6h, mm/3h, mm/h) to a common mm/h rate so
-//   AIFS, GEFS, and UKMO are directly comparable.
-// For wind, temperature, and pressure: values are instantaneous (m/s / K / hPa)
-//   and identical across models — no accumulation division is applied.
-// Optionally (normalize=true) further scale each model to [0,1] peak.
-function buildMergedTimeseries(tsData, selectedModels, normalize = false, variable = 'precipitation') {
+// `mean`/`std` arrive from the API already as rates (mm/h or m/s) — the unit
+// conversion belongs to the backend, which knows each model's record semantics.
+// Optionally (normalize=true) scale each model to its [0,1] peak.
+function buildMergedTimeseries(tsData, selectedModels, normalize = false) {
   if (!tsData) return [];
-  const isPrecip = variable === 'precipitation';
 
   // Per-model peak for optional normalisation
   const modelPeaks = {};
   if (normalize) {
     selectedModels.forEach(m => {
-      const ah = isPrecip ? (MODEL_ACCUM_HOURS[m] || 1) : 1;
       if (tsData[m]) {
-        const peak = Math.max(...tsData[m].map(r => ((r.mean || 0) + (r.std || 0)) / ah));
+        const peak = Math.max(...tsData[m].map(r => (r.mean || 0) + (r.std || 0)));
         modelPeaks[m] = peak > 1e-9 ? peak : 1;
       }
     });
@@ -413,35 +413,31 @@ function buildMergedTimeseries(tsData, selectedModels, normalize = false, variab
   return hours.map(hour => {
     const row = { hour };
     selectedModels.forEach(m => {
-      const entry  = tsData[m]?.find(r => r.hour === hour);
+      const entry = tsData[m]?.find(r => r.hour === hour);
       if (entry) {
-        const ah   = isPrecip ? (MODEL_ACCUM_HOURS[m] || 1) : 1;
         const norm = normalize ? (modelPeaks[m] || 1) : 1;
         const mean = entry.mean != null ? entry.mean : null;
         const std  = entry.std  != null ? entry.std  : 0;
-        row[`${m}_mean`] = mean != null ? (mean / ah) / norm : null;
-        row[`${m}_hi`]   = mean != null ? ((mean + std) / ah) / norm : null;
-        row[`${m}_lo`]   = mean != null ? Math.max(0, (mean - std) / ah) / norm : null;
-        // Raw values always kept for tooltip
-        row[`${m}_raw_mean`] = mean;
-        row[`${m}_raw_std`]  = entry.std;
+        row[`${m}_mean`] = mean != null ? mean / norm : null;
+        row[`${m}_hi`]   = mean != null ? (mean + std) / norm : null;
+        row[`${m}_lo`]   = mean != null ? Math.max(0, (mean - std) / norm) : null;
+        // Un-normalised rate + stored value, both kept for the tooltip
+        row[`${m}_rate_mean`] = mean;
+        row[`${m}_rate_std`]  = entry.std;
+        row[`${m}_raw_mean`]  = entry.raw_mean;
+        row[`${m}_period_h`]  = entry.period_h;
       }
     });
     return row;
   });
 }
 
-// Computes ratio of max-to-min peak across models.
-// For precipitation: uses the accum-corrected rate. For other variables: raw value.
-function computeScaleRatio(tsData, models, variable = 'precipitation') {
-  const isPrecip = variable === 'precipitation';
+// Ratio of max-to-min peak across models, on the rates the API returns.
+function computeScaleRatio(tsData, models) {
   const peaks = models
-    .map(m => {
-      const ah = isPrecip ? (MODEL_ACCUM_HOURS[m] || 1) : 1;
-      return tsData[m]
-        ? Math.max(...tsData[m].map(r => ((r.mean || 0) + (r.std || 0)) / ah))
-        : 0;
-    })
+    .map(m => (tsData[m]
+      ? Math.max(...tsData[m].map(r => (r.mean || 0) + (r.std || 0)))
+      : 0))
     .filter(v => v > 0);
   if (peaks.length < 2) return 1;
   return Math.max(...peaks) / Math.min(...peaks);
@@ -820,8 +816,8 @@ export function ComparisonTab({
   // a per-hour .find, and previously reran on every render (incl. unrelated state
   // like share/advanced toggles).
   const mergedTs = useMemo(
-    () => buildMergedTimeseries(tsData, selectedModels, normalizeScales, selectedVariable),
-    [tsData, selectedModels, normalizeScales, selectedVariable],
+    () => buildMergedTimeseries(tsData, selectedModels, normalizeScales),
+    [tsData, selectedModels, normalizeScales],
   );
 
   // Per-metric rows for the lead-time small-multiples: one row per hour with a
@@ -856,8 +852,8 @@ export function ComparisonTab({
   const thresholdUnit = selectedVariable === 'wind' ? 'm/s' : 'mm/6h';
   // After the accum conversion the ratio should be much smaller than the raw ratio
   const scaleRatio = useMemo(
-    () => (tsData ? computeScaleRatio(tsData, selectedModels, selectedVariable) : 1),
-    [tsData, selectedModels, selectedVariable],
+    () => (tsData ? computeScaleRatio(tsData, selectedModels) : 1),
+    [tsData, selectedModels],
   );
   const hasScaleMismatch = scaleRatio > 5; // still >5× after unit fix → warn
 
@@ -1296,29 +1292,26 @@ export function ComparisonTab({
         {!isRegionMode && hasRun && (
           <div style={{ marginBottom: '28px' }}>
             <h3 style={{ ...SECTION_TITLE, marginBottom: '6px' }}>Forecast Comparison</h3>
-            {/* Accumulation conversion note — always visible for precipitation */}
+            {/* Unit note — the backend converts each model's own record type */}
             {selectedVariable !== 'wind' && (
               <div style={{
                 display: 'flex', gap: '10px', flexWrap: 'wrap',
                 marginBottom: '12px', alignItems: 'center',
               }}>
                 <span style={{ fontSize: t.fontSize.xs, color: 'rgba(255,255,255,0.25)' }}>
-                  Converted to mm/h —
+                  Rates in mm/h —
                 </span>
-                {selectedModels.map(m => {
-                  const ah = MODEL_ACCUM_HOURS[m] || 1;
-                  return (
-                    <span key={m} style={{
-                      fontSize: t.fontSize.xs, fontWeight: '600',
-                      color: MODEL_COLORS[m],
-                      opacity: 0.75,
-                    }}>
-                      {m} {ah > 1 ? `÷${ah}` : '(native)'}
-                    </span>
-                  );
-                })}
+                {selectedModels.map(m => (
+                  <span key={m} style={{
+                    fontSize: t.fontSize.xs, fontWeight: '600',
+                    color: MODEL_COLORS[m],
+                    opacity: 0.75,
+                  }}>
+                    {m} {PRECIP_RECORD_NOTE[m] || 'native'}
+                  </span>
+                ))}
                 <span style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.18)', marginLeft: '4px' }}>
-                  Hover for raw values
+                  Hover for the stored value
                 </span>
               </div>
             )}
@@ -1366,11 +1359,10 @@ export function ComparisonTab({
                 {/* Legend row */}
                 <div style={{ display: 'flex', gap: '12px', marginBottom: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
                   {selectedModels.map(m => {
-                    const ah        = MODEL_ACCUM_HOURS[m] || 1;
                     const modelRows = tsData[m];
                     const lastRow   = modelRows?.length > 0 ? modelRows[modelRows.length - 1] : null;
-                    // Show the rate value (mm/h) in the legend chip
-                    const rateValue = lastRow?.mean != null ? lastRow.mean / ah : null;
+                    // The API already returns a rate — no client-side division
+                    const rateValue = lastRow?.mean != null ? lastRow.mean : null;
                     const color     = MODEL_COLORS[m];
                     return (
                       <div key={m} style={{
