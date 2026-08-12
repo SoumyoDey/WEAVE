@@ -217,6 +217,60 @@ def test_categorical_hours_and_fss():
     assert h["fss"] == 0.8
 
 
+# ── Pooled categorical summary (compare/categorical `summaries`) ──────────────
+class TestCategoricalSummary:
+    def test_none_for_empty(self):
+        assert api._categorical_summary([]) is None
+
+    def test_pools_counts_not_ratios(self):
+        """Scores come from summed counts, so a sparse hour can't outweigh a
+        dense one the way a mean of per-hour ratios would."""
+        hours = [
+            # 9 hits, 1 miss, 0 fa over 20 pts → per-hour POD 0.9
+            {"hour": 6,  "n_pts": 20, "hits": 9, "misses": 1,
+             "false_alarms": 0, "correct_neg": 10},
+            # 0 hits, 1 miss, 1 fa over 2 pts  → per-hour POD 0.0
+            {"hour": 12, "n_pts": 2,  "hits": 0, "misses": 1,
+             "false_alarms": 1, "correct_neg": 0},
+        ]
+        s = api._categorical_summary(hours)
+        assert s["pod"] == round(9 / 11, 4)          # not mean(0.9, 0.0) = 0.45
+        assert s["csi"] == round(9 / (9 + 2 + 1), 4)
+        assert s["far"] == round(1 / (9 + 1), 4)
+        assert s["n_pts"] == 22 and s["n_hours"] == 2
+
+    def test_fss_uses_pooled_fractions(self):
+        hours = [{"hour": 6, "n_pts": 4, "hits": 1, "misses": 1,
+                  "false_alarms": 0, "correct_neg": 2}]
+        # f = (1+0)/4 = 0.25, o = (1+1)/4 = 0.5
+        # FSS = 1 - (0.25-0.5)^2 / (0.25^2 + 0.5^2) = 1 - 0.0625/0.3125 = 0.8
+        assert api._categorical_summary(hours)["fss"] == 0.8
+
+    def test_fss_none_when_no_events(self):
+        hours = [{"hour": 6, "n_pts": 4, "hits": 0, "misses": 0,
+                  "false_alarms": 0, "correct_neg": 4}]
+        s = api._categorical_summary(hours)
+        assert s["fss"] is None
+        assert s["csi"] is None and s["pod"] is None and s["far"] is None
+
+    def test_matches_single_hour_per_hour_values(self):
+        """One lead time → the pooled summary equals that hour's own scores."""
+        init = datetime(2025, 9, 8, 0, 0, 0)
+        vt = init + timedelta(hours=6)
+        fcst_rows = [
+            {"forecast_hour": 6, "latitude": 36.0, "longitude": -79.5, "mean_value": 10.0, "std_dev": 1.0},
+            {"forecast_hour": 6, "latitude": 36.5, "longitude": -79.5, "mean_value": 0.0,  "std_dev": 1.0},
+        ]
+        obs_rows = [
+            {"obs_time": vt, "latitude": 36.0, "longitude": -79.5, "obs_val": 8.0},
+            {"obs_time": vt, "latitude": 36.5, "longitude": -79.5, "obs_val": 8.0},
+        ]
+        hours = _run_box(fcst_rows, obs_rows, init)
+        s = api._categorical_summary(hours)
+        for k in ("csi", "pod", "far", "fss"):
+            assert s[k] == hours[0][k]
+
+
 def test_fss_none_when_no_events():
     """Both fields event-free → FSS is undefined (None), not a misleading 1.0."""
     init = datetime(2025, 9, 8, 0, 0, 0)

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
-  ComposedChart, LineChart, Line, BarChart, Bar,
+  ComposedChart, LineChart, Line, BarChart, Bar, Cell,
   Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine,
 } from 'recharts';
@@ -16,6 +16,34 @@ const CAT_METRICS = [
   { key: 'pod', label: 'POD', hint: 'Probability of Detection · higher is better' },
   { key: 'far', label: 'FAR', hint: 'False Alarm Ratio · lower is better' },
   { key: 'fss', label: 'FSS', hint: 'Fractions Skill Score · higher is better' },
+];
+
+// Verification metrics carried per lead time by /api/compare/skill.
+const SKILL_METRICS = [
+  { key: 'ssr',  label: 'SSR',  hint: 'Spread-Skill Ratio · ideal = 1',   refLine: 1, decimals: 3 },
+  { key: 'crps', label: 'CRPS', hint: 'Probabilistic error · lower is better',       decimals: 4 },
+  { key: 'bias', label: 'Bias', hint: 'Mean error · 0 is unbiased',        refLine: 0, decimals: 3 },
+  { key: 'mae',  label: 'MAE',  hint: 'Mean absolute error · lower is better',       decimals: 3 },
+  { key: 'rmse', label: 'RMSE', hint: 'Root mean square error · lower is better',    decimals: 3 },
+];
+
+// The same suite aggregated over all verified lead times (skill `summary`).
+const SKILL_SUMMARY_METRICS = [
+  { key: 'mean_ssr',    label: 'Mean SSR',    hint: 'ideal = 1',           refLine: 1, decimals: 3 },
+  { key: 'correlation', label: 'Spread–skill corr.', hint: 'spread vs |error|',       decimals: 3 },
+  { key: 'mean_crps',   label: 'Mean CRPS',   hint: 'lower is better',                decimals: 4 },
+  { key: 'bias',        label: 'Bias',        hint: '0 is unbiased',       refLine: 0, decimals: 3 },
+  { key: 'mae',         label: 'MAE',         hint: 'lower is better',                decimals: 3 },
+  { key: 'rmse',        label: 'RMSE',        hint: 'lower is better',                decimals: 3 },
+];
+
+// Categorical scores pooled over lead times (compare/categorical `summaries`).
+const CAT_SUMMARY_METRICS = [
+  { key: 'csi',   label: 'CSI',   hint: 'higher is better', decimals: 3 },
+  { key: 'pod',   label: 'POD',   hint: 'higher is better', decimals: 3 },
+  { key: 'far',   label: 'FAR',   hint: 'lower is better',  decimals: 3 },
+  { key: 'fss',   label: 'FSS',   hint: 'higher is better', decimals: 3 },
+  { key: 'brier', label: 'Brier', hint: '0 is perfect',     decimals: 4 },
 ];
 const MODEL_NAMES  = ['AIFS', 'GEFS', 'UKMO'];
 
@@ -70,6 +98,23 @@ const TOOLTIP_STYLE = {
   fontSize: t.fontSize.sm,
 };
 
+// Shared layout for the small-multiple metric cards.
+const SMALL_GRID = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(240px, 100%), 1fr))',
+  gap: '14px',
+};
+
+const SUBHEAD = {
+  color: 'rgba(255,255,255,0.55)',
+  fontSize: t.fontSize.sm,
+  marginBottom: '10px',
+  display: 'flex',
+  alignItems: 'center',
+  gap: '12px',
+  flexWrap: 'wrap',
+};
+
 // ── Small helpers ────────────────────────────────────────────────────────────
 function Spinner() {
   return (
@@ -118,6 +163,101 @@ function corrColor(c) {
   if (c >= 0.7) return '#2ecc71';
   if (c >= 0.4) return '#f39c12';
   return '#e74c3c';
+}
+
+// Placeholder used inside a metric card when every model came back empty, so a
+// missing metric reads as "no data" rather than an unexplained blank panel.
+function NoData({ text = 'No data for this selection' }) {
+  return (
+    <div style={{
+      height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+      color: 'rgba(255,255,255,0.25)', fontSize: t.fontSize.xs, textAlign: 'center', padding: '0 8px',
+    }}>
+      {text}
+    </div>
+  );
+}
+
+function MetricCard({ label, hint, height, children }) {
+  return (
+    <div style={{ ...CARD, padding: '12px 10px 6px' }}>
+      <div style={{ fontSize: t.fontSize.base, fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>{label}</div>
+      <div style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.4)', marginBottom: '4px' }}>
+        {hint || ' '}
+      </div>
+      <div style={{ height }}>{children}</div>
+    </div>
+  );
+}
+
+// One metric over lead time, a line per model. `rows` is [{hour, <key>_<model>}].
+function LeadTimeChart({ label, hint, metricKey, rows, models, refLine, decimals = 3 }) {
+  const hasData = rows.some(r => models.some(m => r[`${metricKey}_${m}`] != null));
+  return (
+    <MetricCard label={label} hint={hint} height="160px">
+      {hasData ? (
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={rows} margin={{ top: 6, right: 14, left: -10, bottom: 16 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+            <XAxis dataKey="hour" stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} tickFormatter={h => `+${h}h`} />
+            <YAxis stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} width={40} />
+            <Tooltip
+              contentStyle={TOOLTIP_STYLE}
+              formatter={(value, name) => [value != null ? Number(value).toFixed(decimals) : 'N/A', name.replace(`${metricKey}_`, '')]}
+              labelFormatter={h => `+${h}h`}
+            />
+            {refLine != null && (
+              <ReferenceLine y={refLine} stroke="rgba(255,255,255,0.35)" strokeDasharray="5 3" />
+            )}
+            {models.map(m => (
+              <Line
+                key={m}
+                type="linear"
+                dataKey={`${metricKey}_${m}`}
+                name={`${metricKey}_${m}`}
+                stroke={MODEL_COLORS[m]}
+                strokeWidth={2}
+                connectNulls
+                dot={{ r: 2.5, fill: MODEL_COLORS[m], strokeWidth: 0 }}
+                activeDot={{ r: 5 }}
+                isAnimationActive={false}
+              />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      ) : <NoData />}
+    </MetricCard>
+  );
+}
+
+// One aggregate metric, a bar per model. `values` is parallel to `models`.
+function AggregateBar({ label, hint, models, values, refLine, decimals = 3 }) {
+  const data    = models.map((m, i) => ({ model: m, value: values[i] }));
+  const hasData = values.some(v => v != null);
+  return (
+    <MetricCard label={label} hint={hint} height="150px">
+      {hasData ? (
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data} margin={{ top: 6, right: 12, left: -10, bottom: 4 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false} />
+            <XAxis dataKey="model" stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.6)', fontSize: 10 }} />
+            <YAxis stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} width={40} />
+            <Tooltip
+              contentStyle={TOOLTIP_STYLE}
+              cursor={{ fill: 'rgba(255,255,255,0.04)' }}
+              formatter={v => [v != null ? Number(v).toFixed(decimals) : 'N/A', label]}
+            />
+            {refLine != null && (
+              <ReferenceLine y={refLine} stroke="rgba(255,255,255,0.35)" strokeDasharray="5 3" />
+            )}
+            <Bar dataKey="value" radius={[3, 3, 0, 0]} maxBarSize={44} isAnimationActive={false}>
+              {data.map(d => <Cell key={d.model} fill={MODEL_COLORS[d.model]} />)}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      ) : <NoData />}
+    </MetricCard>
+  );
 }
 
 // ── Custom Tooltip for Forecast Comparison chart ─────────────────────────────
@@ -463,6 +603,34 @@ export function ComparisonTab({
     () => buildMergedTimeseries(tsData, selectedModels, normalizeScales, selectedVariable),
     [tsData, selectedModels, normalizeScales, selectedVariable],
   );
+
+  // Per-metric rows for the lead-time small-multiples: one row per hour with a
+  // `<metric>_<model>` column. Built once per skill payload — indexing each
+  // model's hours in a Map avoids a linear .find() per (metric, hour, model).
+  const skillRows = useMemo(() => {
+    const out = {};
+    SKILL_METRICS.forEach(({ key }) => { out[key] = []; });
+    if (!skillData?.models) return out;
+    const index   = {};
+    const hourSet = new Set();
+    selectedModels.forEach(m => {
+      const hours = skillData.models[m]?.hours || [];
+      index[m] = new Map(hours.map(h => [h.hour, h]));
+      hours.forEach(h => hourSet.add(h.hour));
+    });
+    const hours = Array.from(hourSet).sort((a, b) => a - b);
+    SKILL_METRICS.forEach(({ key }) => {
+      out[key] = hours.map(hour => {
+        const row = { hour };
+        selectedModels.forEach(m => {
+          const e = index[m].get(hour);
+          row[`${key}_${m}`] = e ? e[key] : null;
+        });
+        return row;
+      });
+    });
+    return out;
+  }, [skillData, selectedModels]);
   // For precipitation, all display values are in mm/h (rate) after accum conversion
   const yAxisUnit     = selectedVariable === 'wind' ? 'm/s' : 'mm/h';
   const thresholdUnit = selectedVariable === 'wind' ? 'm/s' : 'mm/6h';
@@ -1098,148 +1266,58 @@ export function ComparisonTab({
                         })}
                       </div>
 
-                      {/* SSR grouped bar chart */}
-                      <div style={{ marginBottom: '24px' }}>
-                        <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-                          <span style={{ fontWeight: '600' }}>Spread-Skill Ratio by Lead Time</span>
-                          {selectedModels.map(m => (
-                            <span key={m} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                              <span style={{ display: 'inline-block', width: '10px', height: '10px', background: MODEL_COLORS[m], borderRadius: '2px' }} />
-                              <span style={{ fontSize: t.fontSize.xs }}>{m}</span>
-                            </span>
-                          ))}
+                      {/* Aggregate comparison — one bar per model, per metric */}
+                      <div style={{ marginBottom: '26px' }}>
+                        <div style={SUBHEAD}>
+                          <span style={{ fontWeight: '600' }}>
+                            Aggregate over {obsHours.length} verified lead time{obsHours.length === 1 ? '' : 's'}
+                          </span>
+                          <span style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.3)' }}>
+                            {yAxisUnit} — SSR and correlation are unitless
+                          </span>
                         </div>
-                        <div style={{ height: '220px' }}>
-                          <ResponsiveContainer width="100%" height="100%">
-                            <BarChart
-                              data={obsHours.map(hour => {
-                                const row = { hour };
-                                selectedModels.forEach(m => {
-                                  const hourEntry = skillData.models?.[m]?.hours?.find(h => h.hour === hour);
-                                  row[`ssr_${m}`] = hourEntry ? hourEntry.ssr : null;
-                                });
-                                return row;
-                              })}
-                              margin={{ top: 8, right: 20, left: 0, bottom: 24 }}
-                            >
-                              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false} />
-                              <XAxis
-                                dataKey="hour"
-                                stroke="rgba(255,255,255,0.3)"
-                                tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }}
-                                tickFormatter={h => `+${h}h`}
-                                label={{ value: 'Forecast Hour', position: 'insideBottom', offset: -10, fill: 'rgba(255,255,255,0.4)', fontSize: 11 }}
-                              />
-                              <YAxis
-                                stroke="rgba(255,255,255,0.3)"
-                                tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }}
-                                label={{ value: 'SSR', angle: -90, position: 'insideLeft', fill: 'rgba(255,255,255,0.4)', fontSize: 11 }}
-                              />
-                              <Tooltip
-                                contentStyle={TOOLTIP_STYLE}
-                                formatter={(value, name) => {
-                                  const m = name.replace('ssr_', '');
-                                  return [value != null ? Number(value).toFixed(3) : 'N/A', `${m} SSR`];
-                                }}
-                                labelFormatter={h => `+${h}h`}
-                              />
-                              <ReferenceLine
-                                y={1}
-                                stroke="rgba(255,255,255,0.45)"
-                                strokeDasharray="6 3"
-                                label={{ value: 'ideal (1.0)', position: 'right', fill: 'rgba(255,255,255,0.4)', fontSize: 10 }}
-                              />
-                              {selectedModels.map(m => (
-                                <Bar
-                                  key={m}
-                                  dataKey={`ssr_${m}`}
-                                  name={`ssr_${m}`}
-                                  fill={MODEL_COLORS[m]}
-                                  radius={[3, 3, 0, 0]}
-                                  maxBarSize={28}
-                                />
-                              ))}
-                            </BarChart>
-                          </ResponsiveContainer>
+                        <div style={SMALL_GRID}>
+                          {SKILL_SUMMARY_METRICS.map(({ key, label, hint, refLine, decimals }) => (
+                            <AggregateBar
+                              key={key}
+                              label={label}
+                              hint={hint}
+                              models={selectedModels}
+                              values={selectedModels.map(m => skillData.models?.[m]?.summary?.[key] ?? null)}
+                              refLine={refLine}
+                              decimals={decimals}
+                            />
+                          ))}
                         </div>
                       </div>
 
-                      {/* CRPS line chart */}
+                      {/* Per-lead-time comparison — one line per model, per metric */}
                       <div>
-                        <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-                          <span style={{ fontWeight: '600' }}>CRPS by Lead Time</span>
-                          {selectedModels.map(m => {
-                            const mHours = skillData.models?.[m]?.hours?.length || 0;
-                            return (
-                              <span key={m} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                <span style={{ display: 'inline-block', width: '16px', height: '2px', background: MODEL_COLORS[m], borderRadius: '1px' }} />
-                                <span style={{ fontSize: t.fontSize.xs }}>{m}</span>
-                                <span style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.3)' }}>({mHours} pts)</span>
+                        <div style={SUBHEAD}>
+                          <span style={{ fontWeight: '600' }}>By lead time</span>
+                          {selectedModels.map(m => (
+                            <span key={m} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              <span style={{ display: 'inline-block', width: '16px', height: '2px', background: MODEL_COLORS[m], borderRadius: '1px' }} />
+                              <span style={{ fontSize: t.fontSize.xs }}>{m}</span>
+                              <span style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.3)' }}>
+                                ({skillData.models?.[m]?.hours?.length || 0} pts)
                               </span>
-                            );
-                          })}
+                            </span>
+                          ))}
                         </div>
-                        <div style={{ height: '220px' }}>
-                          <ResponsiveContainer width="100%" height="100%">
-                            <LineChart
-                              data={(() => {
-                                // Union of all hours across all models (not just obsHours)
-                                const allHours = new Set();
-                                selectedModels.forEach(m => {
-                                  skillData.models?.[m]?.hours?.forEach(h => allHours.add(h.hour));
-                                });
-                                return Array.from(allHours).sort((a, b) => a - b).map(hour => {
-                                  const row = { hour };
-                                  selectedModels.forEach(m => {
-                                    const hourEntry = skillData.models?.[m]?.hours?.find(h => h.hour === hour);
-                                    row[`crps_${m}`] = hourEntry ? hourEntry.crps : null;
-                                  });
-                                  return row;
-                                });
-                              })()}
-                              margin={{ top: 8, right: 20, left: 0, bottom: 24 }}
-                            >
-                              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
-                              <XAxis
-                                dataKey="hour"
-                                stroke="rgba(255,255,255,0.3)"
-                                tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }}
-                                tickFormatter={h => `+${h}h`}
-                                label={{ value: 'Forecast Hour', position: 'insideBottom', offset: -10, fill: 'rgba(255,255,255,0.4)', fontSize: 11 }}
-                              />
-                              <YAxis
-                                stroke="rgba(255,255,255,0.3)"
-                                tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }}
-                                label={{ value: 'CRPS', angle: -90, position: 'insideLeft', fill: 'rgba(255,255,255,0.4)', fontSize: 11 }}
-                              />
-                              <Tooltip
-                                contentStyle={TOOLTIP_STYLE}
-                                formatter={(value, name) => {
-                                  const m = name.replace('crps_', '');
-                                  return [value != null ? Number(value).toFixed(4) : 'N/A', `${m} CRPS`];
-                                }}
-                                labelFormatter={h => `+${h}h`}
-                              />
-                              {selectedModels.map(m => {
-                                // Use fewer dots for sparse models (< 10 points)
-                                const nPts = skillData.models?.[m]?.hours?.length || 0;
-                                return (
-                                  <Line
-                                    key={m}
-                                    type="linear"
-                                    dataKey={`crps_${m}`}
-                                    name={`crps_${m}`}
-                                    stroke={MODEL_COLORS[m]}
-                                    strokeWidth={nPts < 10 ? 2.5 : 2}
-                                    connectNulls
-                                    dot={{ r: nPts < 10 ? 5 : 3, fill: MODEL_COLORS[m], strokeWidth: 0 }}
-                                    activeDot={{ r: 6 }}
-                                    isAnimationActive={false}
-                                  />
-                                );
-                              })}
-                            </LineChart>
-                          </ResponsiveContainer>
+                        <div style={SMALL_GRID}>
+                          {SKILL_METRICS.map(({ key, label, hint, refLine, decimals }) => (
+                            <LeadTimeChart
+                              key={key}
+                              label={label}
+                              hint={hint}
+                              metricKey={key}
+                              rows={skillRows[key]}
+                              models={selectedModels}
+                              refLine={refLine}
+                              decimals={decimals}
+                            />
+                          ))}
                         </div>
                       </div>
                     </>
@@ -1343,6 +1421,30 @@ export function ComparisonTab({
                     );
                   }
                   return (
+                    <>
+                    {/* Aggregate — scores pooled over every verified lead time */}
+                    <div style={{ marginBottom: '26px' }}>
+                      <div style={SUBHEAD}>
+                        <span style={{ fontWeight: '600' }}>Aggregate</span>
+                        <span style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.3)' }}>
+                          CSI / POD / FAR pooled from hit-miss-false-alarm counts across lead times
+                        </span>
+                      </div>
+                      <div style={SMALL_GRID}>
+                        {CAT_SUMMARY_METRICS.map(({ key, label, hint, decimals }) => (
+                          <AggregateBar
+                            key={key}
+                            label={label}
+                            hint={hint}
+                            models={selectedModels}
+                            values={selectedModels.map(m => catData.summaries?.[m]?.[key] ?? null)}
+                            decimals={decimals}
+                          />
+                        ))}
+                      </div>
+                    </div>
+
+                    <div style={SUBHEAD}><span style={{ fontWeight: '600' }}>By lead time</span></div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px' }}>
                       {CAT_METRICS.map(({ key, label, hint }) => (
                         <div key={key} style={{ ...CARD, padding: '14px 12px 8px' }}>
@@ -1382,6 +1484,7 @@ export function ComparisonTab({
                         </div>
                       ))}
                     </div>
+                    </>
                   );
                 })()}
 
