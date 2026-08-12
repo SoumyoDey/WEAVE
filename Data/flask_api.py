@@ -3008,7 +3008,10 @@ def _categorical_hours_for_box(cursor, model_name, fcst_var, obs_var, obs_src,
                                hour_min, hour_max, threshold_rate, accum_h):
     """Per-hour CSI/POD/FAR/FSS over a bbox for a single model.
 
-    Returns a list of {hour, csi, pod, far, fss, n_pts}; [] if no data/obs.
+    Returns a list of {hour, csi, pod, far, fss, n_pts, hits, misses,
+    false_alarms, correct_neg}; [] if no data/obs. The raw contingency counts
+    let callers pool across lead times (see _categorical_summary) instead of
+    averaging ratios, which would over-weight sparse hours.
     Shares the domain-fractions FSS convention (MSE_ref = f²+o², undefined when
     both fractions are 0) with region_categorical_metrics_endpoint.
     """
@@ -3101,8 +3104,47 @@ def _categorical_hours_for_box(cursor, model_name, fcst_var, obs_var, obs_src,
         mse_ref = f * f + o * o
         fss = round(1.0 - ((f - o) ** 2) / mse_ref, 4) if mse_ref > 1e-10 else None
         out.append({'hour': hour, 'n_pts': h_n_pts,
-                    'csi': csi, 'pod': pod, 'far': far, 'fss': fss})
+                    'csi': csi, 'pod': pod, 'far': far, 'fss': fss,
+                    'hits': h_hits, 'misses': h_misses,
+                    'false_alarms': h_fa, 'correct_neg': h_cn})
     return out
+
+
+def _categorical_summary(hours_list):
+    """Pool per-hour contingency counts into one aggregate score set.
+
+    CSI/POD/FAR come from summed hits/misses/false alarms across every lead
+    time (an event-weighted score), not the mean of per-hour ratios. FSS uses
+    the same domain-fractions convention as the per-hour path, with the
+    forecast/observed event fractions pooled over all points × lead times.
+    Returns None-valued fields when a denominator is empty.
+    """
+    if not hours_list:
+        return None
+    hits   = sum(h.get('hits',   0) or 0 for h in hours_list)
+    misses = sum(h.get('misses', 0) or 0 for h in hours_list)
+    fa     = sum(h.get('false_alarms', 0) or 0 for h in hours_list)
+    n_pts  = sum(h.get('n_pts',  0) or 0 for h in hours_list)
+
+    csi_den  = hits + misses + fa
+    obs_yes  = hits + misses
+    fcst_yes = hits + fa
+
+    f = fcst_yes / n_pts if n_pts else 0.0
+    o = obs_yes  / n_pts if n_pts else 0.0
+    mse_ref = f * f + o * o
+
+    return {
+        'csi':     round(hits / csi_den,  4) if csi_den  > 0 else None,
+        'pod':     round(hits / obs_yes,  4) if obs_yes  > 0 else None,
+        'far':     round(fa   / fcst_yes, 4) if fcst_yes > 0 else None,
+        'fss':     round(1.0 - ((f - o) ** 2) / mse_ref, 4) if mse_ref > 1e-10 else None,
+        'hits':    hits,
+        'misses':  misses,
+        'false_alarms': fa,
+        'n_pts':   n_pts,
+        'n_hours': len(hours_list),
+    }
 
 
 @app.route('/api/compare/categorical', methods=['POST'])
@@ -3114,8 +3156,11 @@ def compare_categorical():
         { models: [..], lat, lon, hour_min, hour_max, variable,
           threshold_mm_6h | threshold_ms, fss_window }
     Response JSON:
-        { models: { AIFS: [{hour, csi, pod, far, fss, n_pts}], .. },
+        { models:    { AIFS: [{hour, csi, pod, far, fss, n_pts}], .. },
+          summaries: { AIFS: {csi, pod, far, fss, brier, n_pts, n_hours}, .. },
           threshold_info, fss_window, bbox }
+
+    `summaries` is additive: `models` keeps its per-hour list shape.
     """
     body = request.get_json(silent=True)
     if not isinstance(body, dict):
@@ -3157,13 +3202,26 @@ def compare_categorical():
     conn   = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
-        per_model = {}
+        per_model  = {}
+        summaries  = {}
         for m in models:
             accum_h = 1 if is_wind else MODEL_ACCUM_HOURS.get(m, 1)
             per_model[m] = _categorical_hours_for_box(
                 cursor, m, fcst_var, obs_var, obs_src,
                 min_lat, max_lat, min_lon, max_lon,
                 hour_min, hour_max, threshold_rate, accum_h)
+            summary = _categorical_summary(per_model[m])
+            if summary is not None:
+                # Brier is probabilistic (Gaussian exceedance from mean/spread),
+                # so it can't be pooled from the deterministic counts above —
+                # take the neighbourhood mean of the per-cell Brier scores.
+                brier_pts = _compute_brier_points_rf(
+                    cursor, m, variable,
+                    min_lat, max_lat, min_lon, max_lon,
+                    hour_min, hour_max, threshold_rate=threshold_rate)
+                summary['brier'] = (round(float(np.mean([p['value'] for p in brier_pts])), 4)
+                                    if brier_pts else None)
+            summaries[m] = summary
 
         threshold_info = ({'threshold_ms': threshold_rate, 'unit': 'm/s'} if is_wind
                           else {'threshold_mm_6h': round(threshold_rate * 6, 2), 'unit': 'mm/6h'})
@@ -3176,6 +3234,7 @@ def compare_categorical():
 
         return jsonify({
             'models':         per_model,
+            'summaries':      summaries,
             'threshold_info': threshold_info,
             'fss_window':     fss_window,
             'bbox':           [round(min_lat, 3), round(max_lat, 3),
