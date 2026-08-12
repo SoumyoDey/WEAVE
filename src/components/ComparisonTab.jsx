@@ -8,6 +8,7 @@ import { Scale, MapPin } from 'lucide-react';
 import {
   fetchComparisonTimeseries, fetchComparisonSkill, fetchSpatialAgreement,
   fetchComparisonCategorical, fetchComparisonRegionMetrics,
+  fetchComparisonSpatialDiff,
 } from '../api/comparisonApi';
 import { fetchSpatialMetric, fetchSpatialMetricPlot } from '../api/spatialApi';
 import { t } from '../theme';
@@ -494,6 +495,13 @@ export function ComparisonTab({
   const [modelMaps, setModelMaps] = useState({});     // model -> {loading, url, error}
   const [mapsRunning, setMapsRunning] = useState(false);
   const mapsSeqRef = useRef(0);     // drops stale small-multiple responses
+  // A/B difference map. null = follow the first two selected models.
+  const [diffA, setDiffA] = useState(null);
+  const [diffB, setDiffB] = useState(null);
+  const [diffData, setDiffData] = useState(null);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [diffError, setDiffError] = useState('');
+  const diffSeqRef = useRef(0);     // drops stale difference-map responses
   const [catData, setCatData] = useState(null);
   const [catLoading, setCatLoading] = useState(false);
   const [catError, setCatError] = useState('');
@@ -521,6 +529,7 @@ export function ComparisonTab({
     setCatData(null);
     setRegionData(null);
     setModelMaps({});
+    setDiffData(null);
     setHasRunRegion(false);   // back to the "click Run" prompt, not an empty section
   }, [selectedVariable]);
 
@@ -673,6 +682,39 @@ export function ComparisonTab({
       Array.from({ length: Math.min(CONCURRENCY, selectedModels.length) }, worker),
     );
     if (seq === mapsSeqRef.current) setMapsRunning(false);
+  };
+
+  // A/B default to the first two selected models and re-derive if the model
+  // selection changes underneath them.
+  const effDiffA = selectedModels.includes(diffA) ? diffA : selectedModels[0];
+  const effDiffB = (selectedModels.includes(diffB) && diffB !== effDiffA)
+    ? diffB
+    : selectedModels.find(m => m !== effDiffA);
+
+  const handleRunDiff = async () => {
+    if (!hasRegion || !effDiffA || !effDiffB) return;
+    const seq = ++diffSeqRef.current;
+    setDiffError('');
+    setDiffData(null);
+    setDiffLoading(true);
+    const def = SPATIAL_MAP_METRICS.find(x => x.key === mapMetric);
+    try {
+      const result = await fetchComparisonSpatialDiff({
+        modelA: effDiffA, modelB: effDiffB,
+        metric: mapMetric, variable: selectedVariable,
+        bounds: selectedRegion.bounds,
+        hourMin, hourMax,
+        threshold: def?.requiresThreshold ? Number(regionThreshold) : undefined,
+      });
+      if (seq !== diffSeqRef.current) return;
+      setDiffData(result);
+    } catch (err) {
+      if (seq !== diffSeqRef.current) return;
+      console.error('compare/spatial-diff failed:', err);
+      setDiffError(err.message || 'Failed to compute the difference map.');
+    } finally {
+      if (seq === diffSeqRef.current) setDiffLoading(false);
+    }
   };
 
   const downloadMap = (name, url) => {
@@ -1896,6 +1938,123 @@ export function ComparisonTab({
                     </div>
                   );
                 })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Model-difference map (region mode) ── */}
+        {isRegionMode && hasRegion && hasRunRegion && selectedModels.length >= 2 && (
+          <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '24px', marginBottom: '28px' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', marginBottom: '14px', flexWrap: 'wrap' }}>
+              <h3 style={{ ...SECTION_TITLE, margin: 0 }}>Difference map (A − B)</h3>
+              <span style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.25)', letterSpacing: '0.04em' }}>
+                Uses the metric picked above · diverging scale centred at 0
+              </span>
+            </div>
+
+            {/* A/B pickers */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
+              {[['A', effDiffA, setDiffA], ['B', effDiffB, setDiffB]].map(([side, value, setter]) => (
+                <div key={side} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: t.fontSize.sm }}>{side}</span>
+                  <select
+                    value={value || ''}
+                    onChange={e => setter(e.target.value)}
+                    aria-label={`Model ${side}`}
+                    style={{ ...INPUT, width: 'auto', cursor: 'pointer', color: MODEL_COLORS[value] || INPUT.color, fontWeight: 600 }}
+                  >
+                    {selectedModels.map(m => (
+                      <option key={m} value={m} style={{ background: '#1a2535' }}>{m}</option>
+                    ))}
+                  </select>
+                </div>
+              ))}
+
+              <button
+                onClick={handleRunDiff}
+                disabled={diffLoading || !effDiffA || !effDiffB}
+                style={{
+                  background: (!diffLoading && effDiffA && effDiffB) ? '#e67e22' : 'rgba(255,255,255,0.08)',
+                  color: (!diffLoading && effDiffA && effDiffB) ? 'white' : 'rgba(255,255,255,0.25)',
+                  border: 'none', borderRadius: t.radius, padding: '7px 18px',
+                  fontSize: t.fontSize.base, fontWeight: '700',
+                  cursor: (!diffLoading && effDiffA && effDiffB) ? 'pointer' : 'not-allowed',
+                  display: 'flex', alignItems: 'center', gap: '6px', transition: 'background 0.15s',
+                }}
+              >
+                {diffLoading ? '⏳ Computing…' : '▶ Compute difference'}
+              </button>
+
+              <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.sm }}>
+                {SPATIAL_MAP_METRICS.find(x => x.key === mapMetric)?.label}
+                {effDiffA && effDiffB && <> · {effDiffA} − {effDiffB}</>}
+              </span>
+            </div>
+
+            {diffLoading && <Spinner />}
+
+            {!diffLoading && diffError && (
+              <div role="alert" style={{
+                ...CARD, borderLeft: '3px solid #e74c3c', color: '#e74c3c',
+                fontSize: t.fontSize.sm,
+              }}>
+                {diffError}
+              </div>
+            )}
+
+            {/* No shared cells — the endpoint reports this instead of a blank map */}
+            {!diffLoading && !diffError && diffData && !diffData.image && (
+              <div style={{
+                background: 'rgba(243,156,18,0.1)', border: '1px solid rgba(243,156,18,0.3)',
+                borderRadius: t.radius, padding: '12px 16px', color: '#f39c12', fontSize: t.fontSize.sm,
+              }}>
+                ⚠️ {diffData.error}
+              </div>
+            )}
+
+            {!diffLoading && !diffError && diffData?.image && (
+              <div>
+                <img
+                  src={'data:image/png;base64,' + diffData.image}
+                  alt={`${effDiffA} minus ${effDiffB} ${mapMetric} difference map`}
+                  style={{
+                    maxWidth: '100%', maxHeight: '460px', width: 'auto', display: 'block',
+                    margin: '0 auto', borderRadius: '10px', boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+                  }}
+                />
+                <div style={{ display: 'flex', gap: '16px', marginTop: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                  {[
+                    { label: 'Shared cells', value: `${diffData.n_common} of ${diffData.n_a}/${diffData.n_b}` },
+                    { label: `Mean (${effDiffA} − ${effDiffB})`, value: diffData.mean_diff?.toFixed(4) },
+                    { label: 'Largest difference', value: diffData.max_abs_diff?.toFixed(4) },
+                  ].map(({ label, value }) => (
+                    <div key={label} style={{ textAlign: 'center' }}>
+                      <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: t.fontSize.md, fontWeight: '700' }}>
+                        {value ?? '—'}
+                      </div>
+                      <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.micro, marginTop: '1px' }}>
+                        {label}
+                      </div>
+                    </div>
+                  ))}
+                  <button
+                    onClick={() => downloadMap(`${effDiffA}-minus-${effDiffB}`, 'data:image/png;base64,' + diffData.image)}
+                    style={{
+                      background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)',
+                      borderRadius: '7px', color: 'rgba(255,255,255,0.7)', fontSize: t.fontSize.sm,
+                      padding: '5px 12px', cursor: 'pointer', alignSelf: 'center',
+                    }}
+                  >
+                    ⬇ Download
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {!diffLoading && !diffError && !diffData && (
+              <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.base, padding: '16px 0', textAlign: 'center' }}>
+                Pick two models and click <strong style={{ color: 'rgba(255,255,255,0.5)' }}>▶ Compute difference</strong>.
               </div>
             )}
           </div>

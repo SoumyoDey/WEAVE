@@ -274,6 +274,57 @@ class TestRegionMetrics:
             0, 1, 0, 1, 0, 24, threshold_rate=1.5) == ({}, 0)
 
 
+# ── Spatial difference (compare/spatial-diff) ─────────────────────────────────
+class TestSpatialDiffPoints:
+    def test_subtracts_at_matching_cells(self):
+        a = [{"lat": 36.0, "lon": -75.5, "value": 2.0},
+             {"lat": 36.25, "lon": -75.5, "value": 1.0}]
+        b = [{"lat": 36.0, "lon": -75.5, "value": 0.5},
+             {"lat": 36.25, "lon": -75.5, "value": 4.0}]
+        diff, n_a, n_b = api._spatial_diff_points(a, b)
+        assert (n_a, n_b) == (2, 2)
+        assert [d["value"] for d in diff] == [1.5, -3.0]
+
+    def test_keeps_only_shared_cells(self):
+        a = [{"lat": 36.0, "lon": -75.5, "value": 2.0},
+             {"lat": 40.0, "lon": -70.0, "value": 9.0}]   # A only
+        b = [{"lat": 36.0, "lon": -75.5, "value": 0.5},
+             {"lat": 30.0, "lon": -80.0, "value": 9.0}]   # B only
+        diff, n_a, n_b = api._spatial_diff_points(a, b)
+        assert (n_a, n_b) == (2, 2)
+        assert len(diff) == 1
+        assert diff[0]["lat"] == 36.0 and diff[0]["value"] == 1.5
+
+    def test_snaps_native_coords_to_the_quarter_degree_grid(self):
+        """Models report slightly different native coordinates for the same
+        cell (the `correlation` path does), so the key has to snap."""
+        a = [{"lat": 36.01, "lon": -75.49, "value": 2.0}]
+        b = [{"lat": 35.98, "lon": -75.52, "value": 0.5}]
+        diff, _, _ = api._spatial_diff_points(a, b)
+        assert len(diff) == 1
+        assert diff[0]["value"] == 1.5
+
+    def test_empty_when_nothing_overlaps(self):
+        a = [{"lat": 36.0, "lon": -75.5, "value": 2.0}]
+        b = [{"lat": 10.0, "lon": -150.0, "value": 2.0}]
+        diff, n_a, n_b = api._spatial_diff_points(a, b)
+        assert diff == [] and (n_a, n_b) == (1, 1)
+
+    def test_empty_inputs(self):
+        assert api._spatial_diff_points([], []) == ([], 0, 0)
+
+    def test_mean_diff_matches_the_region_means(self):
+        """The map's mean equals (region mean A) - (region mean B) when both
+        models cover the same cells — so the diff map and the bars agree."""
+        a = [{"lat": 36.0, "lon": -75.5, "value": 2.0},
+             {"lat": 36.25, "lon": -75.5, "value": 4.0}]
+        b = [{"lat": 36.0, "lon": -75.5, "value": 1.0},
+             {"lat": 36.25, "lon": -75.5, "value": 1.0}]
+        diff, _, _ = api._spatial_diff_points(a, b)
+        mean_diff = sum(d["value"] for d in diff) / len(diff)
+        assert mean_diff == api._region_mean(a) - api._region_mean(b)
+
+
 # ── Pooled categorical summary (compare/categorical `summaries`) ──────────────
 class TestCategoricalSummary:
     def test_none_for_empty(self):
