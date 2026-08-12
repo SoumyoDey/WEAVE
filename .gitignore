@@ -16,3 +16,8 @@ venv/
 
 # Local Claude Code config (dev-server launch settings — machine-specific)
 .claude/
+
+# Coverage artifacts (pytest-cov)
+.coverage
+coverage.xml
+htmlcov/

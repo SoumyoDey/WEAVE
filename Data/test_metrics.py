@@ -125,6 +125,19 @@ class TestNeighbourhoodFSS:
         o = self._row([0, 0, 0, 0, 0, 1, 1, 1])
         assert api._fractions_skill_score(f, o, window=1) < 0.5
 
+    def test_empty_inputs_are_handled(self):
+        assert api._neighbourhood_fractions({}, window=3) == {}
+        assert api._fss_components({}, {(36.0, -80.0): 1.0}, 3) == (0.0, 0.0, 0)
+        assert api._fractions_skill_score({}, {}, 3) is None
+
+    def test_disjoint_grids_share_no_cells(self):
+        """Two models on non-overlapping grids must yield no components rather
+        than a score computed from nothing."""
+        f = {(36.0, -80.0): 1.0}
+        o = {(10.0, -150.0): 1.0}
+        assert api._fss_components(f, o, 3) == (0.0, 0.0, 0)
+        assert api._fractions_skill_score(f, o, 3) is None
+
     def test_fractions_ignore_missing_cells(self):
         """A cell absent from the grid is excluded from the neighbourhood
         rather than counted as dry."""
@@ -391,6 +404,12 @@ class TestPrecipRateSeries:
         assert std is None
         assert rate == pytest.approx(1.0 / 6)   # the amount is still fine
 
+    def test_missing_std_on_either_record_yields_no_spread(self):
+        """Differencing a cumulative model needs both records' spreads; if
+        either is absent the increment spread is unrecoverable."""
+        assert api._precip_rate_series("AIFS", {6: (1.0, 1.0), 12: (2.0, None)})[12][1] is None
+        assert api._precip_rate_series("AIFS", {6: (1.0, None), 12: (2.0, 1.0)})[12][1] is None
+
     def test_spread_none_is_skipped_by_spread_metrics(self, monkeypatch):
         """A None spread must drop out of CRPS/Brier/ssr_agg, not crash them."""
         pairs = {(36.0, -79.5): [(6, 2.0, None, 1.0), (12, 3.0, None, 1.0)]}
@@ -543,6 +562,119 @@ class TestSpatialDiffPoints:
         diff, _, _ = api._spatial_diff_points(a, b)
         mean_diff = sum(d["value"] for d in diff) / len(diff)
         assert mean_diff == api._region_mean(a) - api._region_mean(b)
+
+
+# ── Pooled region metrics (the region headline numbers) ───────────────────────
+class TestRegionPooledMetrics:
+    """Every region bar comes from here, so the estimator each metric uses is
+    worth pinning explicitly."""
+
+    ALL = ["bias", "mae", "rmse", "crps", "brier", "csi", "pod", "far", "ssr_agg"]
+
+    def test_empty_pairs(self):
+        assert api._region_pooled_metrics({}, self.ALL, 1.5) == {}
+
+    def test_only_returns_requested_metrics(self):
+        out = api._region_pooled_metrics(PAIRS, ["mae"], 1.5)
+        assert set(out) == {"mae"}
+
+    def test_accuracy_metrics_pool_over_all_samples(self):
+        # errors +1 and +2 at one cell
+        out = api._region_pooled_metrics(PAIRS, self.ALL, 1.5)
+        assert out["bias"] == 1.5
+        assert out["mae"] == 1.5
+        assert out["rmse"] == round(math.sqrt((1 + 4) / 2), 4)
+
+    def test_rmse_is_the_domain_rmse_not_a_mean_of_cell_rmse(self):
+        """sqrt is not linear, so pooling and averaging genuinely differ — this
+        is the discrepancy finding 8 was about."""
+        pairs = {
+            (36.0, -79.5): [(6, 1.0, None, 0.0)],   # err 1
+            (36.5, -79.5): [(6, 4.0, None, 0.0)],   # err 4
+        }
+        pooled = api._region_pooled_metrics(pairs, ["rmse"], 1.5)["rmse"]
+        per_cell_mean = (1.0 + 4.0) / 2                  # what a cell mean gives
+        assert pooled == round(math.sqrt((1 + 16) / 2), 4)
+        assert pooled != per_cell_mean
+
+    def test_categorical_metrics_pool_counts(self):
+        out = api._region_pooled_metrics(CAT_PAIRS, self.ALL, 1.5)
+        assert out["csi"] == round(1 / 3, 4)      # 1 hit / (1 hit + 1 miss + 1 fa)
+        assert out["pod"] == 0.5
+        assert out["far"] == 0.5
+
+    def test_counts_are_event_weighted_across_cells(self):
+        """A cell with many samples must count more than a sparse one — the
+        failure mode of averaging per-cell ratios."""
+        dense  = [(h, 2.0, None, 2.0) for h in range(10)]      # 10 hits
+        sparse = [(6, 2.0, None, 1.0)]                         # 1 false alarm
+        pairs  = {(36.0, -79.5): dense, (36.5, -79.5): sparse}
+        out = api._region_pooled_metrics(pairs, ["far"], 1.5)
+        assert out["far"] == round(1 / 11, 4)      # not the mean of 0.0 and 1.0
+
+    def test_spread_metrics_skip_records_without_a_spread(self):
+        pairs = {(36.0, -79.5): [(6, 2.0, None, 1.0), (12, 3.0, None, 1.0)]}
+        out = api._region_pooled_metrics(pairs, self.ALL, 1.5)
+        assert out["crps"] is None
+        assert out["brier"] is None
+        assert out["ssr_agg"] is None
+        assert out["mae"] == 1.5          # deterministic metrics unaffected
+
+    def test_ssr_uses_the_pooled_variance_and_error(self):
+        out = api._region_pooled_metrics(PAIRS, ["ssr_agg"], 1.5)
+        # mean(sigma^2) = 1, mean(err^2) = 2.5 -> sqrt(0.4)
+        assert out["ssr_agg"] == round(math.sqrt(0.4), 4)
+
+    def test_ensemble_correction_reaches_the_region_ssr(self):
+        plain     = api._region_pooled_metrics(PAIRS, ["ssr_agg"], 1.5)["ssr_agg"]
+        corrected = api._region_pooled_metrics(PAIRS, ["ssr_agg"], 1.5,
+                                               n_members=18)["ssr_agg"]
+        assert corrected > plain
+
+
+class TestExceedanceProbability:
+    def test_degenerate_spread_is_an_indicator(self):
+        assert api._exceedance_probability(5.0, 0.0, 1.0) == 1.0
+        assert api._exceedance_probability(0.5, 0.0, 1.0) == 0.0
+        assert api._exceedance_probability(5.0, None, 1.0) == 1.0
+
+    def test_at_the_threshold_is_a_half(self):
+        assert api._exceedance_probability(1.0, 2.0, 1.0) == pytest.approx(0.5)
+
+    def test_increases_with_the_mean(self):
+        lo = api._exceedance_probability(0.5, 1.0, 2.0)
+        hi = api._exceedance_probability(1.5, 1.0, 2.0)
+        assert 0.0 < lo < hi < 1.0
+
+
+class TestCensoredCRPS:
+    """CRPS uses a Gaussian censored at zero, since precipitation cannot be
+    negative. The correction is the sub-zero mass the plain Gaussian carries."""
+
+    def test_negligible_when_the_mean_is_far_from_zero(self):
+        # mu = 5, sigma = 1 -> essentially no mass below zero
+        assert api._censor_correction(5.0, 1.0) == pytest.approx(0.0, abs=1e-9)
+
+    def test_material_when_the_mean_is_near_zero(self):
+        assert api._censor_correction(0.0, 1.0) > 0.01
+
+    def test_zero_when_the_distribution_cannot_reach_zero(self):
+        assert api._censor_correction(100.0, 1.0) == 0.0
+
+    def test_censoring_lowers_crps_near_zero(self):
+        """The censored forecast is sharper — it does not waste probability on
+        impossible negative values."""
+        plain    = api._gaussian_crps(0.1, 1.0, 0.2, censor_at_zero=False)
+        censored = api._gaussian_crps(0.1, 1.0, 0.2, censor_at_zero=True)
+        assert censored < plain
+
+    def test_crps_is_never_negative(self):
+        for mean in (0.0, 0.05, 0.5, 5.0):
+            for std in (0.01, 0.5, 3.0):
+                assert api._gaussian_crps(mean, std, 0.0) >= 0.0
+
+    def test_perfect_deterministic_forecast_is_zero(self):
+        assert api._gaussian_crps(2.0, 0.0, 2.0) == 0.0
 
 
 # ── Pooled categorical summary (compare/categorical `summaries`) ──────────────
