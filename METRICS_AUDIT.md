@@ -7,7 +7,8 @@
 >
 > **Status:** findings **1–10 are fixed** across every endpoint (see "Fix
 > status" at the bottom), plus a spread-pooling bug (3b) found while fixing
-> them. Finding 11 (architecture) is partly addressed.
+> them. Finding 11 is partly addressed — the numerics are extracted; the
+> two-truth-paths part is data architecture and remains open.
 
 ---
 
@@ -446,3 +447,27 @@ cross-model SSR ranking carried a ~1.7% relative bias between the largest and
 smallest ensemble.
 
 81 backend tests pass (was 64).
+
+
+## Fix status — finding 11 (partial)
+
+The **numerics are now a separate module.** `Data/metrics.py` holds the pure,
+DB-free, Flask-free metric functions — precipitation record semantics, the
+spread-skill ratio, the predictive distribution, FSS, region aggregation and
+spatial differencing — and `flask_api.py` imports them by name. `metrics.py`
+imports standalone (verified: `import metrics` with no Flask and no database),
+which is what lets the golden-vector suite cover the science directly.
+
+`flask_api.py` still holds routing, SQL and Cartopy rendering.
+
+**What is NOT fixed:** the two parallel truth paths. Analysis point mode reads
+native `forecast_data` / `ensemble_statistics` + `observation_data`; the
+Comparison tab reads `regridded_forecast` / `regridded_observation`. Both are
+now consistent internally and share `metrics.py`, but they remain two different
+samples of the same quantity, so the same metric name can legitimately differ
+between tabs. Collapsing that is a data-architecture decision (pick one source
+of truth, or label each view with its source), not a refactor.
+
+Also still open from the audit's notes: metric results are deterministic in
+(model, bbox, hours, threshold) but only the *plot* endpoint is cached, and the
+point-list queries have no row cap.
