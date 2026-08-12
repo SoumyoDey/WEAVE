@@ -49,7 +49,7 @@ from metrics import (                                    # noqa: E402
     _clamp_ssr, _ssr_from_variances, _spread_inflation,
     _censor_correction, _gaussian_crps, _exceedance_probability,
     _neighbourhood_fractions, _fss_components, _fss_from_components,
-    _fractions_skill_score,
+    _fractions_skill_score, _fss_from_pairs,
     _precip_period_hours, _precip_lookback_hours,
     _precip_rate_series, _precip_member_rate_series,
     _categorical_summary, _region_mean, _region_pooled_metrics,
@@ -3321,7 +3321,7 @@ def compare_categorical():
 
     Request JSON:
         { models: [..], lat, lon, hour_min, hour_max, variable,
-          threshold_mm_6h | threshold_ms, fss_window }
+          threshold_mm_6h | threshold_ms, fss_window, box_cells }
     Response JSON:
         { models:    { AIFS: [{hour, csi, pod, far, fss, n_pts}], .. },
           summaries: { AIFS: {csi, pod, far, fss, brier, n_pts, n_hours}, .. },
@@ -3346,9 +3346,12 @@ def compare_categorical():
         hour_min   = int(body.get('hour_min',    0))
         hour_max   = int(body.get('hour_max',    168))
         fss_window = int(body.get('fss_window',  3))
+        box_cells  = int(body.get('box_cells',   9))
     except (TypeError, ValueError):
-        return jsonify({'error': 'lat, lon, hour_min, hour_max, fss_window must be numeric'}), 400
+        return jsonify({'error': 'lat, lon, hour_min, hour_max, fss_window, '
+                                 'box_cells must be numeric'}), 400
     fss_window = max(1, min(fss_window, 21))     # clamp to a sane neighbourhood
+    box_cells  = max(1, min(box_cells, 41))
 
     is_wind = (variable == 'wind')
     try:
@@ -3361,8 +3364,15 @@ def compare_categorical():
     except (TypeError, ValueError):
         return jsonify({'error': 'threshold must be numeric'}), 400
 
-    # Neighbourhood box: fss_window grid cells of ~0.5° → half-width, min one cell.
-    hw = max(fss_window * 0.25, 0.26)
+    # The verification box and the FSS neighbourhood are separate things and are
+    # now separate parameters. They used to share one: widening the neighbourhood
+    # also widened the domain, so CSI/POD/FAR moved when only the FSS scale was
+    # meant to. `box_cells` sizes the box; `fss_window` is the sliding
+    # neighbourhood inside it. The box is never allowed to be smaller than the
+    # window, or the neighbourhood would be clipped to the domain and FSS would
+    # silently collapse toward the old domain-fraction behaviour.
+    effective_box  = max(box_cells, fss_window)
+    hw = max(effective_box * 0.25, 0.26)
     min_lat, max_lat = lat - hw, lat + hw
     min_lon, max_lon = lon - hw, lon + hw
 
@@ -3403,6 +3413,7 @@ def compare_categorical():
             'summaries':      summaries,
             'threshold_info': threshold_info,
             'fss_window':     fss_window,
+            'box_cells':      effective_box,
             'bbox':           [round(min_lat, 3), round(max_lat, 3),
                                round(min_lon, 3), round(max_lon, 3)],
         })
@@ -3432,7 +3443,11 @@ COMPARE_REGION_METRIC_FNS = {
     'brier':   _compute_brier_points_rf,
 }
 COMPARE_REGION_METRICS = ['ssr_agg', 'correlation', 'bias', 'mae', 'rmse',
-                          'crps', 'csi', 'pod', 'far', 'brier']
+                          'crps', 'csi', 'pod', 'far', 'brier', 'fss']
+
+# FSS is a property of a whole field at a lead time, so unlike the others it has
+# no per-cell value: no map, and no entry in `cell_means`.
+COMPARE_REGION_NO_CELL_VALUE = {'fss'}
 
 
 def _single_metric_points(cursor, model_name, variable, metric,
@@ -3552,8 +3567,11 @@ def compare_region_metrics():
     try:
         hour_min = int(body.get('hour_min', 0))
         hour_max = int(body.get('hour_max', 168))
+        # FSS neighbourhood width in grid cells — independent of the bbox, which
+        # the caller draws.
+        fss_window = max(1, min(int(body.get('fss_window', 3)), 21))
     except (TypeError, ValueError):
-        return jsonify({'error': 'hour_min and hour_max must be numeric'}), 400
+        return jsonify({'error': 'hour_min, hour_max and fss_window must be numeric'}), 400
     if hour_min >= hour_max:
         return jsonify({'error': 'hour_min must be less than hour_max'}), 400
 
@@ -3584,7 +3602,8 @@ def compare_region_metrics():
             # the same estimator point mode uses. The per-cell mean is what the
             # MAP of this metric averages to, so it is reported alongside.
             values = _region_pooled_metrics(pairs, metrics, threshold_rate,
-                                            _ensemble_size(cursor, m))
+                                            _ensemble_size(cursor, m),
+                                            fss_window=fss_window)
             cell_means = {k: _region_mean(v) for k, v in points_by_metric.items()}
             counts     = {k: len(v) for k, v in points_by_metric.items()}
             # Metrics with no pooled form (correlation) fall back to the cell mean.
@@ -3631,6 +3650,7 @@ def compare_region_metrics():
             'n_points':       per_counts,
             'n_cells':        n_cells,
             'metrics':        metrics,
+            'fss_window':     fss_window,
             'threshold_info': threshold_info,
             'bbox':           [min_lat, max_lat, min_lon, max_lon],
             'hour_min':       hour_min,

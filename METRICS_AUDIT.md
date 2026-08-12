@@ -471,3 +471,53 @@ of truth, or label each view with its source), not a refactor.
 Also still open from the audit's notes: metric results are deterministic in
 (model, bbox, hours, threshold) but only the *plot* endpoint is cached, and the
 point-list queries have no row cap.
+
+
+---
+
+## Follow-ups after the findings (2026-08-12)
+
+Two gaps that only became visible once FSS was a real neighbourhood score.
+
+**FSS is now offered everywhere it applies, with its scale selectable.**
+It was missing entirely from the Comparison tab's region view — the most
+spatial view in the app was the one place without the spatial skill score.
+`fss` joins `COMPARE_REGION_METRICS`, computed by `_fss_from_pairs`, which
+rebuilds the binary fields per lead time and sums components across them.
+Unlike every other region metric it has no per-cell value, so it is flagged
+`noMap`: absent from the map picker (verified — the picker offers the other
+ten) and `None` in `cell_means`.
+
+Where FSS appears, its neighbourhood is now selectable:
+
+| View | FSS | Window control |
+|---|---|---|
+| Comparison · point (advanced metrics) | yes | yes |
+| Comparison · region | **yes (new)** | **yes (new)** |
+| Analysis · region | yes | yes |
+| Analysis · point | n/a — spatial only | n/a |
+
+**The FSS window no longer resizes the verification box.** In
+`compare/categorical` the two were one parameter:
+
+    hw = max(fss_window * 0.25, 0.26)
+
+so widening the neighbourhood also widened the domain, and CSI/POD/FAR moved
+when only the FSS scale was meant to. `box_cells` (default 9) now sizes the
+box and `fss_window` is the neighbourhood inside it; the box is clamped to be
+at least the window, or the neighbourhood would be clipped and FSS would slide
+back toward the old domain-fraction behaviour.
+
+Verified live — window 1/3/7 at a fixed box of 9:
+
+    fss  0.6766 -> 0.8238 -> 0.8702
+    csi  0.5113 -> 0.5113 -> 0.5113      (unchanged, as it must be)
+    n    1447   -> 1447   -> 1447
+
+and changing the box alone (3 vs 9) moves the sample: `n_pts` 159 -> 1447.
+
+Note this changes point-mode categorical values, because the box no longer
+defaults to the window: at `fss_window` 3 the box was +/-0.75 degrees and is
+now +/-2.25.
+
+141 backend tests pass (was 134).

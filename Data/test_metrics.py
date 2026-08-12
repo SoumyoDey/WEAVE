@@ -632,6 +632,72 @@ class TestRegionPooledMetrics:
         assert corrected > plain
 
 
+class TestFSSFromPairs:
+    """FSS over a region is built from the fields per lead time, not averaged
+    out of a points list — it has no per-cell value."""
+
+    @staticmethod
+    def _pairs(rows):
+        """rows: {(lat, lon): [(hour, fcst_rate, obs_rate), ...]}"""
+        return {cell: [(h, f, None, o) for h, f, o in entries]
+                for cell, entries in rows.items()}
+
+    def test_perfect_overlap(self):
+        pairs = self._pairs({
+            (36.0, -80.0): [(6, 5.0, 5.0)],
+            (36.0, -79.5): [(6, 0.0, 0.0)],
+        })
+        assert api._fss_from_pairs(pairs, threshold_rate=1.0, window=1) == 1.0
+
+    def test_displaced_events_score_zero(self):
+        pairs = self._pairs({
+            (36.0, -80.0): [(6, 5.0, 0.0)],
+            (36.0, -79.5): [(6, 0.0, 5.0)],
+        })
+        assert api._fss_from_pairs(pairs, threshold_rate=1.0, window=1) == 0.0
+
+    def test_wider_neighbourhood_forgives_displacement(self):
+        pairs = self._pairs({
+            (36.0, -80.0 + 0.5 * i): [(6, 5.0 if i == 1 else 0.0,
+                                       5.0 if i == 2 else 0.0)]
+            for i in range(7)
+        })
+        narrow = api._fss_from_pairs(pairs, threshold_rate=1.0, window=1)
+        wide   = api._fss_from_pairs(pairs, threshold_rate=1.0, window=5)
+        assert narrow == 0.0
+        assert wide > narrow
+
+    def test_none_when_no_events(self):
+        pairs = self._pairs({(36.0, -80.0): [(6, 0.0, 0.0)]})
+        assert api._fss_from_pairs(pairs, threshold_rate=1.0, window=3) is None
+
+    def test_aggregates_across_lead_times(self):
+        """Two lead times, one matching and one displaced — the combined score
+        sits between the two, since components sum rather than scores averaging."""
+        pairs = self._pairs({
+            (36.0, -80.0): [(6, 5.0, 5.0), (12, 5.0, 0.0)],
+            (36.0, -79.5): [(6, 0.0, 0.0), (12, 0.0, 5.0)],
+        })
+        combined = api._fss_from_pairs(pairs, threshold_rate=1.0, window=1)
+        assert 0.0 < combined < 1.0
+
+    def test_only_computed_when_requested(self):
+        """It walks the pairs a second time, so it must not run unasked."""
+        pairs = self._pairs({(36.0, -80.0): [(6, 5.0, 5.0)]})
+        assert 'fss' not in api._region_pooled_metrics(pairs, ['mae'], 1.0)
+        assert 'fss' in api._region_pooled_metrics(pairs, ['mae', 'fss'], 1.0)
+
+    def test_region_metrics_honour_the_window(self):
+        pairs = self._pairs({
+            (36.0, -80.0 + 0.5 * i): [(6, 5.0 if i == 1 else 0.0,
+                                       5.0 if i == 2 else 0.0)]
+            for i in range(7)
+        })
+        narrow = api._region_pooled_metrics(pairs, ['fss'], 1.0, fss_window=1)['fss']
+        wide   = api._region_pooled_metrics(pairs, ['fss'], 1.0, fss_window=5)['fss']
+        assert wide > narrow
+
+
 class TestExceedanceProbability:
     def test_degenerate_spread_is_an_indicator(self):
         assert api._exceedance_probability(5.0, 0.0, 1.0) == 1.0
