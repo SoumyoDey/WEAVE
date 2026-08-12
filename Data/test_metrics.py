@@ -300,6 +300,40 @@ class TestPrecipRateSeries:
             api._compute_bias_points_rf(None, "AIFS", "precipitation", 0, 1, 0, 1)) == 1.5
 
 
+class TestPrecipMemberRateSeries:
+    """Per-member differencing is exact — it's what makes the ensemble spread of
+    a cumulative model recoverable, unlike the aggregate mean/std path."""
+
+    def test_member_cumulative_is_differenced(self):
+        series = {6: 0.6, 12: 1.2, 18: 1.5}
+        rates = api._precip_member_rate_series("AIFS", series)
+        assert rates[6][0] == pytest.approx(0.1)
+        assert rates[12][0] == pytest.approx(0.1)
+        assert rates[18][0] == pytest.approx(0.05)
+
+    def test_member_gefs_uses_own_bucket(self):
+        rates = api._precip_member_rate_series("GEFS", {3: 0.9, 6: 0.9})
+        assert rates[3][0] == pytest.approx(0.3)
+        assert rates[6][0] == pytest.approx(0.15)
+
+    def test_member_wind_passes_through(self):
+        assert api._precip_member_rate_series("AIFS", {6: 12.0}, is_wind=True) == {6: (12.0, 1)}
+
+    def test_member_drops_undifferenceable_record(self):
+        assert api._precip_member_rate_series("AIFS", {24: 3.0}) == {}
+
+    def test_spread_of_differenced_members_is_exact(self):
+        """Two members whose cumulative totals differ by a constant have zero
+        increment spread — the aggregate variance-difference path cannot see
+        this, but per-member differencing gets it exactly right."""
+        m1 = api._precip_member_rate_series("AIFS", {6: 1.0, 12: 2.0})
+        m2 = api._precip_member_rate_series("AIFS", {6: 5.0, 12: 6.0})
+        at12 = [m1[12][0], m2[12][0]]
+        assert at12[0] == at12[1]                      # identical increments
+        mean = sum(at12) / 2
+        assert sum((x - mean) ** 2 for x in at12) == 0.0
+
+
 # ── Region aggregation (compare/region-metrics) ───────────────────────────────
 class TestRegionMetrics:
     def test_region_mean_averages_cells(self):
