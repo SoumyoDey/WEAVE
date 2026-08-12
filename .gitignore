@@ -13,3 +13,6 @@ venv/
 
 # Server-side plot cache (Data/flask_api.py FileSystemCache backend)
 .cache/
+
+# Local Claude Code config (dev-server launch settings — machine-specific)
+.claude/
