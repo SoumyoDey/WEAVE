@@ -136,6 +136,47 @@ export async function fetchComparisonRegionMetrics({ models, variable, bounds, h
 }
 
 /**
+ * Fetches a base64-encoded PNG of the per-cell metric difference (A − B)
+ * between two models, on a diverging scale centred at 0.
+ *
+ * @param {{ modelA: string, modelB: string, metric: string, variable: string,
+ *           bounds: object, hourMin: number, hourMax: number, threshold?: number }} params
+ * @returns {Promise<{ image?: string, error?: string, n_common: number,
+ *                     n_a: number, n_b: number, max_abs_diff?: number, mean_diff?: number }>}
+ *   `error` (with n_common 0) means the two models share no grid cells.
+ */
+export async function fetchComparisonSpatialDiff({ modelA, modelB, metric, variable, bounds, hourMin, hourMax, threshold }) {
+  const body = {
+    model_a: modelA,
+    model_b: modelB,
+    metric,
+    variable,
+    min_lat: bounds.min_lat ?? bounds.minLat,
+    max_lat: bounds.max_lat ?? bounds.maxLat,
+    min_lon: bounds.min_lon ?? bounds.minLon,
+    max_lon: bounds.max_lon ?? bounds.maxLon,
+    hour_min: hourMin,
+    hour_max: hourMax,
+  };
+  if (threshold != null) {
+    if (variable === 'wind') body.threshold_ms = threshold;
+    else                     body.threshold_mm_6h = threshold;
+  }
+
+  const response = await fetch(`${API_BASE}/compare/spatial-diff`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || `compare/spatial-diff failed with status ${response.status}`);
+  }
+  return data;
+}
+
+/**
  * Fetches a base64-encoded PNG map of inter-model disagreement for a bounding
  * box and a single forecast hour.
  *

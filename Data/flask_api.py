@@ -1651,6 +1651,130 @@ PLOT_STYLE_REGISTRY = {
 }
 
 
+def _render_metric_map_png(points, cmap, norm, cbar_label, title,
+                           cbar_ticks=None, cbar_ticklabels=None,
+                           cbar_fontsize=9):
+    """Render scattered 0.25° metric points as a Cartopy PNG, base64-encoded.
+
+    Shared by /api/spatial-metric-plot and /api/compare/spatial-diff so both
+    draw identical map furniture — only the colour mapping and title differ.
+    Callers must release their DB connection first: rendering is CPU-bound and
+    holding a pooled connection across it starves concurrent requests.
+    """
+    # ── Build 2-D grid from scattered 0.25° points ────────────────────
+    lats_set = sorted(set(round(p['lat'] * 4) / 4 for p in points))
+    lons_set = sorted(set(round(p['lon'] * 4) / 4 for p in points))
+
+    pt_lookup = {
+        (round(p['lat'] * 4) / 4, round(p['lon'] * 4) / 4): float(p['value'])
+        for p in points
+    }
+
+    lat_arr  = np.array(lats_set)
+    lon_arr  = np.array(lons_set)
+    val_grid = np.full((len(lat_arr), len(lon_arr)), np.nan)
+    for i, lat in enumerate(lats_set):
+        for j, lon in enumerate(lons_set):
+            v = pt_lookup.get((lat, lon))
+            if v is not None:
+                val_grid[i, j] = v
+    val_masked = np.ma.masked_invalid(val_grid)
+
+    # pcolormesh needs cell-edge coordinates (N+1 values per axis)
+    step      = 0.25
+    lat_edges = np.append(lat_arr - step / 2, lat_arr[-1] + step / 2)
+    lon_edges = np.append(lon_arr - step / 2, lon_arr[-1] + step / 2)
+    lon_mesh, lat_mesh = np.meshgrid(lon_edges, lat_edges)
+
+    # ── Map extent ────────────────────────────────────────────────────
+    lat_range = lat_arr.max() - lat_arr.min()
+    lon_range = lon_arr.max() - lon_arr.min()
+    pad = max(2.0, min(lat_range, lon_range) * 0.18)
+    extent = [
+        lon_arr.min() - pad, lon_arr.max() + pad,
+        lat_arr.min() - pad, lat_arr.max() + pad,
+    ]
+
+    # ── Figure (OO API — no pyplot global state; see import note) ──────
+    proj = ccrs.PlateCarree()
+    fig  = Figure(figsize=(13, 7), dpi=130)
+    FigureCanvasAgg(fig)
+    ax   = fig.add_subplot(111, projection=proj)
+    ax.set_extent(extent, crs=proj)
+
+    # Geographic features
+    ax.add_feature(cfeature.OCEAN.with_scale('50m'),
+                   facecolor='#cce4f5', zorder=0)
+    ax.add_feature(cfeature.LAND.with_scale('50m'),
+                   facecolor='#f2ede4', zorder=0)
+    ax.add_feature(cfeature.LAKES.with_scale('50m'),
+                   facecolor='#cce4f5', edgecolor='#4a7ea5', linewidth=0.4, zorder=1)
+    ax.add_feature(cfeature.RIVERS.with_scale('50m'),
+                   edgecolor='#8ab4cc', linewidth=0.3, zorder=1)
+
+    # Metric overlay
+    mesh = ax.pcolormesh(
+        lon_mesh, lat_mesh, val_masked,
+        cmap=cmap, norm=norm,
+        transform=proj, alpha=0.85, zorder=2,
+    )
+
+    # Borders, coastlines, states drawn on top of overlay
+    ax.add_feature(cfeature.STATES.with_scale('50m'),
+                   linewidth=0.35, edgecolor='#999999', zorder=3)
+    ax.add_feature(cfeature.BORDERS.with_scale('50m'),
+                   linewidth=0.65, edgecolor='#444444', zorder=3)
+    ax.add_feature(cfeature.COASTLINE.with_scale('50m'),
+                   linewidth=0.8,  edgecolor='#1a1a1a', zorder=3)
+
+    # Gridlines with degree labels
+    gl = ax.gridlines(
+        draw_labels=True, linewidth=0.4, color='gray',
+        alpha=0.55, linestyle='--',
+        x_inline=False, y_inline=False,
+    )
+    gl.top_labels   = False
+    gl.right_labels = False
+    gl.xlabel_style = {'size': 9,  'color': '#333333'}
+    gl.ylabel_style = {'size': 9,  'color': '#333333'}
+
+    # Colourbar
+    cbar = fig.colorbar(mesh, ax=ax, orientation='vertical',
+                        pad=0.025, shrink=0.82, aspect=26)
+    cbar.set_label(cbar_label, fontsize=10, labelpad=10, color='#222222')
+    if cbar_ticks is not None:
+        cbar.set_ticks(cbar_ticks)
+    if cbar_ticklabels is not None:
+        cbar.set_ticklabels(cbar_ticklabels, fontsize=cbar_fontsize)
+    cbar.ax.tick_params(labelcolor='#333333')
+
+    ax.set_title(title, fontsize=10.5, fontweight='bold', pad=10, color='#1a1a1a')
+
+    # Small watermark
+    ax.text(0.995, 0.005, 'WEAVE', transform=ax.transAxes,
+            fontsize=7, color='gray', alpha=0.55, ha='right', va='bottom')
+
+    fig.tight_layout(pad=0.4)
+
+    # ── Encode PNG → base64 ───────────────────────────────────────────
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=130, bbox_inches='tight',
+                facecolor='white', edgecolor='none')
+    buf.seek(0)
+    # No plt.close(): this Figure was never registered with pyplot, so it
+    # carries no global state to release and is freed on scope exit.
+    return base64.b64encode(buf.read()).decode('utf-8')
+
+
+VAR_LABELS = {
+    'precipitation':  'Precipitation',
+    'wind':           'Wind Speed',
+    'temperature_2m': 'Temperature (2 m)',
+    'pressure_msl':   'Mean Sea-Level Pressure',
+}
+CATEGORICAL_METRICS = {'csi', 'pod', 'far', 'brier'}
+
+
 @app.route('/api/spatial-metric-plot', methods=['POST'])
 def spatial_metric_plot():
     """
@@ -1692,114 +1816,14 @@ def spatial_metric_plot():
         if not points:
             return jsonify({'error': 'No points provided'}), 400
 
-        # ── Build 2-D grid from scattered 0.25° points ────────────────────
-        lats_set = sorted(set(round(p['lat'] * 4) / 4 for p in points))
-        lons_set = sorted(set(round(p['lon'] * 4) / 4 for p in points))
-
-        pt_lookup = {
-            (round(p['lat'] * 4) / 4, round(p['lon'] * 4) / 4): float(p['value'])
-            for p in points
-        }
-
-        lat_arr  = np.array(lats_set)
-        lon_arr  = np.array(lons_set)
-        val_grid = np.full((len(lat_arr), len(lon_arr)), np.nan)
-        for i, lat in enumerate(lats_set):
-            for j, lon in enumerate(lons_set):
-                v = pt_lookup.get((lat, lon))
-                if v is not None:
-                    val_grid[i, j] = v
-        val_masked = np.ma.masked_invalid(val_grid)
-
-        # pcolormesh needs cell-edge coordinates (N+1 values per axis)
-        step      = 0.25
-        lat_edges = np.append(lat_arr - step / 2, lat_arr[-1] + step / 2)
-        lon_edges = np.append(lon_arr - step / 2, lon_arr[-1] + step / 2)
-        lon_mesh, lat_mesh = np.meshgrid(lon_edges, lat_edges)
-
-        # ── Colourmap & norm ──────────────────────────────────────────────
         if metric not in PLOT_STYLE_REGISTRY:
             return jsonify({'error': f'No plot style for metric: {metric}'}), 400
-        style          = PLOT_STYLE_REGISTRY[metric]
-        cmap           = style['cmap']
-        norm           = style['norm']
-        cbar_label     = style['cbar_label']
-        cbar_ticks     = style['cbar_ticks']
-        cbar_ticklabels = style['cbar_ticklabels']
-        cbar_fontsize  = style['cbar_fontsize']
+        style = PLOT_STYLE_REGISTRY[metric]
 
-        # ── Map extent ────────────────────────────────────────────────────
-        lat_range = lat_arr.max() - lat_arr.min()
-        lon_range = lon_arr.max() - lon_arr.min()
-        pad = max(2.0, min(lat_range, lon_range) * 0.18)
-        extent = [
-            lon_arr.min() - pad, lon_arr.max() + pad,
-            lat_arr.min() - pad, lat_arr.max() + pad,
-        ]
-
-        # ── Figure (OO API — no pyplot global state; see import note) ──────
-        proj = ccrs.PlateCarree()
-        fig  = Figure(figsize=(13, 7), dpi=130)
-        FigureCanvasAgg(fig)
-        ax   = fig.add_subplot(111, projection=proj)
-        ax.set_extent(extent, crs=proj)
-
-        # Geographic features
-        ax.add_feature(cfeature.OCEAN.with_scale('50m'),
-                       facecolor='#cce4f5', zorder=0)
-        ax.add_feature(cfeature.LAND.with_scale('50m'),
-                       facecolor='#f2ede4', zorder=0)
-        ax.add_feature(cfeature.LAKES.with_scale('50m'),
-                       facecolor='#cce4f5', edgecolor='#4a7ea5', linewidth=0.4, zorder=1)
-        ax.add_feature(cfeature.RIVERS.with_scale('50m'),
-                       edgecolor='#8ab4cc', linewidth=0.3, zorder=1)
-
-        # Metric overlay
-        mesh = ax.pcolormesh(
-            lon_mesh, lat_mesh, val_masked,
-            cmap=cmap, norm=norm,
-            transform=proj, alpha=0.85, zorder=2,
-        )
-
-        # Borders, coastlines, states drawn on top of overlay
-        ax.add_feature(cfeature.STATES.with_scale('50m'),
-                       linewidth=0.35, edgecolor='#999999', zorder=3)
-        ax.add_feature(cfeature.BORDERS.with_scale('50m'),
-                       linewidth=0.65, edgecolor='#444444', zorder=3)
-        ax.add_feature(cfeature.COASTLINE.with_scale('50m'),
-                       linewidth=0.8,  edgecolor='#1a1a1a', zorder=3)
-
-        # Gridlines with degree labels
-        gl = ax.gridlines(
-            draw_labels=True, linewidth=0.4, color='gray',
-            alpha=0.55, linestyle='--',
-            x_inline=False, y_inline=False,
-        )
-        gl.top_labels   = False
-        gl.right_labels = False
-        gl.xlabel_style = {'size': 9,  'color': '#333333'}
-        gl.ylabel_style = {'size': 9,  'color': '#333333'}
-
-        # Colourbar
-        cbar = fig.colorbar(mesh, ax=ax, orientation='vertical',
-                            pad=0.025, shrink=0.82, aspect=26)
-        cbar.set_label(cbar_label, fontsize=10, labelpad=10, color='#222222')
-        cbar.set_ticks(cbar_ticks)
-        cbar.set_ticklabels(cbar_ticklabels, fontsize=cbar_fontsize)
-        cbar.ax.tick_params(labelcolor='#333333')
-
-        # Title
-        var_labels = {
-            'precipitation': 'Precipitation',
-            'wind':          'Wind Speed',
-            'temperature_2m':'Temperature (2 m)',
-            'pressure_msl':  'Mean Sea-Level Pressure',
-        }
-        var_label = var_labels.get(variable, variable)
-        METRIC_LABELS = {k: v['cbar_label'] for k, v in PLOT_STYLE_REGISTRY.items()}
-        metric_label = METRIC_LABELS.get(metric, metric)
-        title_line1 = f"{model}  ·  {var_label}  ·  {metric_label}"
-        CATEGORICAL_METRICS = {'csi', 'pod', 'far', 'brier'}
+        # ── Title ─────────────────────────────────────────────────────────
+        var_label    = VAR_LABELS.get(variable, variable)
+        metric_label = style['cbar_label']
+        title_line1  = f"{model}  ·  {var_label}  ·  {metric_label}"
         thr_info = ''
         if metric in CATEGORICAL_METRICS:
             if variable == 'wind':
@@ -1816,23 +1840,14 @@ def spatial_metric_plot():
             title_line2 = f"{n_hours} verified lead times  |  {len(points)} grid points"
         else:
             title_line2 = f"{len(points)} grid points{thr_info}"
-        ax.set_title(f"{title_line1}\n{title_line2}",
-                     fontsize=10.5, fontweight='bold', pad=10, color='#1a1a1a')
 
-        # Small watermark
-        ax.text(0.995, 0.005, 'WEAVE', transform=ax.transAxes,
-                fontsize=7, color='gray', alpha=0.55, ha='right', va='bottom')
-
-        fig.tight_layout(pad=0.4)
-
-        # ── Encode PNG → base64 ───────────────────────────────────────────
-        buf = io.BytesIO()
-        fig.savefig(buf, format='png', dpi=130, bbox_inches='tight',
-                    facecolor='white', edgecolor='none')
-        buf.seek(0)
-        img_b64 = base64.b64encode(buf.read()).decode('utf-8')
-        # No plt.close(): this Figure was never registered with pyplot, so it
-        # carries no global state to release and is freed on scope exit.
+        img_b64 = _render_metric_map_png(
+            points, style['cmap'], style['norm'], style['cbar_label'],
+            f"{title_line1}\n{title_line2}",
+            cbar_ticks=style['cbar_ticks'],
+            cbar_ticklabels=style['cbar_ticklabels'],
+            cbar_fontsize=style['cbar_fontsize'],
+        )
 
         print(f"✅ Plot: {metric} · {model} · {var_label} · {len(points)} pts")
         result = {'image': img_b64}
@@ -3284,6 +3299,46 @@ COMPARE_REGION_METRICS = ['ssr_agg', 'correlation', 'bias', 'mae', 'rmse',
                           'crps', 'csi', 'pod', 'far', 'brier']
 
 
+def _single_metric_points(cursor, model_name, variable, metric,
+                          min_lat, max_lat, min_lon, max_lon,
+                          hour_min, hour_max, threshold_rate):
+    """Per-cell points for one metric and one model.
+
+    Handles both families: the pairs-based metrics off the regridded tables and
+    `correlation`, which needs the ensemble path's run/variable/init lookups.
+    """
+    if metric in COMPARE_REGION_METRIC_FNS:
+        return COMPARE_REGION_METRIC_FNS[metric](
+            cursor, model_name, variable,
+            min_lat, max_lat, min_lon, max_lon,
+            hour_min, hour_max, threshold_rate=threshold_rate)
+
+    if metric != 'correlation':
+        return []
+
+    run_id = get_model_run_id(cursor, model_name)
+    if not run_id:
+        return []
+    cursor.execute(
+        "SELECT initialization_time FROM forecast_runs WHERE run_id = %s", (run_id,))
+    init_row = cursor.fetchone()
+    if not init_row:
+        return []
+    is_wind    = (variable == 'wind')
+    var_lookup = 'wind_u_10m' if is_wind else variable
+    cursor.execute(
+        "SELECT variable_id FROM variables WHERE variable_name = %s", (var_lookup,))
+    var_row = cursor.fetchone()
+    if not var_row:
+        return []
+    points, _n_hours = _compute_correlation_points(
+        cursor, run_id, var_row['variable_id'], init_row['initialization_time'],
+        min_lat, max_lat, min_lon, max_lon,
+        'wind_speed' if is_wind else 'precipitation',
+        accum_h=1 if is_wind else MODEL_ACCUM_HOURS.get(model_name, 1))
+    return points
+
+
 def _region_metric_points(cursor, model_name, variable, metrics,
                           min_lat, max_lat, min_lon, max_lon,
                           hour_min, hour_max, threshold_rate):
@@ -3374,22 +3429,11 @@ def compare_region_metrics():
     except (TypeError, ValueError):
         return jsonify({'error': 'threshold must be numeric'}), 400
 
-    obs_col    = 'wind_speed' if is_wind else 'precipitation'
-    var_lookup = 'wind_u_10m' if is_wind else variable
-    need_corr  = 'correlation' in metrics
+    need_corr = 'correlation' in metrics
 
     conn   = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
-        variable_id = None
-        if need_corr:
-            cursor.execute(
-                "SELECT variable_id FROM variables WHERE variable_name = %s", (var_lookup,))
-            var_row = cursor.fetchone()
-            if not var_row:
-                return jsonify({'error': f'Variable {var_lookup} not found'}), 404
-            variable_id = var_row['variable_id']
-
         per_model  = {}
         per_counts = {}
         n_cells    = {}
@@ -3405,18 +3449,10 @@ def compare_region_metrics():
             counts = {k: len(v) for k, v in points_by_metric.items()}
 
             if need_corr:
-                run_id = get_model_run_id(cursor, m)
-                corr_points = []
-                if run_id:
-                    cursor.execute(
-                        "SELECT initialization_time FROM forecast_runs WHERE run_id = %s",
-                        (run_id,))
-                    init_row = cursor.fetchone()
-                    if init_row:
-                        corr_points, _n_hours = _compute_correlation_points(
-                            cursor, run_id, variable_id, init_row['initialization_time'],
-                            min_lat, max_lat, min_lon, max_lon, obs_col,
-                            accum_h=1 if is_wind else MODEL_ACCUM_HOURS.get(m, 1))
+                corr_points = _single_metric_points(
+                    cursor, m, variable, 'correlation',
+                    min_lat, max_lat, min_lon, max_lon,
+                    hour_min, hour_max, threshold_rate)
                 values['correlation'] = _region_mean(corr_points)
                 counts['correlation'] = len(corr_points)
 
@@ -3462,6 +3498,164 @@ def compare_region_metrics():
         return_db_connection(conn)
 
 
+def _spatial_diff_points(pts_a, pts_b):
+    """Per-cell A − B over the cells the two models share.
+
+    Cells are keyed by a 0.25° snap — the same key the renderer and the
+    correlation path use. Plain 2-dp rounding is not enough: `correlation`
+    reports each model's *native* coordinates, which differ between models, so
+    a 2-dp key matched zero cells across models even over an identical region.
+    Returns (diff_points, n_cells_a, n_cells_b).
+    """
+    def _cell(p):
+        return (round(p['lat'] * 4) / 4, round(p['lon'] * 4) / 4)
+
+    a_by_cell = {_cell(p): float(p['value']) for p in pts_a}
+    b_by_cell = {_cell(p): float(p['value']) for p in pts_b}
+    common    = sorted(set(a_by_cell) & set(b_by_cell))
+
+    diff_points = [
+        {'lat': lat, 'lon': lon,
+         'value': round(a_by_cell[(lat, lon)] - b_by_cell[(lat, lon)], 6)}
+        for (lat, lon) in common
+    ]
+    return diff_points, len(a_by_cell), len(b_by_cell)
+
+
+@app.route('/api/compare/spatial-diff', methods=['POST'])
+def compare_spatial_diff():
+    """Per-cell difference (model A − model B) of one metric, rendered as a PNG.
+
+    Request JSON:
+        { model_a, model_b, metric, variable, min_lat, max_lat, min_lon, max_lon,
+          hour_min, hour_max, threshold_mm_6h | threshold_ms }
+    Response JSON:
+        { image, n_common, n_a, n_b, max_abs_diff, mean_diff }
+        or { error, n_a, n_b, n_common } when the two grids share no cells.
+
+    The colour scale is symmetric about 0 and derived from the largest absolute
+    difference, so red/blue always mean "A worse/better" for the metric's own
+    sense of direction — read alongside the per-model maps above it.
+    """
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({'error': 'Request body must be a JSON object'}), 400
+
+    model_a  = body.get('model_a')
+    model_b  = body.get('model_b')
+    metric   = body.get('metric', 'mae')
+    variable = body.get('variable', 'precipitation')
+    if not isinstance(model_a, str) or not isinstance(model_b, str):
+        return jsonify({'error': 'model_a and model_b are required'}), 400
+    if model_a == model_b:
+        return jsonify({'error': 'model_a and model_b must differ'}), 400
+    if _bad_token(model_a, model_b, variable):
+        return jsonify({'error': 'Invalid model or variable'}), 400
+    if metric not in COMPARE_REGION_METRICS:
+        return jsonify({'error': f'Unknown metric: {metric}. '
+                        f'Available: {COMPARE_REGION_METRICS}'}), 400
+
+    bbox, err = _parse_bbox(body)
+    if err:
+        return err
+    min_lat, max_lat = bbox['min_lat'], bbox['max_lat']
+    min_lon, max_lon = bbox['min_lon'], bbox['max_lon']
+
+    try:
+        hour_min = int(body.get('hour_min', 0))
+        hour_max = int(body.get('hour_max', 168))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'hour_min and hour_max must be numeric'}), 400
+    if hour_min >= hour_max:
+        return jsonify({'error': 'hour_min must be less than hour_max'}), 400
+
+    is_wind = (variable == 'wind')
+    try:
+        threshold_rate = _resolve_threshold_rate(body)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'threshold must be numeric'}), 400
+
+    conn   = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        pts_a = _single_metric_points(cursor, model_a, variable, metric,
+                                      min_lat, max_lat, min_lon, max_lon,
+                                      hour_min, hour_max, threshold_rate)
+        pts_b = _single_metric_points(cursor, model_b, variable, metric,
+                                      min_lat, max_lat, min_lon, max_lon,
+                                      hour_min, hour_max, threshold_rate)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        print(f"❌ Error in compare/spatial-diff: {e}")
+        return jsonify({'error': 'Internal server error'}), 500
+    finally:
+        # Release before rendering: Cartopy work is CPU-bound and would
+        # otherwise hold a pooled connection for the whole render.
+        cursor.close()
+        return_db_connection(conn)
+
+    diff_points, n_a, n_b = _spatial_diff_points(pts_a, pts_b)
+
+    if not diff_points:
+        print(f"⚠️  compare/spatial-diff: no shared cells for {model_a} vs {model_b} "
+              f"({n_a} vs {n_b} cells)")
+        return jsonify({
+            'error': (f'{model_a} and {model_b} share no grid cells for this metric, '
+                      f'region and lead-time range ({n_a} vs {n_b} '
+                      f'cells — no overlap or grid misalignment).'),
+            'n_a': n_a, 'n_b': n_b, 'n_common': 0,
+        })
+
+    diffs        = [p['value'] for p in diff_points]
+    max_abs_diff = max(abs(d) for d in diffs)
+    mean_diff    = float(np.mean(diffs))
+
+    try:
+        # Symmetric norm about 0 so equal-and-opposite differences read equally
+        # strongly. A perfectly identical pair would collapse the scale, so
+        # keep a small floor.
+        vmax = max(max_abs_diff, 1e-6)
+        norm = mcolors.Normalize(vmin=-vmax, vmax=vmax)
+        ticks = [-vmax, -vmax / 2, 0.0, vmax / 2, vmax]
+
+        metric_label = PLOT_STYLE_REGISTRY.get(metric, {}).get('cbar_label', metric)
+        var_label    = VAR_LABELS.get(variable, variable)
+        thr_info = ''
+        if metric in CATEGORICAL_METRICS:
+            thr_info = (f'  ·  thr >{round(threshold_rate, 3)} m/s' if is_wind
+                        else f'  ·  thr >{round(threshold_rate * 6, 2)} mm/6h')
+        title = (f"{model_a} − {model_b}  ·  {var_label}  ·  {metric_label}\n"
+                 f"{len(diff_points)} shared grid cells  ·  +{hour_min}–{hour_max}h"
+                 f"{thr_info}  ·  mean {mean_diff:+.4f}")
+
+        img_b64 = _render_metric_map_png(
+            diff_points,
+            plt.cm.RdBu_r,
+            norm,
+            f'{metric} difference  ({model_a} − {model_b})',
+            title,
+            cbar_ticks=ticks,
+            cbar_ticklabels=[f'{v:+.3g}' if v else '0' for v in ticks],
+            cbar_fontsize=8.5,
+        )
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        print(f"❌ Error rendering compare/spatial-diff: {e}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+    print(f"✅ compare/spatial-diff: {metric} {model_a}−{model_b}, "
+          f"{len(diff_points)} shared cells (of {n_a}/{n_b}), "
+          f"mean {mean_diff:+.4f}")
+    return jsonify({
+        'image':        img_b64,
+        'n_common':     len(diff_points),
+        'n_a':          n_a,
+        'n_b':          n_b,
+        'max_abs_diff': round(max_abs_diff, 6),
+        'mean_diff':    round(mean_diff, 6),
+    })
+
+
 if __name__ == '__main__':
     print("🚀 Flask API Starting...")
     print("=" * 60)
@@ -3482,6 +3676,7 @@ if __name__ == '__main__':
     print("  • POST /api/categorical-metrics        {model, variable, lat, lon, threshold_mm_6h, hour_min, hour_max}")
     print("  • POST /api/region-categorical-metrics {model, variable, min_lat, max_lat, min_lon, max_lon, threshold_mm_6h, hour_min, hour_max}")
     print("  • POST /api/compare/region-metrics     {models, variable, min_lat, max_lat, min_lon, max_lon, hour_min, hour_max, metrics}")
+    print("  • POST /api/compare/spatial-diff       {model_a, model_b, metric, variable, min_lat, max_lat, min_lon, max_lon, hour_min, hour_max}")
     print("=" * 60)
     print("✅ Optimized with connection pooling")
     print("🌬️  Wind: speed = √(u² + v²), direction = atan2(u,v)")
