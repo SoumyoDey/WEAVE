@@ -9,6 +9,7 @@ import {
   fetchComparisonTimeseries, fetchComparisonSkill, fetchSpatialAgreement,
   fetchComparisonCategorical, fetchComparisonRegionMetrics,
 } from '../api/comparisonApi';
+import { fetchSpatialMetric, fetchSpatialMetricPlot } from '../api/spatialApi';
 import { t } from '../theme';
 
 const MODEL_COLORS = { AIFS: '#3498db', GEFS: '#e74c3c', UKMO: '#2ecc71' };
@@ -69,6 +70,16 @@ const REGION_METRIC_GROUPS = [
     ],
   },
 ];
+
+// Metrics offered by the per-model spatial small-multiples. Same suite as the
+// region bars; the categorical four need the threshold passed through.
+const SPATIAL_MAP_METRICS = REGION_METRIC_GROUPS.flatMap(g =>
+  g.metrics.map(m => ({
+    key: m.key,
+    label: m.label,
+    requiresThreshold: g.id === 'categorical',
+  })),
+);
 
 // Categorical scores pooled over lead times (compare/categorical `summaries`).
 const CAT_SUMMARY_METRICS = [
@@ -479,6 +490,10 @@ export function ComparisonTab({
   const [regionLoading, setRegionLoading] = useState(false);
   const [regionError, setRegionError] = useState('');
   const regionSeqRef = useRef(0);   // drops stale region-metric responses
+  const [mapMetric, setMapMetric] = useState('mae');
+  const [modelMaps, setModelMaps] = useState({});     // model -> {loading, url, error}
+  const [mapsRunning, setMapsRunning] = useState(false);
+  const mapsSeqRef = useRef(0);     // drops stale small-multiple responses
   const [catData, setCatData] = useState(null);
   const [catLoading, setCatLoading] = useState(false);
   const [catError, setCatError] = useState('');
@@ -505,6 +520,7 @@ export function ComparisonTab({
     setRegionThreshold(def);
     setCatData(null);
     setRegionData(null);
+    setModelMaps({});
     setHasRunRegion(false);   // back to the "click Run" prompt, not an empty section
   }, [selectedVariable]);
 
@@ -597,6 +613,74 @@ export function ComparisonTab({
     } finally {
       if (seq === regionSeqRef.current) setRegionLoading(false);
     }
+  };
+
+  // Per-model spatial maps of one metric — the same Cartopy render the Analysis
+  // tab uses, looped over the selected models. PLOT_STYLE_REGISTRY pins each
+  // metric's colour norm, so the resulting maps already share a scale.
+  const handleRunModelMaps = async () => {
+    if (!hasRegion || selectedModels.length === 0) return;
+    const seq = ++mapsSeqRef.current;
+    setMapsRunning(true);
+    setModelMaps(Object.fromEntries(
+      selectedModels.map(m => [m, { loading: true, url: null, error: null }]),
+    ));
+
+    const def    = SPATIAL_MAP_METRICS.find(x => x.key === mapMetric);
+    const bounds = selectedRegion.bounds;
+    const thr    = def?.requiresThreshold ? Number(regionThreshold) : undefined;
+    const isWind = selectedVariable === 'wind';
+
+    const computeOne = async (m) => {
+      try {
+        const pts = await fetchSpatialMetric({
+          metric: mapMetric, modelName: m, variable: selectedVariable,
+          threshold: thr, hourMin, hourMax, bounds,
+        });
+        const plot = await fetchSpatialMetricPlot({
+          metric: mapMetric, model: m, variable: selectedVariable,
+          ...(thr != null && (isWind ? { threshold_ms: thr } : { threshold_mm_6h: thr })),
+          points: pts.points || [], n_hours: pts.n_hours,
+        });
+        if (seq !== mapsSeqRef.current) return;
+        setModelMaps(prev => ({
+          ...prev,
+          [m]: {
+            loading: false,
+            url:   plot.image ? 'data:image/png;base64,' + plot.image : null,
+            error: plot.error || ((pts.points?.length || 0) === 0
+              ? 'No forecast/observation matches in this region' : null),
+          },
+        }));
+      } catch (err) {
+        if (seq !== mapsSeqRef.current) return;
+        setModelMaps(prev => ({
+          ...prev,
+          [m]: { loading: false, url: null, error: err.message },
+        }));
+      }
+    };
+
+    // Same 4-worker pool as the Analysis tab's Compute-All-Maps: each map is a
+    // DB query plus a Cartopy render, so firing them all at once can exhaust
+    // the connection pool.
+    const CONCURRENCY = 4;
+    let next = 0;
+    const worker = async () => {
+      while (next < selectedModels.length) await computeOne(selectedModels[next++]);
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, selectedModels.length) }, worker),
+    );
+    if (seq === mapsSeqRef.current) setMapsRunning(false);
+  };
+
+  const downloadMap = (name, url) => {
+    if (!url) return;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `WEAVE-${name}-${mapMetric}-${selectedVariable}.png`;
+    a.click();
   };
 
   const handleRunCategorical = async () => {
@@ -1710,6 +1794,108 @@ export function ComparisonTab({
                     {catData.bbox && <> · neighbourhood bbox [{catData.bbox.join(', ')}]</>}
                   </div>
                 )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Spatial maps by model (region mode) ── */}
+        {isRegionMode && hasRegion && hasRunRegion && (
+          <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '24px', marginBottom: '28px' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', marginBottom: '14px', flexWrap: 'wrap' }}>
+              <h3 style={{ ...SECTION_TITLE, margin: 0 }}>Spatial maps by model</h3>
+              <span style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.25)', letterSpacing: '0.04em' }}>
+                Each metric uses a fixed colour scale, so the maps are directly comparable
+              </span>
+            </div>
+
+            {/* Controls */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: t.fontSize.sm }}>Metric</span>
+                <select
+                  value={mapMetric}
+                  onChange={e => setMapMetric(e.target.value)}
+                  aria-label="Spatial metric"
+                  style={{ ...INPUT, width: 'auto', cursor: 'pointer' }}
+                >
+                  {SPATIAL_MAP_METRICS.map(({ key, label }) => (
+                    <option key={key} value={key} style={{ background: '#1a2535' }}>{label}</option>
+                  ))}
+                </select>
+              </div>
+
+              <button
+                onClick={handleRunModelMaps}
+                disabled={mapsRunning}
+                style={{
+                  background: mapsRunning ? 'rgba(255,255,255,0.08)' : '#9b59b6',
+                  color: mapsRunning ? 'rgba(255,255,255,0.25)' : 'white',
+                  border: 'none', borderRadius: t.radius, padding: '7px 18px',
+                  fontSize: t.fontSize.base, fontWeight: '700',
+                  cursor: mapsRunning ? 'not-allowed' : 'pointer',
+                  display: 'flex', alignItems: 'center', gap: '6px', transition: 'background 0.15s',
+                }}
+              >
+                {mapsRunning ? '⏳ Computing…' : '▶ Compute maps'}
+              </button>
+
+              <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.sm }}>
+                One map per selected model
+                {SPATIAL_MAP_METRICS.find(x => x.key === mapMetric)?.requiresThreshold
+                  && ` · threshold > ${regionThreshold} ${thresholdUnit}`}
+              </span>
+            </div>
+
+            {Object.keys(modelMaps).length === 0 ? (
+              <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.base, padding: '16px 0', textAlign: 'center' }}>
+                Pick a metric and click <strong style={{ color: 'rgba(255,255,255,0.5)' }}>▶ Compute maps</strong>.
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(420px, 100%), 1fr))', gap: '16px' }}>
+                {selectedModels.map(m => {
+                  const st = modelMaps[m];
+                  return (
+                    <div key={m} style={{
+                      background: 'rgba(255,255,255,0.04)', borderRadius: '10px',
+                      border: '1px solid rgba(255,255,255,0.08)',
+                      borderLeft: `3px solid ${MODEL_COLORS[m]}`, overflow: 'hidden',
+                    }}>
+                      <div style={{
+                        padding: '8px 12px', borderBottom: '1px solid rgba(255,255,255,0.06)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      }}>
+                        <span style={{ fontSize: t.fontSize.sm, fontWeight: '700', color: MODEL_COLORS[m] }}>{m}</span>
+                        {st?.url && (
+                          <button
+                            onClick={() => downloadMap(m, st.url)}
+                            title="Download PNG"
+                            style={{
+                              fontSize: t.fontSize.base, color: 'rgba(255,255,255,0.45)',
+                              background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)',
+                              borderRadius: '5px', cursor: 'pointer', padding: '2px 7px', lineHeight: 1,
+                            }}
+                          >⬇</button>
+                        )}
+                      </div>
+                      <div style={{ minHeight: '200px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        {st?.loading && (
+                          <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.sm }}>
+                            <div style={{ fontSize: t.fontSize.statLg, marginBottom: '8px' }}>⏳</div>Computing…
+                          </div>
+                        )}
+                        {st && !st.loading && st.error && (
+                          <div style={{ color: '#e74c3c', fontSize: t.fontSize.xs, padding: '16px', textAlign: 'center' }}>
+                            ⚠️ {st.error}
+                          </div>
+                        )}
+                        {st && !st.loading && !st.error && st.url && (
+                          <img src={st.url} alt={`${m} ${mapMetric} map`} style={{ width: '100%', display: 'block' }} />
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

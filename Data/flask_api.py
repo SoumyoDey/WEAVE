@@ -1802,8 +1802,14 @@ def spatial_metric_plot():
         CATEGORICAL_METRICS = {'csi', 'pod', 'far', 'brier'}
         thr_info = ''
         if metric in CATEGORICAL_METRICS:
-            thr_mm6h = body.get('threshold_mm_6h', 25)
-            thr_info = f'  ·  thr >{thr_mm6h} mm/6h'
+            if variable == 'wind':
+                # Wind thresholds are m/s. Callers that only send the
+                # threshold_mm_6h key still carry an m/s value for wind, so
+                # fall back to it rather than labelling the map "mm/6h".
+                thr = body.get('threshold_ms', body.get('threshold_mm_6h', 10))
+                thr_info = f'  ·  thr >{thr} m/s'
+            else:
+                thr_info = f"  ·  thr >{body.get('threshold_mm_6h', 25)} mm/6h"
         if metric == 'ssr':
             title_line2 = f"Forecast +{hour}h  |  {len(points)} grid points"
         elif metric == 'correlation':
