@@ -5,9 +5,9 @@
 > Every "confirmed" claim below is backed by a query against the live
 > `weave_weather` DB or a live API call, quoted inline.
 >
-> **Status:** findings **1, 2, 3 and 4 are fixed** across every endpoint
-> (see "Fix status" at the bottom), plus a spread-pooling bug found while
-> fixing them. Findings 5–11 remain open.
+> **Status:** findings **1–10 are fixed** across every endpoint (see "Fix
+> status" at the bottom), plus a spread-pooling bug (3b) found while fixing
+> them. Finding 11 (architecture) is partly addressed.
 
 ---
 
@@ -377,3 +377,72 @@ axis settles at 0.8 mm/h for the same point).
 
 The remaining approximation is confined to the aggregate mean/std path
 (`regridded_forecast`), which has no members to difference.
+
+
+---
+
+## Fix status — findings 5-10 (2026-08-12)
+
+**5. FSS is now a real neighbourhood score.** `_fss_components` /
+`_fractions_skill_score` compute event fractions in a `window`x`window` box
+around each grid point (summed-area table, so cost is independent of window
+size), then `1 - sum((f-o)^2) / sum(f^2+o^2)` over the shared cells. Cells
+absent from the grid are excluded from the neighbourhood rather than counted as
+dry. Multi-case aggregation sums numerators and denominators instead of
+averaging per-hour scores.
+
+The behaviour that was missing is now present and pinned by tests: two fields
+with identical event frequency but disjoint placement score 0.0 (they scored a
+perfect 1.0 before), and a one-cell displacement scores better as the window
+grows. Live, UKMO over a 48 h window: `fss = 0.0` at window 3 and `0.879` at
+window 7.
+
+**6. Map cell size is measured, not assumed.** `_grid_step` takes the median gap
+between adjacent coordinates (robust to a missing cell), so the 0.5-degree data
+is drawn at 0.5 degrees. Every metric map was previously shifted 0.125 degrees
+north-east with a half-width final row/column.
+
+**7. SSR is reported as spread/error.** It was computed as a variance ratio but
+labelled with the conventional sigma/RMSE bands, mis-stating the wings — a
+variance ratio of 0.5 is a spread/error ratio of 0.71, which is not "severe".
+All five SSR sites now go through `_ssr_from_variances`, which returns
+`sqrt(mean_var / mean_sq_err)`. The colourbar bands and UI thresholds were
+already the sigma/RMSE ones and are unchanged. Verified arithmetically against
+the live API: spread `0.0248` / error `0.0252` reports `0.9969`.
+
+**8. Region metrics pool over samples.** `_region_pooled_metrics` computes the
+region value from every (cell, lead time) sample: CSI/POD/FAR from summed
+contingency counts, RMSE as `sqrt(mean(err^2))`, and so on — the same estimator
+point mode uses. The unweighted per-cell mean is still returned as `cell_means`
+because that is what the corresponding *map* averages to. The two genuinely
+differ: for AIFS, pooled RMSE is `1.329` against a per-cell mean of `0.750`
+(Jensen), and pooled CSI `0.208` against `0.157`. `correlation` has no pooled
+form and stays a cell mean, which is now stated in the code.
+
+**9. The predictive distribution is centralised and censored at zero.**
+`_gaussian_crps` and `_exceedance_probability` are the single home for the
+assumption, used by all five CRPS/Brier sites. For a non-negative variable the
+Gaussian is now censored at zero (`X = max(0, Y)`), which is the physically
+admissible reading. The correction is exact rather than ad hoc: for `y >= 0`,
+
+    CRPS_gauss - CRPS_censored = integral over x<0 of Phi((x-mu)/sigma)^2 dx
+
+because the censored CDF is 0 below zero and the two agree above it. That
+integral is evaluated by 24-point Gauss-Legendre quadrature. Exceedance
+probabilities for a threshold `>= 0` are unchanged by censoring, so Brier is
+identical either way; CRPS picks up the correction, which is negligible when
+`mu >> sigma` and material when `mu ~ 0` — exactly the light-precipitation
+cells the finding was about.
+
+This does not make the distribution *correct* for precipitation, which is also
+zero-inflated and right-skewed. The exact fix is an empirical/ensemble CRPS,
+which needs per-member data the aggregate tables do not carry.
+
+**10. Finite-ensemble spread correction applied.** `_spread_inflation` applies
+`sqrt((M+1)/M)` to the spread inside every SSR. Member counts are resolved once
+per process (`_ensemble_size`, a 2-6 s `COUNT(DISTINCT)`, cached) — AIFS 50,
+GEFS 30, UKMO 18, i.e. 1.0%, 1.6% and 2.7% on the spread. Without it the
+cross-model SSR ranking carried a ~1.7% relative bias between the largest and
+smallest ensemble.
+
+81 backend tests pass (was 64).

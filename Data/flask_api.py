@@ -237,16 +237,238 @@ def _parse_bbox(args):
             'min_lon': min_lon, 'max_lon': max_lon}, None
 
 
-# SSR = spread²/error² explodes toward a near-zero error: a single tiny
-# denominator can yield values in the thousands that blow out the colourbar
-# (its BoundaryNorm tops out at 10) and skew the mean-SSR calibration verdict.
-# Cap to that same ceiling and reject non-finite / negative results.
+# ── Fractions Skill Score ─────────────────────────────────────────────────────
+def _neighbourhood_fractions(binary_by_cell, window):
+    """Fraction of event cells in a `window`x`window` box around each cell.
+
+    `binary_by_cell` maps (lat, lon) -> 0.0/1.0 on a regular grid. Returns
+    {(lat, lon): fraction}. Cells missing from the grid are excluded from both
+    the numerator and the denominator, so a partly-observed neighbourhood is
+    scored on what it actually contains rather than being treated as dry.
+    """
+    if not binary_by_cell:
+        return {}
+    lats = sorted({lat for lat, _ in binary_by_cell})
+    lons = sorted({lon for _, lon in binary_by_cell})
+    lat_step = _grid_step(lats)
+    lon_step = _grid_step(lons)
+    lat_idx = {lat: i for i, lat in enumerate(lats)}
+    lon_idx = {lon: j for j, lon in enumerate(lons)}
+
+    grid = np.full((len(lats), len(lons)), np.nan)
+    for (lat, lon), v in binary_by_cell.items():
+        grid[lat_idx[lat], lon_idx[lon]] = v
+
+    present = ~np.isnan(grid)
+    filled  = np.where(present, grid, 0.0)
+
+    # Box sum via a summed-area table — O(cells) regardless of window size.
+    def _box_sums(arr):
+        pad = np.pad(arr, ((1, 0), (1, 0)), mode='constant')
+        sat = pad.cumsum(axis=0).cumsum(axis=1)
+        r = window // 2
+        n_lat, n_lon = arr.shape
+        out = np.empty_like(arr, dtype=float)
+        for i in range(n_lat):
+            i0, i1 = max(0, i - r), min(n_lat - 1, i + r)
+            for j in range(n_lon):
+                j0, j1 = max(0, j - r), min(n_lon - 1, j + r)
+                out[i, j] = (sat[i1 + 1, j1 + 1] - sat[i0, j1 + 1]
+                             - sat[i1 + 1, j0] + sat[i0, j0])
+        return out
+
+    event_sums = _box_sums(filled)
+    count_sums = _box_sums(present.astype(float))
+
+    return {
+        (lats[i], lons[j]): float(event_sums[i, j] / count_sums[i, j])
+        for i in range(len(lats)) for j in range(len(lons))
+        if present[i, j] and count_sums[i, j] > 0
+    }
+
+
+def _fss_components(fcst_binary_by_cell, obs_binary_by_cell, window):
+    """(numerator, denominator, n_cells) behind the FSS over shared cells.
+
+    Returned separately so several cases (lead times) can be aggregated the
+    standard way — sum the numerators and denominators, then form the ratio
+    once — rather than averaging per-case FSS values.
+    """
+    if not fcst_binary_by_cell or not obs_binary_by_cell:
+        return 0.0, 0.0, 0
+    f_frac = _neighbourhood_fractions(fcst_binary_by_cell, window)
+    o_frac = _neighbourhood_fractions(obs_binary_by_cell, window)
+    shared = set(f_frac) & set(o_frac)
+    if not shared:
+        return 0.0, 0.0, 0
+    num = sum((f_frac[c] - o_frac[c]) ** 2 for c in shared)
+    den = sum(f_frac[c] ** 2 + o_frac[c] ** 2 for c in shared)
+    return num, den, len(shared)
+
+
+def _fss_from_components(num, den):
+    """FSS from accumulated components; None when the reference is 0 (no events
+    in either field), which is undefined rather than a perfect 1.0."""
+    if den is None or den <= 1e-10:
+        return None
+    return round(1.0 - num / den, 4)
+
+
+def _fractions_skill_score(fcst_binary_by_cell, obs_binary_by_cell, window):
+    """Roberts & Lean (2008) FSS over a sliding neighbourhood.
+
+        FSS = 1 - sum((f - o)^2) / sum(f^2 + o^2)
+
+    where f and o are the event fractions in a window x window box around each
+    grid point. This is what makes FSS a *placement* score: a single domain-wide
+    fraction (what this used to compute) collapses to a comparison of overall
+    event frequency, so two fields raining over equal areas in completely
+    different places scored a perfect 1.0.
+
+    window=1 degenerates to the grid-point score.
+    """
+    num, den, n = _fss_components(fcst_binary_by_cell, obs_binary_by_cell, window)
+    return _fss_from_components(num, den) if n else None
+
+
+# ── Predictive distribution for CRPS / Brier ──────────────────────────────────
+# Only the ensemble mean and spread are stored on the aggregate tables, so a
+# Gaussian predictive distribution is assumed. That is fine for wind speed, but
+# a poor fit for precipitation: it is non-negative, zero-inflated and
+# right-skewed, and a plain Gaussian puts real probability mass below zero —
+# worst exactly where mu is near 0, i.e. most cells.
+#
+# Both quantities below therefore use the Gaussian CENSORED at zero (X = max(0, Y)),
+# which is the physically admissible reading for a non-negative variable.
+#
+# For a threshold >= 0 the exceedance probability is unchanged by censoring —
+# it only moves mass that was already below the threshold — so Brier is
+# identical either way. CRPS is not: for y >= 0,
+#
+#     CRPS_gauss - CRPS_censored = integral over x<0 of Phi((x-mu)/sigma)^2 dx
+#
+# because the censored CDF is 0 below zero while the Gaussian one is not, and
+# the two agree everywhere above zero. That correction is what _censor_correction
+# evaluates. It is negligible when mu >> sigma and material when mu ~ 0.
+#
+# The exact fix would be an empirical/ensemble CRPS, which needs per-member data
+# the aggregate tables do not carry.
+_CRPS_GL_NODES, _CRPS_GL_WEIGHTS = np.polynomial.legendre.leggauss(24)
+
+
+def _censor_correction(mean, std):
+    """Integral of Phi((x-mu)/sigma)^2 over x < 0, by Gauss-Legendre quadrature."""
+    lo = mean - 8.0 * std
+    if lo >= 0.0:
+        return 0.0                      # no meaningful mass below zero
+    half = -lo / 2.0
+    mid  = lo / 2.0
+    xs   = mid + half * _CRPS_GL_NODES
+    vals = scipy.stats.norm.cdf((xs - mean) / std) ** 2
+    return float(half * np.dot(_CRPS_GL_WEIGHTS, vals))
+
+
+def _gaussian_crps(mean, std, obs, censor_at_zero=True):
+    """CRPS of the predictive distribution against one observation.
+
+    Closed form for the Gaussian: sigma * [z(2*Phi(z)-1) + 2*phi(z) - 1/sqrt(pi)]
+    with z = (obs - mu)/sigma, then the censoring correction above.
+    A degenerate spread reduces to the absolute error, which is the correct
+    limit (CRPS of a point forecast is |mu - y|).
+    """
+    if std is None or std <= 1e-10:
+        return abs(mean - obs)
+    z    = (obs - mean) / std
+    crps = float(std * (z * (2.0 * scipy.stats.norm.cdf(z) - 1.0)
+                        + 2.0 * scipy.stats.norm.pdf(z)
+                        - 1.0 / math.sqrt(math.pi)))
+    if censor_at_zero:
+        crps -= _censor_correction(mean, std)
+    return max(0.0, crps)
+
+
+def _exceedance_probability(mean, std, threshold):
+    """P(X > threshold) under the same predictive distribution.
+
+    Unchanged by censoring for a non-negative threshold, so this is the plain
+    Gaussian upper tail; a degenerate spread collapses to a 0/1 indicator.
+    """
+    if std is None or std <= 1e-10:
+        return 1.0 if mean > threshold else 0.0
+    return float(1.0 - scipy.stats.norm.cdf(threshold, loc=mean, scale=std))
+
+
+# ── Spread-skill ratio ────────────────────────────────────────────────────────
+# SSR is reported in the conventional form: ensemble spread / error (sigma over
+# RMSE), NOT the variance ratio. Both are 1.0 when perfectly calibrated, but the
+# interpretation bands the colourbar and the UI use — <0.5 severely
+# underdispersive, 0.8-1.2 calibrated, >2.0 severely overdispersive — are the
+# standard bands for sigma/RMSE. Reporting a variance ratio against those labels
+# mis-stated the wings: a variance ratio of 0.5 is a spread/error ratio of 0.71,
+# which is not "severe".
+#
+# The ratio still explodes toward a near-zero error, so cap it at the top of the
+# colourbar and reject non-finite / negative results.
 SSR_CAP = 10.0
 
 def _clamp_ssr(value):
     if value is None or not math.isfinite(value) or value < 0:
         return None
     return round(min(value, SSR_CAP), 4)
+
+
+def _ssr_from_variances(mean_var, mean_sq_err, n_members=None):
+    """Spread-skill ratio from a mean variance and a mean squared error.
+
+    Returns sqrt(mean_var / mean_sq_err) — the RMS spread over the RMSE, which
+    is the aggregate form of sigma/RMSE. `n_members` applies the finite-ensemble
+    correction (see _spread_inflation).
+    """
+    if mean_sq_err is None or mean_sq_err <= 1e-10 or mean_var is None or mean_var < 0:
+        return None
+    inflation = _spread_inflation(n_members)
+    return _clamp_ssr(math.sqrt(mean_var / mean_sq_err) * inflation)
+
+
+# A finite ensemble under-estimates the forecast variance; the standard
+# correction is Var * (M+1)/M, i.e. spread * sqrt((M+1)/M). Member counts differ
+# substantially here (AIFS 50, GEFS 30, UKMO 18 → 1.0%, 1.6%, 2.7% on the
+# spread), so leaving it out biases exactly the cross-model SSR ranking this
+# tool exists to show.
+def _spread_inflation(n_members):
+    if not n_members or n_members < 2:
+        return 1.0
+    return math.sqrt((n_members + 1.0) / n_members)
+
+
+# Member counts are a COUNT(DISTINCT) over a very large table (2-6 s), but they
+# are fixed for a run, so resolve once per process.
+_ENSEMBLE_SIZE_CACHE = {}
+
+
+def _ensemble_size(cursor, model_name):
+    """Number of ensemble members in a model's latest run, or None if unknown."""
+    if model_name in _ENSEMBLE_SIZE_CACHE:
+        return _ENSEMBLE_SIZE_CACHE[model_name]
+    n = None
+    try:
+        cursor.execute("""
+            SELECT COUNT(DISTINCT fd.ensemble_member) AS n
+            FROM forecast_data fd
+            JOIN forecast_runs fr ON fr.run_id = fd.run_id
+            JOIN models mo ON mo.model_id = fr.model_id AND mo.model_name = %s
+            WHERE fd.ensemble_member IS NOT NULL
+              AND fd.forecast_hour = (SELECT MIN(forecast_hour)
+                                      FROM forecast_data WHERE run_id = fr.run_id)
+        """, (model_name,))
+        row = cursor.fetchone()
+        if row:
+            n = int(row['n'] if isinstance(row, dict) else row[0])
+    except Exception as e:
+        print(f"⚠️  ensemble size lookup failed for {model_name}: {e}")
+    n = n if (n and n > 1) else None
+    _ENSEMBLE_SIZE_CACHE[model_name] = n
+    return n
 
 
 def get_model_run_id(cursor, model_name):
@@ -374,8 +596,9 @@ def _compute_ssr_points(cursor, run_id, variable_id, init_time, hour,
     total since init, GEFS alternates 3 h and 6 h buckets. Wind is already a
     speed via _ensemble_speed_rows and passes through unchanged.
     """
-    is_wind  = (obs_col == 'wind_speed')
-    lookback = 0 if is_wind else _precip_lookback_hours(model_name)
+    is_wind   = (obs_col == 'wind_speed')
+    lookback  = 0 if is_wind else _precip_lookback_hours(model_name)
+    n_members = _ensemble_size(cursor, model_name) if model_name else None
 
     raw_by_cell = {}
     for h in ({hour, hour - lookback} if lookback else {hour}):
@@ -421,7 +644,7 @@ def _compute_ssr_points(cursor, run_id, variable_id, init_time, hour,
             continue
         matched += 1
         err_sq = (mean - obs) ** 2
-        ssr    = _clamp_ssr(std ** 2 / err_sq) if err_sq > 1e-10 else None
+        ssr    = _ssr_from_variances(std ** 2, err_sq, n_members)
         if ssr is not None:
             points.append({'lat': lat, 'lon': lon, 'value': ssr})
     # Diagnose silent grid misalignment (quarter-degree key match to sparse obs).
@@ -723,14 +946,7 @@ def _compute_crps_points_rf(cursor, model_name, variable,
         for _, mr, sr, orr in entries:
             if sr is None:
                 continue          # spread not recoverable for this record
-            if sr > 1e-10:
-                z    = (orr - mr) / sr
-                crps = sr * (z * (2 * scipy.stats.norm.cdf(z) - 1)
-                             + 2 * scipy.stats.norm.pdf(z)
-                             - 1.0 / np.sqrt(np.pi))
-            else:
-                crps = abs(mr - orr)
-            crps_vals.append(max(0.0, crps))
+            crps_vals.append(_gaussian_crps(mr, sr, orr))
         if not crps_vals:
             continue
         points.append({'lat': lat, 'lon': lon, 'value': round(float(np.mean(crps_vals)), 4)})
@@ -819,12 +1035,8 @@ def _compute_brier_points_rf(cursor, model_name, variable,
         for _, mr, sr, orr in entries:
             if sr is None:
                 continue          # spread not recoverable for this record
-            is_obs = float(orr > threshold_rate)
-            if sr > 1e-10:
-                p_event = float(1.0 - scipy.stats.norm.cdf(threshold_rate,
-                                                             loc=mr, scale=sr))
-            else:
-                p_event = 1.0 if mr > threshold_rate else 0.0
+            is_obs  = float(orr > threshold_rate)
+            p_event = _exceedance_probability(mr, sr, threshold_rate)
             bs_vals.append((p_event - is_obs) ** 2)
         if not bs_vals:
             continue
@@ -953,6 +1165,7 @@ def _compute_ssr_agg_points_rf(cursor, model_name, variable,
         pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
                                               min_lat, max_lat, min_lon, max_lon,
                                               hour_min, hour_max)
+    n_members = _ensemble_size(cursor, model_name) if cursor is not None else None
     points = []
     for (lat, lon), entries in pairs.items():
         # Only records whose spread is available can contribute to a spread ratio.
@@ -962,7 +1175,7 @@ def _compute_ssr_agg_points_rf(cursor, model_name, variable,
         mean_var    = float(np.mean([sr ** 2 for _, _, sr, _   in entries]))
         mean_sq_err = float(np.mean([(mr - orr) ** 2 for _, mr, _, orr in entries]))
         if mean_sq_err > 1e-10:
-            ssr = _clamp_ssr(mean_var / mean_sq_err)
+            ssr = _ssr_from_variances(mean_var, mean_sq_err, n_members)
             if ssr is not None:
                 points.append({'lat': lat, 'lon': lon, 'value': ssr})
     return points
@@ -1475,7 +1688,7 @@ def get_spread_skill():
             spread    = math.sqrt(spread_sq)
             error     = abs(ens_mean - obs)
             error_sq  = error ** 2
-            ssr       = _clamp_ssr(spread_sq / error_sq) if error_sq > 1e-10 else None
+            ssr       = _ssr_from_variances(spread_sq, error_sq, n)
 
             results.append({
                 'hour':      hour,
@@ -1691,6 +1904,16 @@ PLOT_STYLE_REGISTRY = {
 }
 
 
+def _grid_step(sorted_coords, default=0.25):
+    """Cell size of a coordinate axis, taken as the median gap between adjacent
+    values. Robust to a missing cell in the middle, which a min() would not be.
+    """
+    gaps = [b - a for a, b in zip(sorted_coords, sorted_coords[1:]) if b > a]
+    if not gaps:
+        return default
+    return float(np.median(gaps))
+
+
 def _render_metric_map_png(points, cmap, norm, cbar_label, title,
                            cbar_ticks=None, cbar_ticklabels=None,
                            cbar_fontsize=9):
@@ -1720,10 +1943,14 @@ def _render_metric_map_png(points, cmap, norm, cbar_label, title,
                 val_grid[i, j] = v
     val_masked = np.ma.masked_invalid(val_grid)
 
-    # pcolormesh needs cell-edge coordinates (N+1 values per axis)
-    step      = 0.25
-    lat_edges = np.append(lat_arr - step / 2, lat_arr[-1] + step / 2)
-    lon_edges = np.append(lon_arr - step / 2, lon_arr[-1] + step / 2)
+    # pcolormesh needs cell-edge coordinates (N+1 values per axis). The step is
+    # measured from the data, not assumed: the regridded tables are on a 0.5°
+    # grid, and hard-coding 0.25 drew every cell a quarter-degree north-east of
+    # its true centre with the final row/column at half width.
+    lat_step  = _grid_step(lats_set)
+    lon_step  = _grid_step(lons_set)
+    lat_edges = np.append(lat_arr - lat_step / 2, lat_arr[-1] + lat_step / 2)
+    lon_edges = np.append(lon_arr - lon_step / 2, lon_arr[-1] + lon_step / 2)
     lon_mesh, lat_mesh = np.meshgrid(lon_edges, lat_edges)
 
     # ── Map extent ────────────────────────────────────────────────────
@@ -2287,6 +2514,9 @@ def compare_skill():
             return jsonify({'models': {}, 'obs_hours': [],
                             'obs_warning': 'No forecast data found for selected parameters.'})
 
+        # Member counts for the finite-ensemble spread correction (cached).
+        n_members_of = {m: _ensemble_size(cursor, m) for m in rates_of}
+
         # ------------------------------------------------------------------
         # 3. Observations at the same cell, averaged over each record's period
         # ------------------------------------------------------------------
@@ -2345,16 +2575,9 @@ def compare_skill():
                 if std_rate is None:
                     ssr = crps = None
                 else:
-                    ssr = _clamp_ssr(std_rate ** 2 / err_sq) if err_sq > 1e-10 else None
-                    if std_rate > 1e-10:
-                        z    = (obs_rate - mean_rate) / std_rate
-                        crps = float(std_rate * (
-                            z * (2.0 * scipy.stats.norm.cdf(z) - 1.0)
-                            + 2.0 * scipy.stats.norm.pdf(z)
-                            - 1.0 / math.sqrt(math.pi)
-                        ))
-                    else:
-                        crps = abs_err
+                    ssr  = _ssr_from_variances(std_rate ** 2, err_sq,
+                                               n_members_of.get(m_name))
+                    crps = _gaussian_crps(mean_rate, std_rate, obs_rate)
 
                 model_data.setdefault(m_name, []).append({
                     'hour':      hour,
@@ -2401,7 +2624,8 @@ def compare_skill():
                 mean_var    = sum(s ** 2 for s, _ in paired) / len(paired)
                 mean_sq_err = sum(e ** 2 for _, e in paired) / len(paired)
                 if mean_sq_err > 1e-10:
-                    mean_ssr = _clamp_ssr(mean_var / mean_sq_err)
+                    mean_ssr = _ssr_from_variances(mean_var, mean_sq_err,
+                                                  n_members_of.get(m_name))
 
             # Spread-skill correlation (spread vs |error|)
             corr_val = None
@@ -2869,14 +3093,8 @@ def categorical_metrics_endpoint():
             # isn't recoverable for every record of a cumulative model, so those
             # records sit out of the Brier score but still count in the
             # contingency table (which only needs the mean).
-            if std_rate is None:
-                p_event = None
-            elif std_rate > 1e-10:
-                p_event = float(1.0 - scipy.stats.norm.cdf(
-                    threshold_rate, loc=mean_rate, scale=std_rate
-                ))
-            else:
-                p_event = 1.0 if mean_rate > threshold_rate else 0.0
+            p_event = (None if std_rate is None
+                       else _exceedance_probability(mean_rate, std_rate, threshold_rate))
 
             if p_event is not None:
                 brier_sq_sum += (p_event - float(is_obs)) ** 2
@@ -2994,6 +3212,8 @@ def region_categorical_metrics_endpoint():
         max_lon         = float(body.get('max_lon', -60.0))
         hour_min        = int(body.get('hour_min', 0))
         hour_max        = int(body.get('hour_max', 168))
+        # Neighbourhood width for FSS, in grid cells (odd values centre cleanly).
+        fss_window      = max(1, min(int(body.get('fss_window', 3)), 21))
     except (TypeError, ValueError):
         return jsonify({'error': 'min_lat, max_lat, min_lon, max_lon, hour_min, hour_max must be numeric'}), 400
 
@@ -3088,14 +3308,15 @@ def region_categorical_metrics_endpoint():
         total_brier_sum = 0.0
         total_n = 0
         total_n_brier = 0
+        total_fss_num = total_fss_den = 0.0
         obs_hours_set = set()
 
         for hour in sorted(hours_dict.keys()):
             h_hits = h_misses = h_fa = h_cn = 0
             h_brier_sum = 0.0
             h_n_brier   = 0
-            h_fcst_binary = []
-            h_obs_binary  = []
+            h_fcst_binary = {}
+            h_obs_binary  = {}
             h_n_pts = 0
 
             for (lat_k, lon_k), (mean_rate, std_rate, period) in hours_dict[hour]:
@@ -3123,20 +3344,14 @@ def region_categorical_metrics_endpoint():
                 # Needs the spread, which isn't recoverable for every record
                 # of a cumulative model; those sit out of the Brier score but
                 # still count in the contingency table.
-                if std_rate is None:
-                    p_event = None
-                elif std_rate > 1e-10:
-                    p_event = float(1.0 - scipy.stats.norm.cdf(
-                        threshold_rate, loc=mean_rate, scale=std_rate
-                    ))
-                else:
-                    p_event = 1.0 if mean_rate > threshold_rate else 0.0
+                p_event = (None if std_rate is None
+                           else _exceedance_probability(mean_rate, std_rate, threshold_rate))
 
                 if p_event is not None:
                     h_brier_sum += (p_event - float(is_obs)) ** 2
                     h_n_brier   += 1
-                h_fcst_binary.append(float(is_fcst))
-                h_obs_binary.append(float(is_obs))
+                h_fcst_binary[(lat_k, lon_k)] = float(is_fcst)
+                h_obs_binary[(lat_k, lon_k)]  = float(is_obs)
                 h_n_pts += 1
 
             if h_n_pts == 0:
@@ -3153,18 +3368,15 @@ def region_categorical_metrics_endpoint():
             h_fbi = round(h_n_fcst_yes / h_n_obs_yes, 4) if h_n_obs_yes > 0 else None
             h_bs  = round(h_brier_sum / h_n_brier, 6) if h_n_brier else None
 
-            # FSS on domain-average fractions. Roberts & Lean (2008) reference
-            # is MSE_ref = mean(f²) + mean(o²); with a single domain-wide
-            # fraction that reduces to f² + o² (the previous 0.5 factor was
-            # non-standard). NOTE: this is a domain-aggregate fractions score,
-            # not a true neighbourhood FSS. When neither field has any event
-            # (f = o = 0) the score is mathematically undefined (0/0) — report
-            # None rather than a misleading 1.0 ("perfect").
-            fcst_frac = sum(h_fcst_binary) / h_n_pts
-            obs_frac  = sum(h_obs_binary)  / h_n_pts
-            mse_f   = (fcst_frac - obs_frac) ** 2
-            mse_ref = fcst_frac**2 + obs_frac**2
-            fss_hour = round(1.0 - mse_f / mse_ref, 4) if mse_ref > 1e-10 else None
+            # Roberts & Lean FSS over a sliding neighbourhood — a placement
+            # score. The domain event fractions are still reported alongside
+            # because they are useful context (frequency bias), but they are no
+            # longer what FSS is computed from.
+            fcst_frac = sum(h_fcst_binary.values()) / h_n_pts
+            obs_frac  = sum(h_obs_binary.values())  / h_n_pts
+            h_fss_num, h_fss_den, _n = _fss_components(
+                h_fcst_binary, h_obs_binary, fss_window)
+            fss_hour = _fss_from_components(h_fss_num, h_fss_den)
 
             hours_data.append({
                 'hour': hour, 'n_pts': h_n_pts,
@@ -3183,6 +3395,8 @@ def region_categorical_metrics_endpoint():
             total_brier_sum += h_brier_sum
             total_n         += h_n_pts
             total_n_brier   += h_n_brier
+            total_fss_num   += h_fss_num
+            total_fss_den   += h_fss_den
 
         # ── 4. Summary statistics ─────────────────────────────────────────────
         n_obs_yes   = total_hits + total_misses
@@ -3195,8 +3409,9 @@ def region_categorical_metrics_endpoint():
         csi = round(total_hits / n_denom_csi,  4) if n_denom_csi > 0 else None
         bs  = round(total_brier_sum / total_n_brier, 6) if total_n_brier > 0 else None
 
-        valid_fss_vals = [h['fss'] for h in hours_data if h.get('fss') is not None]
-        mean_fss = round(sum(valid_fss_vals) / len(valid_fss_vals), 4) if valid_fss_vals else None
+        # Aggregate FSS from summed components across lead times, not as a mean
+        # of per-hour scores (which would weight a sparse hour like a dense one).
+        mean_fss = _fss_from_components(total_fss_num, total_fss_den)
 
         if csi is not None and pod is not None and far is not None:
             if mean_fss is not None:
@@ -3256,15 +3471,17 @@ def region_categorical_metrics_endpoint():
 
 def _categorical_hours_for_box(cursor, model_name, fcst_var, obs_var, obs_src,
                                min_lat, max_lat, min_lon, max_lon,
-                               hour_min, hour_max, threshold_rate):
+                               hour_min, hour_max, threshold_rate, fss_window=3):
     """Per-hour CSI/POD/FAR/FSS over a bbox for a single model.
 
     Returns a list of {hour, csi, pod, far, fss, n_pts, hits, misses,
     false_alarms, correct_neg}; [] if no data/obs. The raw contingency counts
     let callers pool across lead times (see _categorical_summary) instead of
     averaging ratios, which would over-weight sparse hours.
-    Shares the domain-fractions FSS convention (MSE_ref = f²+o², undefined when
-    both fractions are 0) with region_categorical_metrics_endpoint.
+
+    FSS is the Roberts & Lean sliding-neighbourhood score over `fss_window`
+    grid cells (see _fractions_skill_score), so it measures spatial placement
+    rather than overall event frequency.
     """
     init_time_val = _latest_init_time(cursor, model_name)
     if init_time_val is None:
@@ -3332,7 +3549,7 @@ def _categorical_hours_for_box(cursor, model_name, fcst_var, obs_var, obs_src,
     out = []
     for hour in sorted(hours_dict.keys()):
         h_hits = h_misses = h_fa = h_cn = 0
-        h_fcst_binary, h_obs_binary, h_n_pts = [], [], 0
+        h_fcst_binary, h_obs_binary, h_n_pts = {}, {}, 0
         for (lat_k, lon_k), (mean_rate, _std_rate, period) in hours_dict[hour]:
             vt = init_time_val + timedelta(hours=hour)
             # Obs averaged over the same period the forecast record covers.
@@ -3350,8 +3567,8 @@ def _categorical_hours_for_box(cursor, model_name, fcst_var, obs_var, obs_src,
             elif is_fcst and not is_obs:  h_fa     += 1
             elif not is_fcst and is_obs:  h_misses += 1
             else:                         h_cn     += 1
-            h_fcst_binary.append(float(is_fcst))
-            h_obs_binary.append(float(is_obs))
+            h_fcst_binary[(lat_k, lon_k)] = float(is_fcst)
+            h_obs_binary[(lat_k, lon_k)]  = float(is_obs)
             h_n_pts += 1
 
         if h_n_pts == 0:
@@ -3362,14 +3579,14 @@ def _categorical_hours_for_box(cursor, model_name, fcst_var, obs_var, obs_src,
         csi = round(h_hits / n_denom_csi, 4) if n_denom_csi > 0 else None
         pod = round(h_hits / n_obs_yes,   4) if n_obs_yes   > 0 else None
         far = round(h_fa   / n_fcst_yes,  4) if n_fcst_yes  > 0 else None
-        f   = sum(h_fcst_binary) / h_n_pts
-        o   = sum(h_obs_binary)  / h_n_pts
-        mse_ref = f * f + o * o
-        fss = round(1.0 - ((f - o) ** 2) / mse_ref, 4) if mse_ref > 1e-10 else None
+        fss_num, fss_den, _n_fss = _fss_components(h_fcst_binary, h_obs_binary, fss_window)
+        fss = _fss_from_components(fss_num, fss_den)
         out.append({'hour': hour, 'n_pts': h_n_pts,
                     'csi': csi, 'pod': pod, 'far': far, 'fss': fss,
                     'hits': h_hits, 'misses': h_misses,
-                    'false_alarms': h_fa, 'correct_neg': h_cn})
+                    'false_alarms': h_fa, 'correct_neg': h_cn,
+                    # kept so _categorical_summary can aggregate FSS properly
+                    'fss_num': fss_num, 'fss_den': fss_den})
     return out
 
 
@@ -3393,15 +3610,17 @@ def _categorical_summary(hours_list):
     obs_yes  = hits + misses
     fcst_yes = hits + fa
 
-    f = fcst_yes / n_pts if n_pts else 0.0
-    o = obs_yes  / n_pts if n_pts else 0.0
-    mse_ref = f * f + o * o
+    # FSS aggregates by summing each lead time's numerator and denominator, the
+    # standard multi-case form. Pooling the event fractions instead would throw
+    # away the neighbourhood structure the per-hour score was built on.
+    fss_num = sum(h.get('fss_num') or 0.0 for h in hours_list)
+    fss_den = sum(h.get('fss_den') or 0.0 for h in hours_list)
 
     return {
         'csi':     round(hits / csi_den,  4) if csi_den  > 0 else None,
         'pod':     round(hits / obs_yes,  4) if obs_yes  > 0 else None,
         'far':     round(fa   / fcst_yes, 4) if fcst_yes > 0 else None,
-        'fss':     round(1.0 - ((f - o) ** 2) / mse_ref, 4) if mse_ref > 1e-10 else None,
+        'fss':     _fss_from_components(fss_num, fss_den),
         'hits':    hits,
         'misses':  misses,
         'false_alarms': fa,
@@ -3471,7 +3690,7 @@ def compare_categorical():
             per_model[m] = _categorical_hours_for_box(
                 cursor, m, fcst_var, obs_var, obs_src,
                 min_lat, max_lat, min_lon, max_lon,
-                hour_min, hour_max, threshold_rate)
+                hour_min, hour_max, threshold_rate, fss_window)
             summary = _categorical_summary(per_model[m])
             if summary is not None:
                 # Brier is probabilistic (Gaussian exceedance from mean/spread),
@@ -3579,11 +3798,12 @@ def _region_metric_points(cursor, model_name, variable, metrics,
     Every metric here derives from the same fcst↔obs match, so the two queries
     behind it run once per model instead of once per (model, metric) — nine
     metrics × three models would otherwise be 27 round trips per request.
-    Returns (points_by_metric, n_matched_cells).
+    Returns (points_by_metric, pairs, n_matched_cells) — the raw pairs come back
+    too so the caller can pool over samples rather than average per-cell scores.
     """
     wanted = [m for m in metrics if m in COMPARE_REGION_METRIC_FNS]
     if not wanted:
-        return {}, 0
+        return {}, {}, 0
     pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
                                           min_lat, max_lat, min_lon, max_lon,
                                           hour_min, hour_max)
@@ -3593,14 +3813,80 @@ def _region_metric_points(cursor, model_name, variable, metrics,
             cursor, model_name, variable,
             min_lat, max_lat, min_lon, max_lon,
             hour_min, hour_max, threshold_rate=threshold_rate, pairs=pairs)
-    return out, len(pairs)
+    return out, pairs, len(pairs)
 
 
 def _region_mean(points):
-    """Region-mean scalar over a metric's per-cell values (None if empty)."""
+    """Unweighted mean of a metric's per-cell values (None if empty).
+
+    This is what the MAP shows averaged, so it stays available — but it is not
+    what the region headline reports; see _region_pooled_metrics.
+    """
     if not points:
         return None
     return round(float(np.mean([p['value'] for p in points])), 4)
+
+
+def _region_pooled_metrics(pairs, metrics, threshold_rate, n_members=None):
+    """Region metrics pooled over every (cell, lead time) sample.
+
+    Averaging per-cell scores gives a cell with two samples the same weight as
+    one with fifty, and for ratio metrics (CSI/POD/FAR) and RMSE the mean of the
+    per-cell values isn't the region score at all — a mean of ratios is not the
+    ratio of the pooled counts, and the mean of per-cell RMSE is not the domain
+    RMSE because the square root isn't linear. Pooling matches the estimator
+    point mode already uses (_categorical_summary).
+
+    `correlation` is absent here on purpose: it is a per-cell correlation across
+    lead times, so it has no pooled form and stays a mean over cells.
+    """
+    errs, sq_errs, abs_errs = [], [], []
+    variances, crps_vals, brier_vals = [], [], []
+    hits = misses = false_alarms = 0
+
+    for entries in pairs.values():
+        for _hour, mean_rate, std_rate, obs_rate in entries:
+            err = mean_rate - obs_rate
+            errs.append(err)
+            abs_errs.append(abs(err))
+            sq_errs.append(err ** 2)
+
+            if std_rate is not None:
+                variances.append(std_rate ** 2)
+                crps_vals.append(_gaussian_crps(mean_rate, std_rate, obs_rate))
+                brier_vals.append(
+                    (_exceedance_probability(mean_rate, std_rate, threshold_rate)
+                     - float(obs_rate > threshold_rate)) ** 2)
+
+            is_fcst = mean_rate > threshold_rate
+            is_obs  = obs_rate  > threshold_rate
+            if   is_fcst and     is_obs: hits         += 1
+            elif is_fcst and not is_obs: false_alarms += 1
+            elif not is_fcst and is_obs: misses       += 1
+
+    if not errs:
+        return {}
+
+    n            = len(errs)
+    csi_den      = hits + misses + false_alarms
+    obs_yes      = hits + misses
+    fcst_yes     = hits + false_alarms
+    mean_sq_err  = sum(sq_errs) / n
+
+    out = {
+        'bias':  round(sum(errs) / n, 4),
+        'mae':   round(sum(abs_errs) / n, 4),
+        'rmse':  round(math.sqrt(mean_sq_err), 4),
+        'crps':  round(sum(crps_vals) / len(crps_vals), 4) if crps_vals else None,
+        'brier': round(sum(brier_vals) / len(brier_vals), 6) if brier_vals else None,
+        'csi':   round(hits / csi_den,  4) if csi_den  else None,
+        'pod':   round(hits / obs_yes,  4) if obs_yes  else None,
+        'far':   round(false_alarms / fcst_yes, 4) if fcst_yes else None,
+        'ssr_agg': (_ssr_from_variances(sum(variances) / len(variances),
+                                        mean_sq_err, n_members)
+                    if variances else None),
+    }
+    return {k: v for k, v in out.items() if k in metrics}
 
 
 @app.route('/api/compare/region-metrics', methods=['POST'])
@@ -3666,27 +3952,39 @@ def compare_region_metrics():
     conn   = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
-        per_model  = {}
-        per_counts = {}
-        n_cells    = {}
-        warnings   = {}
+        per_model     = {}
+        per_counts    = {}
+        per_cell_mean = {}
+        n_cells       = {}
+        warnings      = {}
 
         for m in models:
-            points_by_metric, matched = _region_metric_points(
+            points_by_metric, pairs, matched = _region_metric_points(
                 cursor, m, variable, metrics,
                 min_lat, max_lat, min_lon, max_lon,
                 hour_min, hour_max, threshold_rate)
 
-            values = {k: _region_mean(v) for k, v in points_by_metric.items()}
-            counts = {k: len(v) for k, v in points_by_metric.items()}
+            # Headline values are pooled over every (cell, lead time) sample —
+            # the same estimator point mode uses. The per-cell mean is what the
+            # MAP of this metric averages to, so it is reported alongside.
+            values = _region_pooled_metrics(pairs, metrics, threshold_rate,
+                                            _ensemble_size(cursor, m))
+            cell_means = {k: _region_mean(v) for k, v in points_by_metric.items()}
+            counts     = {k: len(v) for k, v in points_by_metric.items()}
+            # Metrics with no pooled form (correlation) fall back to the cell mean.
+            for k, v in cell_means.items():
+                values.setdefault(k, v)
 
             if need_corr:
                 corr_points = _single_metric_points(
                     cursor, m, variable, 'correlation',
                     min_lat, max_lat, min_lon, max_lon,
                     hour_min, hour_max, threshold_rate)
-                values['correlation'] = _region_mean(corr_points)
-                counts['correlation'] = len(corr_points)
+                # Correlation is a per-cell correlation across lead times, so
+                # the cell mean IS its region value — there's no pooled form.
+                values['correlation']     = _region_mean(corr_points)
+                cell_means['correlation'] = values['correlation']
+                counts['correlation']     = len(corr_points)
 
             # Distinguish "grids don't line up" from "genuinely no data": the
             # fcst↔obs join is rounded-key equality, so a misaligned grid gives
@@ -3698,6 +3996,7 @@ def compare_region_metrics():
 
             per_model[m]  = {k: values.get(k) for k in metrics}
             per_counts[m] = {k: counts.get(k, 0) for k in metrics}
+            per_cell_mean[m] = {k: cell_means.get(k) for k in metrics}
             n_cells[m]    = matched
 
         threshold_info = ({'threshold_ms': threshold_rate, 'unit': 'm/s'} if is_wind
@@ -3711,6 +4010,8 @@ def compare_region_metrics():
 
         return jsonify({
             'models':         per_model,
+            # Same metrics averaged per cell — what the corresponding MAP shows.
+            'cell_means':     per_cell_mean,
             'n_points':       per_counts,
             'n_cells':        n_cells,
             'metrics':        metrics,
