@@ -1,5 +1,10 @@
 # Plan — Comparison Tab: Point + Region model-comparison analytics
 
+> **Status 2026-08-12: all five increments implemented and verified live**
+> (precipitation + wind) on `p0-reliability` — commits `b2cfa57`, `62cba8e`,
+> `b5bb0bd`, `7bb87cd`, `2d15edf`. Backend suite 46 passed. Not pushed.
+> Deviations from the spec are noted inline below.
+>
 > Feature plan/spec. Self-contained; executable in a fresh session.
 > Companion to `SYSTEM_DESIGN_PLAN.md`. Written 2026-07-28.
 > Target branch: `p0-reliability` (PR #2). Backend `Data/flask_api.py`,
@@ -69,6 +74,12 @@ precip-regression check), and committed to `p0-reliability`.
   return a per-model `summary` for CSI/POD/FAR/FSS (+ optional Brier). Additive,
   backward-compatible.
 - **Exit:** point-mode values match Analysis point mode for wind + precip.
+  *Done — shipped as a sibling `summaries` key so `models` keeps its per-hour
+  list shape. Note the exit criterion needs restating: Analysis point SSR comes
+  from `/api/spread-skill` (native ensemble members, 0.5° radius) while
+  Comparison point SSR comes from `/api/compare/skill` (regridded mean/std,
+  ±0.26° box). The two legitimately differ and always have; what was verified is
+  that the charts render exactly what `/api/compare/skill` returns.*
 
 ### Increment 3 — Region aggregate comparison *(new backend, medium risk)*
 - **New `POST /api/compare/region-metrics`**: loop `models`; for each metric run
@@ -120,6 +131,10 @@ precip-regression check), and committed to `p0-reliability`.
 3. **Grid alignment for diffs & region aggregates** reuses the existing rounded-
    key match; reuse the match-rate logging and, if the match rate is ~0, surface
    a "grid misalignment / no overlap" message instead of a blank/zero map.
+   *Amended in Inc 5: the diff must key on a **0.25° snap**, not 2-dp rounding.
+   `correlation` reports each model's native coordinates, so a 2-dp key matched
+   0 of 197/176 cells for AIFS vs UKMO over an identical region; snapping (the
+   key the renderer already uses) matches 175.*
 4. **Shared color scale for small-multiples:** most metrics already use fixed
    per-metric norms in `PLOT_STYLE_REGISTRY`, so per-model maps are directly
    comparable; no extra work. Diff maps use a symmetric diverging norm computed
