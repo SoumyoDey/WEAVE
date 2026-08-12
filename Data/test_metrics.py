@@ -46,6 +46,107 @@ class TestClampSSR:
         assert api._clamp_ssr(None) is None
 
 
+class TestSSRConvention:
+    """SSR is reported as spread/error (sigma over RMSE), which is what the
+    colourbar bands and the UI wording describe."""
+
+    def test_perfect_calibration_is_one(self):
+        assert api._ssr_from_variances(4.0, 4.0) == 1.0
+
+    def test_is_the_ratio_of_roots_not_of_variances(self):
+        # sigma^2 = 1, err^2 = 4  ->  sigma/err = 0.5, not the variance ratio 0.25
+        assert api._ssr_from_variances(1.0, 4.0) == 0.5
+
+    def test_none_when_error_is_degenerate(self):
+        assert api._ssr_from_variances(1.0, 0.0) is None
+
+    def test_capped_at_the_colourbar_ceiling(self):
+        assert api._ssr_from_variances(1e6, 1e-6) == 10.0
+
+    def test_ensemble_correction_inflates_spread(self):
+        # 18 members -> sqrt(19/18) = 1.0274 on the spread
+        assert api._spread_inflation(18) == pytest.approx(math.sqrt(19 / 18))
+        assert api._spread_inflation(50) == pytest.approx(math.sqrt(51 / 50))
+        assert api._spread_inflation(None) == 1.0
+        assert api._spread_inflation(1) == 1.0
+
+    def test_correction_is_applied_to_the_ratio(self):
+        plain     = api._ssr_from_variances(1.0, 1.0)
+        corrected = api._ssr_from_variances(1.0, 1.0, n_members=18)
+        assert plain == 1.0
+        assert corrected == round(math.sqrt(19 / 18), 4)
+
+    def test_smaller_ensembles_get_a_larger_correction(self):
+        """The whole point: without this, an 18-member model looks less
+        dispersive than a 50-member one purely because of ensemble size."""
+        assert api._spread_inflation(18) > api._spread_inflation(50) > 1.0
+
+
+class TestNeighbourhoodFSS:
+    """FSS must measure spatial PLACEMENT. The previous implementation used a
+    single domain-wide fraction, which only compared how much area each field
+    rained over — these tests pin the difference."""
+
+    @staticmethod
+    def _row(values, lat=36.0, lon0=-80.0, step=0.5):
+        """One row of grid cells from a list of 0/1 values."""
+        return {(lat, round(lon0 + i * step, 2)): float(v)
+                for i, v in enumerate(values)}
+
+    def test_perfect_overlap_is_one(self):
+        f = self._row([0, 1, 1, 0, 0])
+        assert api._fractions_skill_score(f, dict(f), window=1) == 1.0
+
+    def test_displaced_events_are_not_perfect(self):
+        """Equal event counts, completely different places. The old
+        domain-fraction score returned 1.0 here; a real FSS must not."""
+        f = self._row([1, 1, 0, 0, 0, 0])
+        o = self._row([0, 0, 0, 0, 1, 1])
+        assert api._fractions_skill_score(f, o, window=1) == 0.0
+
+    def test_larger_neighbourhood_forgives_small_displacement(self):
+        """The defining behaviour of FSS: a near miss scores better as the
+        neighbourhood grows."""
+        f = self._row([0, 1, 0, 0, 0, 0, 0])
+        o = self._row([0, 0, 1, 0, 0, 0, 0])       # one cell away
+        narrow = api._fractions_skill_score(f, o, window=1)
+        wide   = api._fractions_skill_score(f, o, window=5)
+        assert narrow == 0.0
+        assert wide > narrow
+
+    def test_none_when_neither_field_has_an_event(self):
+        f = self._row([0, 0, 0])
+        assert api._fractions_skill_score(f, dict(f), window=3) is None
+
+    def test_frequency_agreement_alone_does_not_score_well(self):
+        """Two fields with identical event frequency but disjoint placement —
+        the exact case the old implementation scored as perfect."""
+        f = self._row([1, 0, 1, 0, 1, 0, 0, 0])
+        o = self._row([0, 0, 0, 0, 0, 1, 1, 1])
+        assert api._fractions_skill_score(f, o, window=1) < 0.5
+
+    def test_fractions_ignore_missing_cells(self):
+        """A cell absent from the grid is excluded from the neighbourhood
+        rather than counted as dry."""
+        cells = {(36.0, -80.0): 1.0, (36.0, -79.5): 1.0}   # -79.0 absent
+        fr = api._neighbourhood_fractions(cells, window=3)
+        assert fr[(36.0, -80.0)] == 1.0
+        assert fr[(36.0, -79.5)] == 1.0
+
+
+class TestGridStep:
+    def test_median_gap(self):
+        assert api._grid_step([25.0, 25.5, 26.0, 26.5]) == 0.5
+
+    def test_survives_a_missing_cell(self):
+        # a gap of 1.0 in the middle must not become the cell size
+        assert api._grid_step([25.0, 25.5, 26.5, 27.0]) == 0.5
+
+    def test_falls_back_when_indeterminate(self):
+        assert api._grid_step([25.0]) == 0.25
+        assert api._grid_step([]) == 0.25
+
+
 class TestValidMember:
     @pytest.mark.parametrize("m", ["mean", "std", "0", "5", "49"])
     def test_valid(self, m):
@@ -98,10 +199,12 @@ def test_rmse(patch_pairs):
 
 def test_ssr_agg(patch_pairs):
     patch_pairs(PAIRS)
-    # mean(sigma^2) = 1 ; mean(err^2) = (1 + 4) / 2 = 2.5 ; SSR = 0.4
+    # mean(sigma^2) = 1 ; mean(err^2) = (1 + 4) / 2 = 2.5
+    # SSR is the RMS spread over the RMSE, i.e. sqrt(1 / 2.5) = 0.6325 —
+    # NOT the variance ratio 0.4 (see _ssr_from_variances).
     assert _single_value(
         api._compute_ssr_agg_points_rf(None, "AIFS", "precipitation", 0, 1, 0, 1)
-    ) == 0.4
+    ) == round(math.sqrt(0.4), 4)
 
 
 def test_ssr_agg_is_capped(patch_pairs):
@@ -348,7 +451,7 @@ class TestRegionMetrics:
         calls = []
         monkeypatch.setattr(api, "_fetch_fcst_obs_pairs_spatial",
                             lambda *a, **k: (calls.append(a), PAIRS)[1])
-        points, n_cells = api._region_metric_points(
+        points, _pairs, n_cells = api._region_metric_points(
             None, "AIFS", "precipitation",
             ["bias", "mae", "rmse", "correlation"],
             0, 1, 0, 1, 0, 24, threshold_rate=1.5)
@@ -363,7 +466,7 @@ class TestRegionMetrics:
     def test_threshold_reaches_categorical_metrics(self, monkeypatch):
         monkeypatch.setattr(api, "_fetch_fcst_obs_pairs_spatial",
                             lambda *a, **k: CAT_PAIRS)
-        points, _ = api._region_metric_points(
+        points, _pairs, _n = api._region_metric_points(
             None, "AIFS", "precipitation", ["csi", "pod", "far"],
             0, 1, 0, 1, 0, 24, threshold_rate=1.5)
         assert api._region_mean(points["csi"]) == round(1 / 3, 4)
@@ -377,7 +480,7 @@ class TestRegionMetrics:
             (36.0, -79.5): [(6, 2.0, 1.0, 1.0)],                       # bias +1
             (36.5, -79.5): [(6, 4.0, 1.0, 1.0), (12, 4.0, 1.0, 1.0)],  # bias +3
         })
-        points, n_cells = api._region_metric_points(
+        points, _pairs, n_cells = api._region_metric_points(
             None, "AIFS", "precipitation", ["bias"],
             0, 1, 0, 1, 0, 24, threshold_rate=1.5)
         assert n_cells == 2
@@ -388,7 +491,7 @@ class TestRegionMetrics:
                             lambda *a, **k: pytest.fail("should not query"))
         assert api._region_metric_points(
             None, "AIFS", "precipitation", ["correlation"],
-            0, 1, 0, 1, 0, 24, threshold_rate=1.5) == ({}, 0)
+            0, 1, 0, 1, 0, 24, threshold_rate=1.5) == ({}, {}, 0)
 
 
 # ── Spatial difference (compare/spatial-diff) ─────────────────────────────────
@@ -464,12 +567,24 @@ class TestCategoricalSummary:
         assert s["far"] == round(1 / (9 + 1), 4)
         assert s["n_pts"] == 22 and s["n_hours"] == 2
 
-    def test_fss_uses_pooled_fractions(self):
+    def test_fss_aggregates_components_not_scores(self):
+        """FSS over several lead times sums numerators and denominators, the
+        standard multi-case form — it is not the mean of per-hour FSS."""
+        hours = [
+            {"hour": 6,  "n_pts": 4, "hits": 1, "misses": 1,
+             "false_alarms": 0, "correct_neg": 2, "fss_num": 0.5, "fss_den": 2.5},
+            {"hour": 12, "n_pts": 4, "hits": 1, "misses": 0,
+             "false_alarms": 1, "correct_neg": 2, "fss_num": 1.5, "fss_den": 2.5},
+        ]
+        # 1 - (0.5 + 1.5) / (2.5 + 2.5) = 0.6
+        # (the mean of the per-hour scores 0.8 and 0.4 is also 0.6 here only
+        #  because the denominators happen to match)
+        assert api._categorical_summary(hours)["fss"] == 0.6
+
+    def test_fss_none_without_components(self):
         hours = [{"hour": 6, "n_pts": 4, "hits": 1, "misses": 1,
                   "false_alarms": 0, "correct_neg": 2}]
-        # f = (1+0)/4 = 0.25, o = (1+1)/4 = 0.5
-        # FSS = 1 - (0.25-0.5)^2 / (0.25^2 + 0.5^2) = 1 - 0.0625/0.3125 = 0.8
-        assert api._categorical_summary(hours)["fss"] == 0.8
+        assert api._categorical_summary(hours)["fss"] is None
 
     def test_fss_none_when_no_events(self):
         hours = [{"hour": 6, "n_pts": 4, "hits": 0, "misses": 0,

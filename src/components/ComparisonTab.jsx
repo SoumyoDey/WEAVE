@@ -1195,7 +1195,7 @@ export function ComparisonTab({
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', marginBottom: '14px', flexWrap: 'wrap' }}>
               <h3 style={{ ...SECTION_TITLE, margin: 0 }}>Region metric comparison</h3>
               <span style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.25)', letterSpacing: '0.04em' }}>
-                Region mean of the per-grid-cell metric · +{hourMin}h–{hourMax}h · {yAxisUnit} except SSR / correlation / categorical
+                Pooled over every grid cell × lead time · +{hourMin}h–{hourMax}h · {yAxisUnit} except SSR / correlation / categorical
               </span>
             </div>
 
@@ -1263,6 +1263,11 @@ export function ComparisonTab({
                               {group.label}
                               {group.id === 'categorical' && ` (> ${regionThreshold} ${thresholdUnit})`}
                             </span>
+                            {group.id === 'categorical' && (
+                              <span style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.3)' }}>
+                                pooled from hit / miss / false-alarm counts, not averaged per cell
+                              </span>
+                            )}
                             <span style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.3)' }}>{group.hint}</span>
                           </div>
                           <div style={SMALL_GRID}>
