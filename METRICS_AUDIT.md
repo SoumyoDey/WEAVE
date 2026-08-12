@@ -5,9 +5,9 @@
 > Every "confirmed" claim below is backed by a query against the live
 > `weave_weather` DB or a live API call, quoted inline.
 >
-> **Status:** findings **1, 2, 3 and 4 are fixed** (see "Fix status" at the
-> bottom). Findings 5–11 remain open. Three Analysis-tab endpoints still carry
-> the old divisor and are listed there too.
+> **Status:** findings **1, 2, 3 and 4 are fixed** across every endpoint
+> (see "Fix status" at the bottom), plus a spread-pooling bug found while
+> fixing them. Findings 5–11 remain open.
 
 ---
 
@@ -18,6 +18,7 @@
 | 1 | AIFS precipitation is **cumulative from init**, treated as a 6-hour bucket | Critical | Confirmed |
 | 2 | GEFS precipitation uses **interleaved 3 h / 6 h buckets**, divided by a fixed 3 | Critical | Confirmed |
 | 3 | Point mode returns **each lead time up to 4×** at off-grid points | High | Confirmed |
+| 3b | `/api/spread-skill` pooled ~24 cells into the "ensemble" (`n_members` 1199 for a 50-member run), so its spread was largely spatial variance | High | Confirmed |
 | 4 | `mean_ssr` averages per-case **ratios**, inflated by the clamp | High | Confirmed |
 | 5 | FSS uses a single domain-wide fraction — measures frequency, not placement | High | Confirmed |
 | 6 | Maps drawn with `step = 0.25` on a **0.5° grid** → 0.125° offset | Medium | Confirmed |
@@ -335,15 +336,44 @@ those three metrics use a non-random subset for AIFS. Deterministic metrics
 per-member in `forecast_data` (50 AIFS members are there) and take the spread of
 the increments.
 
-### Still on the old divisor
+### Analysis-tab endpoints — also converted
 
-These Analysis-tab endpoints were not converted and still divide by a fixed
-`MODEL_ACCUM_HOURS`, so their AIFS/GEFS precipitation numbers remain wrong:
+`GET /api/spread-skill`, `POST /api/categorical-metrics` and
+`POST /api/region-categorical-metrics` now use the same semantics layer. No
+fixed divisor remains anywhere in the codebase, and the dead
+`_fetch_ens_obs_pairs_spatial` / `_ens_pairs` helpers (which still carried the
+old convention) were deleted.
 
-- `GET  /api/spread-skill` — member-level, so it could compute the AIFS
-  increment spread *exactly*; the best place to fix the spread problem above.
-- `POST /api/categorical-metrics`
-- `POST /api/region-categorical-metrics`
+**`/api/spread-skill` got an exact spread, and a second bug fixed.** It pooled
+every grid cell within the search radius into one member list — a 50-member
+AIFS ensemble was reporting `n_members: 1199`, roughly 24 cells x 50 members —
+so its "ensemble spread" was mostly *spatial* variance, which inflated SSR. It
+now picks the cell nearest the clicked point, reads that cell's members, and
+matches observations centred on the same cell.
 
-`_fetch_ens_obs_pairs_spatial` / `_ens_pairs` also still contain the old logic
-but are dead code (no live callers) and are candidates for deletion.
+Because that path has per-member data, AIFS is differenced **per member**, which
+is exact: the spread of the differenced members is the true spread of the
+increment, with no variance-subtraction approximation and no dropped records.
+This is the fix recommended above, now applied.
+
+Effect at (36.0 N, 75.5 W), AIFS precipitation:
+
+| | before | after |
+|---|---|---|
+| `n_members` | 1199 | 49–50 |
+| spread +6h | 0.0290 | 0.0248 |
+| SSR +6h | 1.8126 | 0.9740 |
+| SSR +12h | 1.5580 | 1.2612 |
+
+**`/api/point-timeseries` (Cone of Uncertainty) got the same treatment.** It
+previously aggregated in SQL (`AVG`/`STDDEV`/percentiles) and then scaled the
+result, which described the running total rather than the amount falling in
+each period — and half-converting it (differenced mean, undifferenced spread)
+produced a visibly wrong cone: a near-zero mean under a band inherited from the
+cumulative spread, pushing the y-axis to 2.2 mm/h. It now de-accumulates each
+member first and builds mean / std / min / max / percentiles from the
+differenced members, so the whole distribution is internally consistent (the
+axis settles at 0.8 mm/h for the same point).
+
+The remaining approximation is confined to the aggregate mean/std path
+(`regridded_forecast`), which has no members to difference.
