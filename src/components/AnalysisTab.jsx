@@ -99,6 +99,10 @@ export function AnalysisTab({
 
   // ── Region categorical state ────────────────────────────────────────────────
   const [catMode,        setCatMode]        = useState('point');  // 'point' | 'region'
+  // FSS neighbourhood width in grid cells. FSS only means something relative to
+  // a spatial scale — "skilful at 2.5 degrees" — so this is a parameter of the
+  // score, not a display option. Odd values centre cleanly on a cell.
+  const [fssWindow,      setFssWindow]      = useState(3);
   const [regCatLoading,  setRegCatLoading]  = useState(false);
   const [regCatData,     setRegCatData]     = useState(null);
   const [regCatError,    setRegCatError]    = useState(null);
@@ -192,6 +196,7 @@ export function AnalysisTab({
         thresholdMm6h: parseFloat(catThreshold) || 25,
         hourMin:       catHourMin,
         hourMax:       catHourMax,
+        fssWindow,
       });
       setRegCatData(data);
     } catch (err) {
@@ -460,6 +465,24 @@ export function AnalysisTab({
                     <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.sm }}>
                       {verifiedAgainst}{' · Lead times with obs shown'}
                     </span>
+                    {/* Which sample these numbers came from. The Analysis tab reads
+                        native ensemble members while the Comparison tab reads the
+                        regridded aggregates, so the same metric can legitimately
+                        differ between the two — say so rather than let it look
+                        like a bug (METRICS_AUDIT.md finding 11). */}
+                    {ssrData?.cell && (
+                      <span
+                        style={{
+                          fontSize: t.fontSize.xs, color: 'rgba(255,255,255,0.4)',
+                          background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.12)',
+                          borderRadius: '10px', padding: '2px 9px',
+                        }}
+                        title="Analysis verifies individual ensemble members at the nearest native grid cell. The Comparison tab uses the regridded ensemble mean and spread, so its values for the same metric can differ."
+                      >
+                        ensemble members @ {fmtLat(ssrData.cell[0], 2)}, {fmtLon(ssrData.cell[1], 2)}
+                        {ssrData.hours?.[0]?.n_members != null && ` · ${ssrData.hours[0].n_members} members`}
+                      </span>
+                    )}
                     {ssrData && ssrData.n_cases > 0 && (
                       <button onClick={() => downloadChartAsPng(ssrChartRef, `WEAVE-ssr-${currentModel?.name}.png`)}
                         style={{ marginLeft: 'auto', fontSize: t.fontSize.base, color: 'rgba(255,255,255,0.45)', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '5px', cursor: 'pointer', padding: '2px 8px' }}
@@ -680,6 +703,27 @@ export function AnalysisTab({
                       </span>
                     </div>
 
+                    {/* FSS neighbourhood — region mode only, since FSS is spatial */}
+                    {catMode === 'region' && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span
+                          style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }}
+                          title="Width of the box FSS compares event fractions over. Wider neighbourhoods forgive small displacement errors."
+                        >
+                          FSS window
+                        </span>
+                        <input
+                          type="number" min="1" max="21" step="2" value={fssWindow}
+                          aria-label="FSS neighbourhood width (grid cells)"
+                          onChange={e => setFssWindow(Math.max(1, Math.min(21, parseInt(e.target.value, 10) || 1)))}
+                          style={{ width: '56px', padding: '4px 6px', fontSize: t.fontSize.sm, fontWeight: '600', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'center', outline: 'none' }}
+                        />
+                        <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }}>
+                          cells (≈{(fssWindow * 0.5).toFixed(1)}°)
+                        </span>
+                      </div>
+                    )}
+
                     {/* Hour range */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }}>Hours</span>
@@ -784,7 +828,10 @@ export function AnalysisTab({
                       { key: 'bs',  label: 'Brier', hint: 'Brier Score (0=perfect)',             val: s.brier_score },
                     ];
                     if (catMode === 'region') {
-                      badges.push({ key: 'fss', label: 'FSS', hint: 'Fractions Skill Score (0→1, higher=better)', val: fss });
+                      badges.push({
+                        key: 'fss', label: 'FSS', val: fss,
+                        hint: `Fractions Skill Score over a ${regCatData?.fss_window ?? fssWindow}×${regCatData?.fss_window ?? fssWindow}-cell neighbourhood (0→1, higher=better)`,
+                      });
                     }
 
                     const contingencyTotal = s.hits + s.misses + s.false_alarms + s.correct_neg;

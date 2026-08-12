@@ -3168,6 +3168,10 @@ def region_categorical_metrics_endpoint():
             },
             'obs_hours': obs_hours_list,
             'obs_warning': obs_warning,
+            # The neighbourhood FSS was actually computed over. An FSS value is
+            # only interpretable alongside its spatial scale, so echo it back
+            # rather than leaving the client to assume the default.
+            'fss_window': fss_window,
             'threshold_info': {
                 **(({'threshold_ms': threshold_rate, 'unit': 'm/s'})
                    if is_wind else
