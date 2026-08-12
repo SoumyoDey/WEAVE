@@ -94,6 +94,48 @@ export async function fetchComparisonCategorical({ models, lat, lon, hourMin, ho
 }
 
 /**
+ * Fetches region-mean verification metrics for several models over one bbox.
+ *
+ * @param {{ models: string[], variable: string, bounds: object, hourMin: number,
+ *           hourMax: number, threshold?: number, metrics?: string[] }} params
+ *   bounds is { min_lat, max_lat, min_lon, max_lon } (camelCase also accepted).
+ * @returns {Promise<{ models: Object, n_points: Object, n_cells: Object,
+ *                     metrics: string[], threshold_info: Object, warnings: Object }>}
+ *   models is e.g. { AIFS: { mae: 2.1, bias: -0.3, ... }, GEFS: {...} }
+ */
+export async function fetchComparisonRegionMetrics({ models, variable, bounds, hourMin, hourMax, threshold, metrics }) {
+  const body = {
+    models,
+    variable,
+    min_lat: bounds.min_lat ?? bounds.minLat,
+    max_lat: bounds.max_lat ?? bounds.maxLat,
+    min_lon: bounds.min_lon ?? bounds.minLon,
+    max_lon: bounds.max_lon ?? bounds.maxLon,
+    hour_min: hourMin,
+    hour_max: hourMax,
+  };
+  if (metrics) body.metrics = metrics;
+  // Threshold units differ by variable: m/s for wind, mm/6h for precipitation.
+  if (threshold != null) {
+    if (variable === 'wind') body.threshold_ms = threshold;
+    else                     body.threshold_mm_6h = threshold;
+  }
+
+  const response = await fetch(`${API_BASE}/compare/region-metrics`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error || `compare/region-metrics failed with status ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
  * Fetches a base64-encoded PNG map of inter-model disagreement for a bounding
  * box and a single forecast hour.
  *

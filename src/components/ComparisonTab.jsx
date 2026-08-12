@@ -5,7 +5,10 @@ import {
   ResponsiveContainer, ReferenceLine,
 } from 'recharts';
 import { Scale, MapPin } from 'lucide-react';
-import { fetchComparisonTimeseries, fetchComparisonSkill, fetchSpatialAgreement, fetchComparisonCategorical } from '../api/comparisonApi';
+import {
+  fetchComparisonTimeseries, fetchComparisonSkill, fetchSpatialAgreement,
+  fetchComparisonCategorical, fetchComparisonRegionMetrics,
+} from '../api/comparisonApi';
 import { t } from '../theme';
 
 const MODEL_COLORS = { AIFS: '#3498db', GEFS: '#e74c3c', UKMO: '#2ecc71' };
@@ -35,6 +38,36 @@ const SKILL_SUMMARY_METRICS = [
   { key: 'bias',        label: 'Bias',        hint: '0 is unbiased',       refLine: 0, decimals: 3 },
   { key: 'mae',         label: 'MAE',         hint: 'lower is better',                decimals: 3 },
   { key: 'rmse',        label: 'RMSE',        hint: 'lower is better',                decimals: 3 },
+];
+
+// Region-mean metrics from /api/compare/region-metrics, grouped the same way
+// the Analysis tab groups its region maps.
+const REGION_METRIC_GROUPS = [
+  {
+    id: 'calibration', label: 'Calibration', hint: 'Is the ensemble spread reliable?',
+    metrics: [
+      { key: 'ssr_agg',     label: 'SSR (aggregated)',   hint: 'ideal = 1',         refLine: 1, decimals: 3 },
+      { key: 'correlation', label: 'Spread–skill corr.', hint: 'spread vs |error|',             decimals: 3 },
+    ],
+  },
+  {
+    id: 'accuracy', label: 'Accuracy vs observations', hint: 'How close is the ensemble mean to obs?',
+    metrics: [
+      { key: 'bias', label: 'Bias', hint: '0 is unbiased',    refLine: 0, decimals: 3 },
+      { key: 'mae',  label: 'MAE',  hint: 'lower is better',              decimals: 3 },
+      { key: 'rmse', label: 'RMSE', hint: 'lower is better',              decimals: 3 },
+      { key: 'crps', label: 'CRPS', hint: 'lower is better',              decimals: 4 },
+    ],
+  },
+  {
+    id: 'categorical', label: 'Categorical', hint: 'Event-based skill for threshold exceedances',
+    metrics: [
+      { key: 'csi',   label: 'CSI',   hint: 'higher is better', decimals: 3 },
+      { key: 'pod',   label: 'POD',   hint: 'higher is better', decimals: 3 },
+      { key: 'far',   label: 'FAR',   hint: 'lower is better',  decimals: 3 },
+      { key: 'brier', label: 'Brier', hint: '0 is perfect',     decimals: 4 },
+    ],
+  },
 ];
 
 // Categorical scores pooled over lead times (compare/categorical `summaries`).
@@ -165,6 +198,19 @@ function corrColor(c) {
   return '#e74c3c';
 }
 
+// Y-axis tick labels in the narrow metric cards. A raw domain bound like
+// -0.4187 overflows the axis gutter and gets clipped to "4187", so round to a
+// width the gutter can actually show.
+const axisTick = (v) => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '';
+  const abs = Math.abs(n);
+  if (abs >= 100) return n.toFixed(0);
+  if (abs >= 10)  return n.toFixed(1);
+  if (abs >= 1)   return n.toFixed(2);
+  return n.toFixed(2);
+};
+
 // Placeholder used inside a metric card when every model came back empty, so a
 // missing metric reads as "no data" rather than an unexplained blank panel.
 function NoData({ text = 'No data for this selection' }) {
@@ -200,7 +246,7 @@ function LeadTimeChart({ label, hint, metricKey, rows, models, refLine, decimals
           <LineChart data={rows} margin={{ top: 6, right: 14, left: -10, bottom: 16 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
             <XAxis dataKey="hour" stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} tickFormatter={h => `+${h}h`} />
-            <YAxis stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} width={40} />
+            <YAxis stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} width={46} tickFormatter={axisTick} />
             <Tooltip
               contentStyle={TOOLTIP_STYLE}
               formatter={(value, name) => [value != null ? Number(value).toFixed(decimals) : 'N/A', name.replace(`${metricKey}_`, '')]}
@@ -241,7 +287,16 @@ function AggregateBar({ label, hint, models, values, refLine, decimals = 3 }) {
           <BarChart data={data} margin={{ top: 6, right: 12, left: -10, bottom: 4 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false} />
             <XAxis dataKey="model" stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.6)', fontSize: 10 }} />
-            <YAxis stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} width={40} />
+            {/* Bar length encodes magnitude, so the axis has to include 0 —
+                otherwise all-negative metrics (e.g. a negative spread-skill
+                correlation) hang from the top and read as large positives. */}
+            <YAxis
+              stroke="rgba(255,255,255,0.3)"
+              tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
+              width={46}
+              domain={[v => Math.min(0, v), v => Math.max(0, v)]}
+              tickFormatter={axisTick}
+            />
             <Tooltip
               contentStyle={TOOLTIP_STYLE}
               cursor={{ fill: 'rgba(255,255,255,0.04)' }}
@@ -402,8 +457,11 @@ export function ComparisonTab({
   const [showSpreadBands, setShowSpreadBands] = useState(true);
   const [normalizeScales, setNormalizeScales] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [threshold, setThreshold] = useState(25);
+  const [threshold, setThreshold] = useState(selectedVariable === 'wind' ? 10 : 25);
   const [fssWindow, setFssWindow] = useState(5);
+  // Region mode keeps its own threshold: it drives the region-metric and map
+  // views, while `threshold` above drives point-mode advanced metrics.
+  const [regionThreshold, setRegionThreshold] = useState(selectedVariable === 'wind' ? 10 : 25);
 
   // Loading
   const [tsLoading, setTsLoading] = useState(false);
@@ -417,6 +475,10 @@ export function ComparisonTab({
   const [spatialShareState, setSpatialShareState] = useState('idle'); // 'idle' | 'copied'
   const [hasRun, setHasRun] = useState(false);
   const [hasRunRegion, setHasRunRegion] = useState(false);
+  const [regionData, setRegionData] = useState(null);
+  const [regionLoading, setRegionLoading] = useState(false);
+  const [regionError, setRegionError] = useState('');
+  const regionSeqRef = useRef(0);   // drops stale region-metric responses
   const [catData, setCatData] = useState(null);
   const [catLoading, setCatLoading] = useState(false);
   const [catError, setCatError] = useState('');
@@ -434,6 +496,17 @@ export function ComparisonTab({
   useEffect(() => {
     if (defaultHour != null) setSpatialHour(defaultHour);
   }, [defaultHour]);
+
+  // Thresholds are variable-specific (mm/6h vs m/s), so reset them to a sane
+  // default and drop now-stale results whenever the variable changes.
+  useEffect(() => {
+    const def = selectedVariable === 'wind' ? 10 : 25;
+    setThreshold(def);
+    setRegionThreshold(def);
+    setCatData(null);
+    setRegionData(null);
+    setHasRunRegion(false);   // back to the "click Run" prompt, not an empty section
+  }, [selectedVariable]);
 
   // Derived
   const parsedLat = parseFloat(lat);
@@ -498,11 +571,32 @@ export function ComparisonTab({
     }
   };
 
-  // Region mode's top-level Run. Region sections each have their own controls;
-  // this reveals them and (from Increment 3) fetches the region-metric aggregates.
+  // Region mode's top-level Run: fetches the region-mean metric comparison and
+  // reveals the region sections (the maps below have their own run controls).
   const handleRunRegion = async () => {
     if (!canRun) return;
+    const seq = ++regionSeqRef.current;
     setHasRunRegion(true);
+    setRegionError('');
+    setRegionData(null);
+    setRegionLoading(true);
+    try {
+      const result = await fetchComparisonRegionMetrics({
+        models: selectedModels,
+        variable: selectedVariable,
+        bounds: selectedRegion.bounds,
+        hourMin, hourMax,
+        threshold: Number(regionThreshold),
+      });
+      if (seq !== regionSeqRef.current) return;   // a newer run superseded this one
+      setRegionData(result);
+    } catch (err) {
+      if (seq !== regionSeqRef.current) return;
+      console.error('compare/region-metrics failed:', err);
+      setRegionError(err.message || 'Failed to compute region metrics.');
+    } finally {
+      if (seq === regionSeqRef.current) setRegionLoading(false);
+    }
   };
 
   const handleRunCategorical = async () => {
@@ -878,6 +972,27 @@ export function ComparisonTab({
               </div>
             )}
           </div>
+
+          {/* THRESHOLD (region mode) — categorical region metrics need one */}
+          {isRegionMode && (
+            <div>
+              <div style={LABEL}>Threshold</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <input
+                  type="number"
+                  min={0}
+                  value={regionThreshold}
+                  onChange={e => setRegionThreshold(e.target.value)}
+                  aria-label={`Threshold (${thresholdUnit})`}
+                  style={{ ...INPUT, width: '72px' }}
+                />
+                <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: t.fontSize.sm }}>{thresholdUnit}</span>
+              </div>
+              <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.micro, marginTop: '5px' }}>
+                CSI · POD · FAR · Brier only
+              </div>
+            </div>
+          )}
           </div>
 
           {/* Run button */}
@@ -949,6 +1064,105 @@ export function ComparisonTab({
               </p>
               <p style={{ fontSize: t.fontSize.base, margin: 0 }}>No results yet</p>
             </div>
+          </div>
+        )}
+
+        {/* ── Region metric comparison (region mode) ── */}
+        {isRegionMode && hasRegion && hasRunRegion && (
+          <div style={{ marginBottom: '28px' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', marginBottom: '14px', flexWrap: 'wrap' }}>
+              <h3 style={{ ...SECTION_TITLE, margin: 0 }}>Region metric comparison</h3>
+              <span style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.25)', letterSpacing: '0.04em' }}>
+                Region mean of the per-grid-cell metric · +{hourMin}h–{hourMax}h · {yAxisUnit} except SSR / correlation / categorical
+              </span>
+            </div>
+
+            {regionLoading && <Spinner />}
+
+            {!regionLoading && regionError && (
+              <div role="alert" style={{
+                ...CARD, borderLeft: '3px solid #e74c3c', color: '#e74c3c',
+                fontSize: t.fontSize.sm, marginBottom: '16px',
+              }}>
+                Couldn’t compute region metrics: {regionError}
+              </div>
+            )}
+
+            {!regionLoading && !regionError && regionData && (() => {
+              const warned = Object.entries(regionData.warnings || {});
+              const anyValue = selectedModels.some(m =>
+                Object.values(regionData.models?.[m] || {}).some(v => v != null));
+              return (
+                <>
+                  {/* Grid-misalignment / no-overlap notice, per model */}
+                  {warned.length > 0 && (
+                    <div style={{
+                      background: 'rgba(243,156,18,0.1)',
+                      border: '1px solid rgba(243,156,18,0.3)',
+                      borderRadius: t.radius,
+                      padding: '10px 14px',
+                      marginBottom: '16px',
+                      color: '#f39c12',
+                      fontSize: t.fontSize.sm,
+                    }}>
+                      {warned.map(([m, msg]) => (
+                        <div key={m}><strong>{m}:</strong> {msg}</div>
+                      ))}
+                    </div>
+                  )}
+
+                  {!anyValue ? (
+                    <div style={{
+                      ...CARD, textAlign: 'center', padding: '32px 20px',
+                      color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.base, lineHeight: 1.6,
+                    }}>
+                      No forecast/observation matches for this region, threshold, and lead-time range.
+                      Try a wider region or lead-time range.
+                    </div>
+                  ) : (
+                    <>
+                      {/* Matched-cell count per model — the sample behind each mean */}
+                      <div style={{ ...SUBHEAD, marginBottom: '16px' }}>
+                        {selectedModels.map(m => (
+                          <span key={m} style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                            <span style={{ display: 'inline-block', width: '10px', height: '10px', borderRadius: '2px', background: MODEL_COLORS[m] }} />
+                            <span style={{ fontSize: t.fontSize.xs }}>{m}</span>
+                            <span style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.3)' }}>
+                              ({regionData.n_cells?.[m] ?? 0} cells)
+                            </span>
+                          </span>
+                        ))}
+                      </div>
+
+                      {REGION_METRIC_GROUPS.map(group => (
+                        <div key={group.id} style={{ marginBottom: '24px' }}>
+                          <div style={SUBHEAD}>
+                            <span style={{ fontWeight: '600' }}>
+                              {group.label}
+                              {group.id === 'categorical' && ` (> ${regionThreshold} ${thresholdUnit})`}
+                            </span>
+                            <span style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.3)' }}>{group.hint}</span>
+                          </div>
+                          <div style={SMALL_GRID}>
+                            {group.metrics.map(({ key, label, hint, refLine, decimals }) => (
+                              <AggregateBar
+                                key={key}
+                                label={label}
+                                hint={hint}
+                                models={selectedModels}
+                                values={selectedModels.map(m => regionData.models?.[m]?.[key] ?? null)}
+                                refLine={refLine}
+                                decimals={decimals}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </>
+              );
+            })()}
           </div>
         )}
 
