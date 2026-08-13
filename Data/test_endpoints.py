@@ -356,6 +356,8 @@ class TestSpreadSkillSharedGrid:
     same point reported two different SSRs. It now reads the regridded member
     grid and the regridded observations, like everything else."""
 
+    # Verification runs on a common 6 h window, so an hourly model needs the whole
+    # window present — hours 1-6, not 0-2.
     def _member_rows(self, hours, members=4, value=lambda h, m: 1.0 + 0.1 * m):
         return [{"forecast_hour": h, "ensemble_member": m, "member_val": value(h, m)}
                 for h in hours for m in range(members)]
@@ -374,7 +376,7 @@ class TestSpreadSkillSharedGrid:
     def test_reads_the_member_grid_not_forecast_data(self, client, fake_db):
         """The native tables must not be touched: if they were, the fake DB would
         have no route for them and the query would come back empty."""
-        fake_db(self._routes([0, 1, 2]))
+        fake_db(self._routes(list(range(1, 7))))
         d = client.get("/api/spread-skill?model=UKMO&variable=precipitation"
                        "&lat=36.0&lon=-75.5").get_json()
         assert d["grid"] == "0.5deg"
@@ -383,7 +385,7 @@ class TestSpreadSkillSharedGrid:
 
     def test_snaps_an_off_grid_click_to_the_shared_cell(self, client, fake_db):
         """A click anywhere inside a cell scores that cell — no radius box."""
-        fake_db(self._routes([0, 1, 2]))
+        fake_db(self._routes(list(range(1, 7))))
         d = client.get("/api/spread-skill?model=UKMO&variable=precipitation"
                        "&lat=36.11&lon=-75.61").get_json()
         assert d["cell"] == [36.0, -75.5]
@@ -391,14 +393,14 @@ class TestSpreadSkillSharedGrid:
     def test_spread_is_across_members_only(self, client, fake_db):
         """n_members must equal the ensemble size, not members x cells — the
         defect that had a 50-member AIFS run reporting ~1200 'members'."""
-        fake_db(self._routes([0, 1, 2], members=7))
+        fake_db(self._routes(list(range(1, 7)), members=7))
         d = client.get("/api/spread-skill?model=UKMO&variable=precipitation"
                        "&lat=36.0&lon=-75.5").get_json()
         assert d["hours"], "expected at least one scored lead time"
         assert all(h["n_members"] == 7 for h in d["hours"])
 
     def test_reports_the_window_it_verified_over(self, client, fake_db):
-        fake_db(self._routes([0, 1, 2]))
+        fake_db(self._routes(list(range(1, 7))))
         d = client.get("/api/spread-skill?model=UKMO&variable=precipitation"
                        "&lat=36.0&lon=-75.5").get_json()
         for h in d["hours"]:
