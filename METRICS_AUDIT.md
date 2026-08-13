@@ -33,6 +33,7 @@
 | 14 | ~~ERA5 wind is a different weather field~~ — **interpretation withdrawn 2026-08-13**; data confirmed correct by its owner. The measurement stands as an open verification result | Open question | Reframed |
 | 15 | ~~GEFS precipitation correlates with nothing~~ — **RETRACTED 2026-08-13**, the analysis was invalid (raw Pearson on a heavily skewed field) | — | Withdrawn |
 | 16 | GEFS precipitation was **double-converted** — its export already produced mm/h and the code divided by the bucket length again | Critical | Confirmed |
+| 17 | Each model was verified on its **own cadence**, so the same threshold asked a different question of each and cross-model scores were not comparable | High | Confirmed |
 
 ---
 
@@ -1515,3 +1516,97 @@ from the raw files:
 Exact to the last digit at every step. This closes the one weakness left in
 finding 16: the correction was derived from a single case, and it now demonstrably
 generalises to an independent run.
+
+---
+
+## 17. One verification window for every model — High (2026-08-13)
+
+Each model was scored over whatever window it happened to emit: UKMO 1 h, GEFS
+3 or 6 h, AIFS 6 h. The observation was averaged over the matching window, so
+every model's own score was internally sound — but a threshold then asked a
+different question of each.
+
+A short window keeps peaks that a long one averages away. Same UKMO data, same
+threshold, only the averaging window changed:
+
+```
+  thr mm/6h   1 h records   6 h means   ratio
+          1        0.382       0.421     0.91
+          5        0.180       0.197     0.91
+         10        0.079       0.069     1.14
+         25        0.010       0.006     1.64
+```
+
+At a high bar the hourly records exceeded 1.64x more often, purely from cadence.
+Comparing UKMO's CSI against AIFS's was comparing two different questions.
+
+### Fix
+
+`_rebin_to_common_window()` re-expresses every model's rate series on a single
+`COMMON_VERIFICATION_WINDOW_HOURS = 6` before anything is scored. Six hours is
+the coarsest native window in the set (AIFS throughout, GEFS at `h%6==0`), so it
+is the only one every model can supply without inventing data.
+
+- A record already spanning 6 h passes through untouched.
+- Shorter records are combined, **weighted by their own periods**, and only when
+  they tile the window exactly. A partly covered window is dropped rather than
+  averaged — the same trap `_obs_window_mean` guards against on the observation
+  side.
+- Where GEFS emits both a 3 h bucket and the 6 h bucket containing it, the 6 h
+  one wins; blending them would double-count.
+- Combined records report no spread. The spread of a mean is not the mean of
+  spreads, and the members needed to do it properly are not in scope there;
+  `None` is skipped by SSR/CRPS/Brier rather than fabricated.
+
+Applied to every path that scores against observations — the region/spatial
+pairs, `/api/compare/skill`, `/api/compare/categorical`,
+`/api/categorical-metrics` and the region categorical path. **Not** applied to
+display paths: `/api/compare/timeseries` and the map keep native cadence, because
+there the detail is the point.
+
+Wind is untouched. It is an instantaneous rate rather than an accumulation, so
+there is no window to reconcile.
+
+### Result
+
+```
+  n_cells   AIFS 289   GEFS 289   UKMO 289      <- identical samples
+
+              bias      mae      csi      pod      far      fss
+  AIFS      -0.1684   0.5273   0.6603   0.9067   0.2915   0.8994
+  GEFS      -0.2220   0.8279   0.2449   0.4067   0.6189   0.4844
+  UKMO      +0.0392   0.6057   0.6637   0.8409   0.2410   0.8890
+```
+
+Every model now contributes the same number of samples, which is the clearest
+sign the window is shared. UKMO's CSI rises from 0.5713 to 0.6637 and its FSS
+from 0.8541 to 0.8890 — its hourly peaks are no longer crossing the bar for
+reasons of cadence — putting it alongside AIFS, where two good models belong.
+GEFS remains the weakest on this case.
+
+Tests: `TestCommonVerificationWindow` (9 cases) pins pass-through, weighted
+combination, the wider-record-wins rule, partial-cover rejection, spread
+suppression, and that a steady rate reported by an hourly, a bucketed and a
+6-hourly model comes out identical. `metrics.py` stays at 100%; 167 backend tests
+pass.
+
+---
+
+## Standing decision: GEFS precipitation will not be re-exported
+
+The metric-layer correction in finding 16 was written as a compensation for the
+old fixed-factor export, on the assumption a re-export would eventually retire
+it. **That is not going to happen** — decided 2026-08-13 — so it is permanent.
+
+What this means in practice:
+
+- `SCALED_EXPORT_DIVISOR_HOURS = {'AIFS': 6.0, 'GEFS': 3.0}` stays. It is not
+  technical debt awaiting cleanup; it is the description of how the loaded data
+  was produced, and removing it would make every GEFS 6-hour record 2x too high.
+- `Data_convert_weave/"aifs react.py"` has been fixed to divide by each record's
+  own window. That fix applies to any **future** ingest. If it is ever run and
+  the database reloaded from its output, the constant must change to
+  `{'AIFS': 6.0, 'GEFS': 6.0}` in the same change — otherwise the correction
+  applies twice. The original is kept at `"aifs react.py.orig-backup"`.
+- The numbers in the app today are correct either way. This is about which layer
+  owns the correction, not whether one is needed.

@@ -189,8 +189,10 @@ class TestCompareSkillContract:
     ROUTES = {
         "FROM forecast_runs fr": [{"initialization_time": INIT}],
         "ORDER BY POWER": [{"latitude": 36.0, "longitude": -75.5}],
-        "FROM regridded_forecast_ens u": [_fcst_row(h) for h in (0, 1, 2)],
-        "FROM regridded_observation": _obs_rows([0, 1, 2]),
+        # Verification runs on a common 6 h window, so an hourly model needs a
+        # full window present before anything is scored — hours 1-12, not 0-2.
+        "FROM regridded_forecast_ens u": [_fcst_row(h) for h in range(1, 13)],
+        "FROM regridded_observation": _obs_rows(list(range(1, 13))),
     }
 
     def test_emits_the_keys_the_frontend_reads(self, client, fake_db):
@@ -239,13 +241,13 @@ class TestCompareCategoricalContract:
         "FROM forecast_runs fr": [{"initialization_time": INIT}],
         "FROM regridded_forecast_ens u": [
             _fcst_row(h, lat=lat, mean=mean)
-            for h in (0, 1)
+            for h in range(1, 7)              # a full 6 h verification window
             for lat, mean in ((36.0, 10.0), (36.5, 0.0))
         ],
         "FROM regridded_observation": [
             {"obs_time": INIT + timedelta(hours=h), "latitude": lat,
              "longitude": -75.5, "obs_val": 8.0}
-            for h in (0, 1) for lat in (36.0, 36.5)
+            for h in range(1, 7) for lat in (36.0, 36.5)
         ],
     }
 
@@ -277,12 +279,12 @@ class TestRegionMetricsContract:
             "FROM forecast_runs fr": [{"initialization_time": INIT}],
             "FROM regridded_forecast_ens u": [
                 _fcst_row(h, lat=lat, mean=2.0, std=1.0)
-                for h in (0, 1) for lat in (36.0, 36.5)
+                for h in range(1, 7) for lat in (36.0, 36.5)   # a full 6 h window
             ],
             "FROM regridded_observation": [
                 {"obs_time": INIT + timedelta(hours=h), "latitude": lat,
                  "longitude": -75.5, "obs_val": 1.0}
-                for h in (0, 1) for lat in (36.0, 36.5)
+                for h in range(1, 7) for lat in (36.0, 36.5)
             ],
         }
 

@@ -301,8 +301,21 @@ class FakeCursor:
         pass
 
 
-def _run_box(fcst_rows, obs_rows, init):
-    """Drive _categorical_hours_for_box with canned rows (UKMO → hourly rates)."""
+def _run_box(fcst_rows, obs_rows, init, window=6):
+    """Drive _categorical_hours_for_box with canned rows (UKMO → hourly rates).
+
+    Verification runs on a common 6 h window, so an hourly model needs the whole
+    window present before anything is scored. Each canned row is tiled across the
+    window it ends in, at its own value: the mean of six equal hourly rates is
+    that rate, so every assertion keeps exactly the meaning it had when these
+    fixtures supplied a single hour.
+    """
+    fcst_rows = [dict(row, forecast_hour=h)
+                 for row in fcst_rows
+                 for h in range(row["forecast_hour"] - window + 1,
+                                row["forecast_hour"] + 1)]
+    obs_rows = [dict(row, obs_time=row["obs_time"] - timedelta(hours=dh))
+                for row in obs_rows for dh in range(window)]
     cur = FakeCursor([[{"initialization_time": init}], fcst_rows, obs_rows])
     with api.app.app_context():
         return api._categorical_hours_for_box(
@@ -947,3 +960,63 @@ def test_fss_none_when_no_events():
     hours = _run_box(fcst_rows, obs_rows, init)
     assert len(hours) == 1
     assert hours[0]["fss"] is None
+
+
+# ── Common verification window (audit finding 17) ─────────────────────────────
+class TestCommonVerificationWindow:
+    """Every model is scored over the same span, so a threshold asks one
+    question. A 1 h mean keeps peaks a 6 h mean averages away, and UKMO crossed
+    25 mm/6h 1.64x more often than the identical data averaged to 6 h — its CSI
+    was not comparable with AIFS's."""
+
+    def test_a_record_already_spanning_the_window_passes_through(self):
+        rates = {6: (0.30, 0.05, 6), 12: (0.40, 0.05, 6)}
+        assert api._rebin_to_common_window(rates) == rates
+
+    def test_hourly_records_are_averaged_over_the_window(self):
+        rates = {h: (0.1 * h, 0.0, 1) for h in range(1, 13)}
+        out = api._rebin_to_common_window(rates)
+        assert sorted(out) == [6, 12]
+        assert out[6][0] == pytest.approx(sum(0.1 * h for h in range(1, 7)) / 6)
+        assert out[12][0] == pytest.approx(sum(0.1 * h for h in range(7, 13)) / 6)
+        assert out[6][2] == 6 and out[12][2] == 6
+
+    def test_the_wider_record_wins_over_the_one_it_contains(self):
+        """GEFS emits both a 3 h bucket and the 6 h bucket containing it. The
+        6 h one already spans the window; blending them would double-count."""
+        rates = {3: (9.9, 0.0, 3), 6: (0.30, 0.0, 6)}
+        assert api._rebin_to_common_window(rates)[6][0] == pytest.approx(0.30)
+
+    def test_a_partly_covered_window_is_dropped_not_averaged(self):
+        """Averaging 4 of 6 hours would report a 6 h mean that never happened —
+        the same trap _obs_window_mean guards against on the observation side."""
+        assert api._rebin_to_common_window({h: (1.0, 0.0, 1) for h in (3, 4, 5, 6)}) == {}
+
+    def test_parts_are_weighted_by_their_own_period(self):
+        """A 3 h piece and three 1 h pieces are not equal contributors."""
+        rates = {3: (2.0, 0.0, 3), 4: (0.0, 0.0, 1), 5: (0.0, 0.0, 1), 6: (0.0, 0.0, 1)}
+        out = api._rebin_to_common_window(rates)
+        assert out[6][0] == pytest.approx(2.0 * 3 / 6)   # not the plain mean, 0.5
+
+    def test_combined_records_report_no_spread(self):
+        """The spread of a mean is not the mean of spreads; None is skipped by
+        the spread-dependent metrics rather than fabricated."""
+        out = api._rebin_to_common_window({h: (1.0, 0.5, 1) for h in range(1, 7)})
+        assert out[6][1] is None
+
+    def test_hour_zero_is_not_a_window(self):
+        """(-6, 0] lies before the run starts."""
+        assert 0 not in api._rebin_to_common_window({0: (1.0, 0.0, 6)})
+
+    def test_empty_and_unusable_series(self):
+        assert api._rebin_to_common_window({}) == {}
+        assert api._rebin_to_common_window({4: (1.0, 0.0, 1)}) == {}   # no target hour
+
+    def test_every_cadence_lands_on_one_scale(self):
+        """The point of the exercise: steady 0.5 mm/h reported by an hourly, a
+        bucketed and a 6-hourly model must come out identical."""
+        hourly = {h: (0.5, 0.0, 1) for h in range(1, 7)}
+        bucket = {3: (0.5, 0.0, 3), 6: (0.5, 0.0, 6)}
+        sixhr  = {6: (0.5, 0.0, 6)}
+        for series in (hourly, bucket, sixhr):
+            assert api._rebin_to_common_window(series)[6][0] == pytest.approx(0.5)
