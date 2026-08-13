@@ -302,23 +302,42 @@ CUMULATIVE_PRECIP_MODELS = {'AIFS'}
 # each record is matched against the observed mean rate over the same window.
 # Only the divisor that converts the stored value to mm/h changes.
 #
-# CAVEAT for GEFS: the export appears to have divided every record by 6, which
-# is right for the 6 h buckets but 2x too small for the 3 h ones — read as-is
-# the domain mean alternates 0.163 / 0.287 / 0.147 / 0.309 in lockstep with the
-# 6-hourly cycle (7 of 7 consecutive jumps > 1.6x). Doubling only the h%6==3
-# records removes the alternation entirely (0 of 7) and lands at 0.316 mm/h.
-# That correction is NOT applied here — it compensates for an upstream export
-# bug, and re-exporting is the right fix. See METRICS_AUDIT.md finding 16.
 RATE_STORED_PRECIP_MODELS = {'AIFS', 'GEFS'}
 
 # Retained under its former name for callers that imported it directly.
 RATE_CUMULATED_PRECIP_MODELS = RATE_STORED_PRECIP_MODELS
 
 
+# Hours the JSON export divided each model's precipitation by on its way to mm/h.
+# Straight from Data_convert_weave/"aifs react.py":
+#
+#     scale_json_files(... scale_factor=6, model_name='AIFS')
+#     scale_json_files(... scale_factor=3, model_name='GEFS')
+#
+# One fixed factor per model, applied to every record regardless of the window
+# that record covers. UKMO is absent because it was never scaled — React.py
+# converts its native `total_rainfall_rate` (m/s) straight to mm/h with x3.6e6.
+#
+# The factor is right where it matches the record: AIFS is 6-hourly throughout,
+# and GEFS's h%6==3 buckets really are 3 h. It is wrong for GEFS's h%6==0
+# buckets, which cover 6 h but were divided by 3, leaving them 2x too high.
+SCALED_EXPORT_DIVISOR_HOURS = {'AIFS': 6.0, 'GEFS': 3.0}
+
+
 def _increment_divisor(model_name, period):
     """Hours to divide a stored precipitation value (or a differenced cumulative
-    increment) by to reach mm/h. 1 when the value is already a rate."""
-    return 1 if model_name in RATE_STORED_PRECIP_MODELS else period
+    increment) by to reach mm/h.
+
+    A scaled model was already divided once, by a fixed per-model factor, so what
+    remains is the ratio of the record's true window to that factor. GEFS's 3 h
+    buckets come out at 1 (already correct) and its 6 h buckets at 2 (halved);
+    AIFS is 6/6 = 1 throughout. An unscaled model still stores an amount and
+    divides by its own window.
+    """
+    exported = SCALED_EXPORT_DIVISOR_HOURS.get(model_name)
+    if exported:
+        return period / exported
+    return period
 
 
 def _obs_window_mean(cell_obs, valid_time, period):
