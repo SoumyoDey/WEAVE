@@ -28,6 +28,8 @@
 | 9 | Gaussian CRPS/Brier applied to zero-inflated precipitation | Medium | By inspection |
 | 10 | No ensemble-size correction `(M+1)/M` (AIFS 50, GEFS 30, UKMO 18) | Low | Confirmed |
 | 11 | Two parallel truth paths (native vs regridded) for the same metric names | Design | Confirmed |
+| 12 | AIFS cumulates a **mean rate (mm/h)**, not an amount — differencing then dividing by 6 made every AIFS precip number 6× too dry | Critical | Confirmed |
+| 13 | A **partially observed** verification window was accepted, scoring a 6 h forecast against one observation up to 5 h from its valid time | High | Confirmed |
 
 ---
 
@@ -560,3 +562,126 @@ This also closes the residual finding-3 case in that endpoint: it centres on
 the nearest grid cell instead of taking whichever row the +/-0.26 degree window
 returned first, so the box is exactly `box_cells` per axis regardless of where
 in a cell the user clicked.
+
+---
+
+## 12. AIFS cumulates a mean rate, not an amount — Critical (2026-08-13)
+
+Finding 1 established that AIFS precipitation is a running total since init and
+must be differenced. That was right. What the fix then assumed — that the
+increment is an **amount in mm**, to be divided by the 6 h window to reach mm/h
+— is wrong. The increment is *already a mean rate in mm/h*, so dividing by the
+period made every AIFS precipitation number **6× too dry**.
+
+This is the residual "AIFS reads much drier than observed" item left open on
+2026-08-12. It is **not** an ingest unit error, and it did not need the provider
+field spec: the loaded data settles it three independent ways.
+
+**1 — Cell-level fit against observations.** AIFS 6-hourly increment vs the
+observed mean rate over the same window, 2025-09-08 00Z run:
+
+```
+window  0- 6h  n=1295  obs = 1.123*incr + 0.087  r=0.401  obs/incr = 1.383
+window  6-12h  n=1305  obs = 1.485*incr - 0.058  r=0.580  obs/incr = 1.359
+window 12-18h  n=1353  obs = 0.804*incr + 0.208  r=0.452  obs/incr = 1.266
+POOLED         n=3953  obs = 1.154*incr + 0.073  r=0.497  obs/incr = 1.331
+```
+
+Read as a rate, obs/forecast is **1.33** — an ordinary mild dry bias. Read as an
+amount (incr/6), obs/forecast is **7.98**, which is exactly 6 × 1.33. The
+reported "~8× dry bias" was one real factor of 1.33 and one spurious factor of 6.
+
+**2 — Model-to-model, no observations involved.** Domain-mean rate over 6-18 h:
+
+```
+GEFS                        0.3807 mm/h
+UKMO                        0.5590 mm/h
+AIFS increment as-is        0.4313 mm/h   <- in family
+AIFS increment / 6          0.0719 mm/h   <- an order of magnitude out of family
+```
+
+**3 — Water budget over 48 h.** Stored AIFS cumulative at 48 h is 2.992.
+
+```
+as an amount   ->  2.99 mm over 48 h
+as a rate x 6h -> 17.95 mm over 48 h
+observed                17.64 mm over 48 h   (0.368 mm/h x 48)
+```
+
+The rate reading lands within 1.8% of observed; the amount reading is 6× short.
+
+### Fix
+
+`RATE_CUMULATED_PRECIP_MODELS = {'AIFS'}` in `metrics.py`, applied through
+`_increment_divisor(model, period)` in both rate paths (`_precip_rate_series`
+and `_precip_member_rate_series`, which are now covered by a test asserting they
+agree). The record still *covers* 6 h — `_precip_period_hours` stays 6, so the
+increment is still verified against the observed mean rate over the same 6 h.
+Only the divisor changed.
+
+Effect on the region suite (32-40N, 80-72W, 6-18 h, threshold 1 mm/6h):
+
+```
+              bias      mae      csi      fss
+AIFS before  -0.6690   0.6932   0.3993   0.6950
+AIFS after   -0.2141   0.6741   0.6595   0.8988
+```
+
+AIFS moves from an implausible dry outlier to the best-scoring model in the set,
+which is what one would expect of it.
+
+---
+
+## 13. A partially observed verification window was accepted — High (2026-08-13)
+
+Found while checking finding 12. Every fcst↔obs match built its observation
+window as "whatever samples exist in the last `period` hours" and accepted it if
+**at least one** was present:
+
+```python
+obs_window = [obs_dict[(lat, lon, vt - timedelta(hours=dh))]
+              for dh in range(period - 1, -1, -1)
+              if (lat, lon, vt - timedelta(hours=dh)) in obs_dict]
+if not obs_window:
+    continue
+```
+
+The observation record ends at 2025-09-08 19:30 and the run initialises at
+00Z, so truth exists only out to fh ≈ 19.5. Yet a region query over hours 24-48
+returned **229 AIFS cells with bias 0.3048**. The AIFS record at fh 24 is valid
+2025-09-09 00:00; its window reaches back to Sep 8 19:00, where exactly one
+observation still exists. A 6-hour forecast was being scored against a single
+observation **5 hours from its valid time**, and the result was presented with
+no indication that anything was wrong.
+
+### Fix
+
+`_obs_window_mean(cell_obs, valid_time, period)` in `metrics.py` returns
+`(mean, covered_hours, n_samples)`, and all five call sites now reject a window
+with `covered < period`. Two further corrections came with it:
+
+- The window is **left-open, right-closed** `(vt - period, vt]`, so the sample
+  exactly one period back belongs to the previous record, not this one. The
+  observation pre-fetch was widened from `max_period - 1` to `max_period` to
+  match.
+- **Sub-hourly observations now count.** IMERG is half-hourly and the old code
+  only looked at whole hours, discarding half the record. A 6 h AIFS window now
+  averages 12 samples instead of 6; `n_obs_in_window` in `/api/compare/skill`
+  reports it.
+
+Hours 24-48 now return no score and a warning naming the cause, instead of a
+fabricated number. Hours 6-18 keep identical cell counts (227/270/283), so the
+coverage requirement costs no legitimate data.
+
+### Call sites converted
+
+| Endpoint | Path |
+|---|---|
+| `/api/compare/skill` | point, per model |
+| `/api/compare/categorical` | point + neighbourhood FSS closure |
+| `/api/categorical-metrics` | Analysis point/region |
+| `_fetch_fcst_obs_pairs_spatial` | every region + spatial-map metric |
+
+Tests: `TestObsWindowMean` (8 cases) pins the boundary convention, partial
+coverage, sub-hourly averaging, and slots-vs-samples. `metrics.py` remains at
+100% statement coverage; 151 backend + 22 frontend tests pass.

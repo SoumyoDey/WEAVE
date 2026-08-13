@@ -44,13 +44,15 @@ CORS(app, origins=os.environ.get('CORS_ORIGIN', 'http://localhost:3000'))
 # be tested without a database and reasoned about on its own. Imported by name
 # rather than with a star so the dependency is explicit and greppable.
 from metrics import (                                    # noqa: E402
-    MODEL_ACCUM_HOURS, CUMULATIVE_PRECIP_MODELS, SSR_CAP,
+    MODEL_ACCUM_HOURS, CUMULATIVE_PRECIP_MODELS,
+    RATE_CUMULATED_PRECIP_MODELS, SSR_CAP,
     _grid_step,
     _clamp_ssr, _ssr_from_variances, _spread_inflation,
     _censor_correction, _gaussian_crps, _exceedance_probability,
     _neighbourhood_fractions, _fss_components, _fss_from_components,
     _fractions_skill_score, _fss_from_pairs,
-    _precip_period_hours, _precip_lookback_hours,
+    _precip_period_hours, _precip_lookback_hours, _increment_divisor,
+    _obs_window_mean,
     _precip_rate_series, _precip_member_rate_series,
     _categorical_summary, _region_mean, _region_pooled_metrics,
     _spatial_diff_points,
@@ -666,7 +668,9 @@ def _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
     if not in_range_hours:
         return {}
     valid_times = [init_time_val + timedelta(hours=h) for h in in_range_hours]
-    min_obs_t = min(valid_times) - timedelta(hours=max_period - 1)
+    # A record covering `period` hours verifies against (vt - period, vt], so the
+    # earliest observation any record can need sits one full period back.
+    min_obs_t = min(valid_times) - timedelta(hours=max_period)
     max_obs_t = max(valid_times)
 
     cursor.execute("""
@@ -679,13 +683,13 @@ def _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
         GROUP BY obs_time, latitude, longitude
     """, (obs_var, obs_src, min_obs_t, max_obs_t,
           min_lat, max_lat, min_lon, max_lon))
-    obs_dict = {}
+    obs_by_cell = defaultdict(dict)
     for r in cursor.fetchall():
         lat_k = round(float(r['latitude']),  2)
         lon_k = round(float(r['longitude']), 2)
-        obs_dict[(lat_k, lon_k, r['obs_time'])] = float(r['obs_val'])
+        obs_by_cell[(lat_k, lon_k)][r['obs_time']] = float(r['obs_val'])
 
-    if not obs_dict:
+    if not obs_by_cell:
         return {}
 
     result = defaultdict(list)
@@ -698,25 +702,26 @@ def _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
             vt = init_time_val + timedelta(hours=hour)
             # Observations averaged over the SAME period the record covers, so a
             # 6-hourly AIFS record verifies against a 6 h mean rate and an hourly
-            # UKMO record against a 1 h rate.
-            obs_window = [
-                obs_dict[(lat, lon, vt - timedelta(hours=dh))]
-                for dh in range(period - 1, -1, -1)
-                if (lat, lon, vt - timedelta(hours=dh)) in obs_dict
-            ]
-            if not obs_window:
+            # UKMO record against a 1 h rate. Every observation in the window is
+            # used, including sub-hourly ones (IMERG is half-hourly), so the
+            # window mean is the best estimate of the observed mean rate.
+            obs_window, covered, _n_obs = _obs_window_mean(obs_by_cell.get((lat, lon)), vt, period)
+            # A partially covered window must be rejected, not averaged: at the
+            # edge of the observation record a 6 h forecast would otherwise be
+            # scored against a single observation up to 5 h from its valid time.
+            if obs_window is None or covered < period:
                 continue
             matched_rows += 1
-            result[(lat, lon)].append((hour, mean_rate, std_rate,
-                                       sum(obs_window) / len(obs_window)))
+            result[(lat, lon)].append((hour, mean_rate, std_rate, obs_window))
 
-    # Diagnose silent grid misalignment: the fcst↔obs join is pure rounded-key
-    # (2 dp) equality, so if the two grids are offset, zero pairs match and every
-    # dependent metric returns [] — indistinguishable from "no data" downstream.
+    # Diagnose a silent join failure: the fcst↔obs join is pure rounded-key
+    # (2 dp) equality on the cell and needs a fully observed window, so an offset
+    # grid or a lead time past the end of the observation record yields zero
+    # pairs — indistinguishable from "no data" downstream.
     if matched_rows == 0:
         print(f"⚠️  fcst↔obs join matched 0 of {candidate_rows} forecast records "
-              f"for {model_name}/{variable} — likely grid misalignment "
-              f"({len(obs_dict)} obs keys, both rounded to 2 dp).")
+              f"for {model_name}/{variable} — grid misalignment, or no fully "
+              f"observed window ({len(obs_by_cell)} obs cells, keys at 2 dp).")
     return dict(result)
 
 
@@ -2276,14 +2281,12 @@ def compare_skill():
                 mean_rate, std_rate, period = rates[hour]
                 vt = init_times[m_name] + timedelta(hours=hour)
 
-                # Hourly obs over the same period the forecast record covers.
-                obs_window = [obs_by_time[vt - timedelta(hours=dh)]
-                              for dh in range(period - 1, -1, -1)
-                              if vt - timedelta(hours=dh) in obs_by_time]
-                if not obs_window:
+                # Obs over the same period the forecast record covers; a
+                # partially observed window is rejected (see _obs_window_mean).
+                obs_rate, covered, n_obs_window = _obs_window_mean(obs_by_time, vt, period)
+                if obs_rate is None or covered < period:
                     continue
 
-                obs_rate = sum(obs_window) / len(obs_window)
                 err      = mean_rate - obs_rate
                 abs_err  = abs(err)
                 err_sq   = err ** 2
@@ -2309,7 +2312,7 @@ def compare_skill():
                     'mean_val':  round(mean_rate, 4),
                     'obs':       round(obs_rate,  4),
                     'period_h':  period,
-                    'n_obs_in_window': len(obs_window),
+                    'n_obs_in_window': n_obs_window,
                 })
 
         # ------------------------------------------------------------------
@@ -2790,7 +2793,7 @@ def categorical_metrics_endpoint():
         # ── 2. Observations (extended window for the longest record period) ───
         valid_times = [init_time_val + timedelta(hours=h) for h in rates]
         max_period  = max(p for _, _, p in rates.values())
-        min_obs_t = min(valid_times) - timedelta(hours=max_period - 1)
+        min_obs_t = min(valid_times) - timedelta(hours=max_period)
         max_obs_t = max(valid_times)
 
         cursor.execute("""
@@ -2803,14 +2806,13 @@ def categorical_metrics_endpoint():
             GROUP BY obs_time, latitude, longitude ORDER BY obs_time
         """, (obs_var, obs_src, min_obs_t, max_obs_t,
               min_lat, max_lat, min_lon, max_lon))
-        obs_by_cell_time = {}
+        obs_by_cell = defaultdict(dict)
         for r in cursor.fetchall():
             key = (round(float(r['latitude']), 2), round(float(r['longitude']), 2))
-            obs_by_cell_time[(key, r['obs_time'])] = float(r['obs_val'])
+            obs_by_cell[key][r['obs_time']] = float(r['obs_val'])
         # The point metrics read the centre cell only, so their meaning is
         # unchanged by the box: they still describe the clicked location.
-        obs_by_time = {t: v for (cell, t), v in obs_by_cell_time.items()
-                       if cell == centre_key}
+        obs_by_time = obs_by_cell.get(centre_key, {})
 
         if not obs_by_time:
             return jsonify({
@@ -2835,29 +2837,22 @@ def categorical_metrics_endpoint():
                     continue
                 c_mean, _c_std, c_period = rec
                 c_vt = init_time_val + timedelta(hours=hour)
-                window = [obs_by_cell_time[(cell, c_vt - timedelta(hours=dh))]
-                          for dh in range(c_period - 1, -1, -1)
-                          if (cell, c_vt - timedelta(hours=dh)) in obs_by_cell_time]
-                if not window:
+                c_obs, c_covered, _n = _obs_window_mean(obs_by_cell.get(cell), c_vt, c_period)
+                if c_obs is None or c_covered < c_period:
                     continue
                 f_bin[cell] = float(c_mean > threshold_rate)
-                o_bin[cell] = float(sum(window) / len(window) > threshold_rate)
+                o_bin[cell] = float(c_obs > threshold_rate)
             return _fss_components(f_bin, o_bin, fss_window)
 
         for hour in sorted(rates):
             mean_rate, std_rate, period = rates[hour]
             vt = init_time_val + timedelta(hours=hour)
 
-            # Obs averaged over the same period the forecast record covers.
-            obs_window = [
-                obs_by_time[vt - timedelta(hours=dh)]
-                for dh in range(period - 1, -1, -1)
-                if (vt - timedelta(hours=dh)) in obs_by_time
-            ]
-            if not obs_window:
+            # Obs averaged over the same period the forecast record covers; a
+            # partially observed window is rejected (see _obs_window_mean).
+            obs_rate, covered, n_obs_window = _obs_window_mean(obs_by_time, vt, period)
+            if obs_rate is None or covered < period:
                 continue
-
-            obs_rate = sum(obs_window) / len(obs_window)
 
             is_fcst = mean_rate > threshold_rate
             is_obs  = obs_rate  > threshold_rate
@@ -3075,7 +3070,7 @@ def region_categorical_metrics_endpoint():
         # ── 2. Fetch per-(lat,lon) observations for the extended time window ──
         valid_times = [init_time_val + timedelta(hours=h) for _, h, _ in in_range]
         max_period  = max(p for _, _, (_, _, p) in in_range)
-        min_obs_t = min(valid_times) - timedelta(hours=max_period - 1)
+        min_obs_t = min(valid_times) - timedelta(hours=max_period)
         max_obs_t = max(valid_times)
 
         cursor.execute("""
@@ -3089,12 +3084,12 @@ def region_categorical_metrics_endpoint():
             ORDER BY obs_time, latitude, longitude
         """, (obs_var, obs_src, min_obs_t, max_obs_t,
               min_lat, max_lat, min_lon, max_lon))
-        obs_dict = {
-            (round(float(r['latitude']), 2), round(float(r['longitude']), 2), r['obs_time']): float(r['obs_val'])
-            for r in cursor.fetchall()
-        }
+        obs_by_cell = defaultdict(dict)
+        for r in cursor.fetchall():
+            obs_by_cell[(round(float(r['latitude']), 2),
+                         round(float(r['longitude']), 2))][r['obs_time']] = float(r['obs_val'])
 
-        if not obs_dict:
+        if not obs_by_cell:
             return jsonify({
                 'hours': [], 'summary': {}, 'obs_hours': [],
                 'obs_warning': 'No observations found for this region.',
@@ -3125,15 +3120,12 @@ def region_categorical_metrics_endpoint():
                 vt = init_time_val + timedelta(hours=hour)
 
                 # Obs averaged over the same period the forecast record covers.
-                obs_window = [
-                    obs_dict[(lat_k, lon_k, vt - timedelta(hours=dh))]
-                    for dh in range(period - 1, -1, -1)
-                    if (lat_k, lon_k, vt - timedelta(hours=dh)) in obs_dict
-                ]
-                if not obs_window:
+                # A partially observed window is rejected rather than averaged —
+                # see _obs_window_mean.
+                obs_rate, covered, _n_obs = _obs_window_mean(obs_by_cell.get((lat_k, lon_k)),
+                                                             vt, period)
+                if obs_rate is None or covered < period:
                     continue
-
-                obs_rate = sum(obs_window) / len(obs_window)
 
                 is_fcst = mean_rate > threshold_rate
                 is_obs  = obs_rate  > threshold_rate
@@ -3328,7 +3320,7 @@ def _categorical_hours_for_box(cursor, model_name, fcst_var, obs_var, obs_src,
 
     max_period  = max(p for _, _, (_, _, p) in in_range)
     valid_times = [init_time_val + timedelta(hours=h) for _, h, _ in in_range]
-    min_obs_t = min(valid_times) - timedelta(hours=max_period - 1)
+    min_obs_t = min(valid_times) - timedelta(hours=max_period)
     max_obs_t = max(valid_times)
 
     cursor.execute("""
@@ -3341,11 +3333,11 @@ def _categorical_hours_for_box(cursor, model_name, fcst_var, obs_var, obs_src,
         GROUP BY obs_time, latitude, longitude
     """, (obs_var, obs_src, min_obs_t, max_obs_t,
           min_lat, max_lat, min_lon, max_lon))
-    obs_dict = {
-        (round(float(r['latitude']), 2), round(float(r['longitude']), 2), r['obs_time']): float(r['obs_val'])
-        for r in cursor.fetchall()
-    }
-    if not obs_dict:
+    obs_by_cell = defaultdict(dict)
+    for r in cursor.fetchall():
+        obs_by_cell[(round(float(r['latitude']), 2),
+                     round(float(r['longitude']), 2))][r['obs_time']] = float(r['obs_val'])
+    if not obs_by_cell:
         return []
 
     hours_dict = defaultdict(list)
@@ -3358,15 +3350,12 @@ def _categorical_hours_for_box(cursor, model_name, fcst_var, obs_var, obs_src,
         h_fcst_binary, h_obs_binary, h_n_pts = {}, {}, 0
         for (lat_k, lon_k), (mean_rate, _std_rate, period) in hours_dict[hour]:
             vt = init_time_val + timedelta(hours=hour)
-            # Obs averaged over the same period the forecast record covers.
-            obs_window = [
-                obs_dict[(lat_k, lon_k, vt - timedelta(hours=dh))]
-                for dh in range(period - 1, -1, -1)
-                if (lat_k, lon_k, vt - timedelta(hours=dh)) in obs_dict
-            ]
-            if not obs_window:
+            # Obs averaged over the same period the forecast record covers; a
+            # partially observed window is rejected (see _obs_window_mean).
+            obs_rate, covered, _n_obs = _obs_window_mean(obs_by_cell.get((lat_k, lon_k)),
+                                                         vt, period)
+            if obs_rate is None or covered < period:
                 continue
-            obs_rate  = sum(obs_window) / len(obs_window)
             is_fcst = mean_rate > threshold_rate
             is_obs  = obs_rate  > threshold_rate
             if   is_fcst and     is_obs:  h_hits   += 1
@@ -3706,12 +3695,16 @@ def compare_region_metrics():
                 counts['correlation']     = len(corr_points)
 
             # Distinguish "grids don't line up" from "genuinely no data": the
-            # fcst↔obs join is rounded-key equality, so a misaligned grid gives
-            # zero matches and every metric silently comes back None.
+            # fcst↔obs join is rounded-key equality over a fully observed window,
+            # so a misaligned grid — or a lead time running past the end of the
+            # observation record — gives zero matches and every metric silently
+            # comes back None.
             if matched == 0:
                 warnings[m] = ('No forecast/observation grid cells matched in this '
-                               'region and lead-time range (no overlap or grid '
-                               'misalignment).')
+                               'region and lead-time range. Either the grids do not '
+                               'overlap, or these lead times fall past the end of the '
+                               'observation record — verification needs an observation '
+                               'covering the whole period each forecast record spans.')
 
             per_model[m]  = {k: values.get(k) for k in metrics}
             per_counts[m] = {k: counts.get(k, 0) for k in metrics}
