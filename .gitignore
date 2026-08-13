@@ -21,3 +21,11 @@ venv/
 .coverage
 coverage.xml
 htmlcov/
+
+# Raw model files kept locally for checking ingest conventions against source
+# (GRIB/NetCDF, tens of MB each). Useful to have on hand, too big to version —
+# see METRICS_AUDIT.md finding 16 for what they were used to verify.
+test_data/
+*.nc
+*.grib
+*.grib2
