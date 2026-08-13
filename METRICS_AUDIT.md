@@ -961,6 +961,88 @@ As with finding 14 the magnitudes are plausible (GEFS domain-mean rate sits
 between AIFS and UKMO), the field is spatially smooth, and nothing looks wrong
 until it is correlated against anything else.
 
+### Ingest investigation (2026-08-13)
+
+Everything structural was ruled out, and the fault is isolated to the
+precipitation *variable* — not the GEFS pipeline, which is otherwise sound.
+
+**GEFS wind is excellent.** On the shared grid, GEFS `wind_u_10m` against AIFS:
+
+```
+  fh 6  0.9568      fh 12  0.9539      fh 18  0.9333
+```
+
+Same downloader, same run, same grid, same members — so the cycle, the
+georeferencing, the member assembly and the regridding are all correct. Whatever
+is wrong is specific to precipitation.
+
+**The bucket convention is correct — now positively verified.** GEFS's own field
+correlated against itself across lead times shows a distinctive pairing:
+
+```
+        3     6     9    12    15    18    21    24
+fh3   1.00  0.89  0.29  0.26  0.25  0.29  0.41  0.41
+fh6   0.89  1.00  0.62  0.58  0.46  0.45  0.41  0.42
+fh9   0.29  0.62  1.00  0.98  0.76  0.67  0.35  0.31
+fh12  0.26  0.58  0.98  1.00  0.85  0.77  0.42  0.38
+fh15  0.25  0.46  0.76  0.85  1.00  0.98  0.67  0.59
+fh18  0.29  0.45  0.67  0.77  0.98  1.00  0.79  0.70
+fh21  0.41  0.41  0.35  0.42  0.67  0.79  1.00  0.97
+fh24  0.41  0.42  0.31  0.38  0.59  0.70  0.97  1.00
+```
+
+Adjacent pairs (3,6), (9,12), (15,18), (21,24) sit at 0.89-0.98 while UKMO's
+matrix decays smoothly with no pairing. That is exactly the NCEP signature: the
+`h % 6 == 0` record is the 6-hour bucket *containing* the preceding 3-hour one.
+`_precip_period_hours` handles this correctly. Finding 2's convention is
+confirmed, not merely assumed.
+
+**Also ruled out.** Member scrambling — the 30 members agree with each other at
+0.67-0.83, so the ensemble is correctly assembled. Grid truncation — the 34-row
+latitude axis seen at fh 12 is sparsification of dry cells, and GEFS precipitation
+does reach 45.0 N at other hours. Latitude compression — no affine lat mapping
+recovers agreement. A different cycle — GEFS was correlated against AIFS at every
+pairing of lead times from 6 to 72 h and no offset produces a diagonal. Corruption
+— the field is spatially smooth (lag-1 autocorrelation 0.877) and temporally
+coherent.
+
+**What remains.** The GEFS downloader (`~/Documents/AFW/GEFS/gefs_dwnld.py`)
+defines two different precipitation products:
+
+```python
+'precipitation': {
+    'f000_f240': {'var_name': 'Total_precipitation_surface_3_Hour_Accumulation_ens', ...},
+    'f246_f384': {'var_name': 'Total_precipitation_surface_6_Hour_Accumulation_ens', ...},
+}
+```
+
+but the extraction does not select on `var_name`. It substring-matches the
+variable attributes:
+
+```python
+search_patterns = {'tp': ['precipitation', 'precip'], ...}
+```
+
+A GEFS file carries several fields matching "precip" — total, convective, and
+rate products among them — and this takes whichever the loop reaches first. Wind
+is unaffected because its patterns (`'u-component'`, `'eastward'`) are far more
+specific. This is the only precipitation-specific step that differs from the wind
+path, and it is the prime suspect.
+
+**A caveat, stated because it does not fit.** Shifting the GEFS field +5.0 deg in
+longitude raises agreement with AIFS from about 0 to 0.42-0.50 at fh 12/18/24
+(the same shift destroys UKMO's 0.72 agreement, so it is not a generic artefact).
+But it makes fh 6 *worse* (0.21 unshifted against 0.10 shifted) and does not
+consistently improve agreement with the observations. A true georeferencing error
+would apply uniformly at every lead time, so this is recorded as unexplained
+rather than claimed as the cause.
+
+### Next step
+
+Re-extract GEFS precipitation selecting on the exact `var_name` instead of the
+substring match, and confirm which field the current data actually holds before
+trusting any GEFS precipitation score.
+
 ### Not fixed here
 
 Same class of problem as finding 14 and the same remedy: a data-acquisition
