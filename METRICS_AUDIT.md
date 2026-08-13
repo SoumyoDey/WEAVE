@@ -1171,3 +1171,45 @@ low SSRs in particular, should not be trusted until the field is confirmed.
 The model-model anomaly control used 4 time samples against 24 for the ERA5
 comparison, which favours the control. The gap is large enough that this does not
 overturn the conclusion, but a like-for-like sample would make it airtight.
+
+---
+
+## 14 — re-verified with rank anomalies and matched controls (2026-08-13)
+
+The qualification above noted that the model-model control used 4 time samples
+against 24 for the ERA5 comparison, which favoured the control. That objection is
+now removed. Per-cell **temporal Spearman** — rank-correlate each cell's own time
+series, then average over cells — run on identical times, identical cells and the
+identical statistic for every pair:
+
+```
+  3-hourly, times [0,3,6,9,12,15,18,21], 8 samples/cell
+    UKMO vs GEFS  (control)   mean rho=+0.663   cells=1521   frac>0=0.94
+    UKMO vs ERA5              mean rho=+0.100   cells=1521   frac>0=0.57
+    GEFS vs ERA5              mean rho=+0.113   cells=1681   frac>0=0.58
+
+  6-hourly, times [0,6,12,18], 4 samples/cell
+    AIFS vs UKMO  (control)   mean rho=+0.693   cells=1521   frac>0=0.93
+    AIFS vs GEFS  (control)   mean rho=+0.605   cells=1681   frac>0=0.89
+    AIFS vs ERA5              mean rho=+0.112   cells=1681   frac>0=0.54
+    UKMO vs ERA5              mean rho=+0.149   cells=1521   frac>0=0.57
+
+  hourly, times 0..23, 24 samples/cell
+    UKMO vs ERA5              mean rho=+0.082   cells=1521   frac>0=0.56
+```
+
+Three independent models agree with each other at 0.60-0.69 and every one of them
+agrees with ERA5 at 0.08-0.15, at every sampling cadence tested. `frac>0` is the
+plainest reading: 89-94% of cells agree in sign between any two models, against
+54-58% versus ERA5 — barely distinguishable from a coin flip.
+
+This is rank-based, so the skew that invalidated finding 15 cannot apply; the
+controls are matched sample-for-sample; and the result is stable across three
+cadences and four model pairs. **Finding 14 stands as re-verified.**
+
+The conclusion remains the qualified one: the ERA5 wind field shares large-scale
+spatial structure with the forecasts (per-hour spatial Spearman ~0.55) but not
+their temporal evolution. Bias and MAE against it are defensible. Anything that
+reads hour-to-hour change is not, and the low wind SSRs (0.14-0.48) in particular
+should be treated as an artefact of the mismatch rather than as ensemble
+overconfidence, until the field is confirmed against its source.
