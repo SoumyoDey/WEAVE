@@ -1419,3 +1419,47 @@ only thing that suggests otherwise, and it is what misleads.
 
 Anyone re-checking this should read `step` from the file rather than trusting the
 name.
+
+### All three conventions verified against raw source files
+
+Extending the f003/f006 check to every raw file on disk. Nothing below is
+inferred from the loaded database — it is read from the untouched files.
+
+**GEFS — the full reset cycle**, 2025-09-08 00Z, steps f003 to f015:
+
+```
+  pair          later >= earlier    ratio   reading
+  f003 -> f006          95.3%       1.92    contains the earlier (bucket open)
+  f006 -> f009          48.6%       0.50    independent (bucket reset)
+  f009 -> f012          96.8%       2.04    contains the earlier (bucket open)
+  f012 -> f015          58.9%       0.56    independent (bucket reset)
+```
+
+Reset every 6 h exactly as `_precip_period_hours` assumes. The implied
+non-overlapping 3-hour amounts are smooth and physical, which the raw records
+themselves are not:
+
+```
+   0-3h = f003         1.0240 mm
+   3-6h = f006 - f003  0.9406
+   6-9h = f009         0.9852
+  9-12h = f012 - f009  1.0286
+ 12-15h = f015         1.1365
+```
+
+**AIFS — cumulative, in mm.** `units = 'kg m**-2'`; step 0 h is identically zero
+and step 42 h has a mean of 12.60 mm, i.e. 0.300 mm/h averaged since
+initialisation. Confirms both the cumulative handling and finding 12: the export
+divides by 6, so differencing two stored records gives
+`(C(h) - C(h-6))/6`, the mean rate over that window.
+
+**UKMO — a rate, in `m s-1`.** `standard_name = 'rainfall_rate'`,
+`long_name = 'Total rainfall rate (stratiform + convective)'`. React.py's
+`x 3 600 000` is therefore correct (1000 mm/m x 3600 s/h), giving a 0.081 mm/h
+mean and a 139 mm/h maximum on the file checked. This was worth confirming: had
+the units been `kg m-2 s-1` the factor should have been 3600, and every UKMO
+value would have been 1000x too wet.
+
+No code change follows — every convention the metric layer implements is
+confirmed. The verification is recorded so the next person does not have to
+re-derive it from statistics, and because the GEFS filenames actively mislead.
