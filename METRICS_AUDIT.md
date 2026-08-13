@@ -30,8 +30,8 @@
 | 11 | Two parallel truth paths (native vs regridded) for the same metric names | Design | **Resolved 2026-08-13** |
 | 12 | AIFS cumulates a **mean rate (mm/h)**, not an amount — differencing then dividing by 6 made every AIFS precip number 6× too dry | Critical | Confirmed |
 | 13 | A **partially observed** verification window was accepted, scoring a 6 h forecast against one observation up to 5 h from its valid time | High | Confirmed |
-| 14 | The **ERA5 wind truth field does not describe the same weather as the forecasts** — every wind verification number is meaningless | Critical | Confirmed |
-| 15 | **GEFS precipitation correlates with nothing** — not the other two models, not the observations, at any lag | Critical | Confirmed |
+| 14 | The ERA5 wind field shares the large-scale spatial pattern with the forecasts but **not their temporal evolution** | High | Holds, qualified |
+| 15 | ~~GEFS precipitation correlates with nothing~~ — **RETRACTED 2026-08-13**, the analysis was invalid (raw Pearson on a heavily skewed field) | — | Withdrawn |
 
 ---
 
@@ -1065,3 +1065,109 @@ different questions:
 Conclusions here use the second. Where the two disagree, prefer the second, and
 never quote a peak shift from the first without checking it against the second —
 that mistake produced the withdrawn "-4 h UKMO labelling" note in finding 14.
+
+---
+
+## 15 — RETRACTED (2026-08-13). GEFS precipitation is a real forecast.
+
+**The finding above is withdrawn. The analysis behind it was invalid.**
+
+Every correlation in finding 15 was a raw Pearson coefficient on a precipitation
+field. Precipitation is heavily skewed, and the GEFS field is far peakier than
+the others:
+
+```
+  fh=12       n     mean   median      p90       max   frac>0.1
+  AIFS     1681   0.6131   0.1989   1.9793    5.5931      0.581
+  GEFS     1394   0.3090   0.0200   0.6844   22.4422      0.324
+  UKMO     1521   0.4739   0.0243   1.4814    8.1143      0.415
+  OBS      2025   0.4109   0.0000   1.1329   16.9650      0.277
+```
+
+GEFS has a median of 0.02 and a maximum of 22.4. Raw Pearson on such a field is
+dominated by a handful of extreme cells, and if those are displaced by even one
+gridpoint the coefficient collapses to zero while the field is broadly right.
+That is what happened.
+
+Under **rank (Spearman) correlation**, which is the appropriate statistic here,
+GEFS has clear and physically sensible skill:
+
+```
+          GEFS vs AIFS   GEFS vs UKMO   GEFS vs OBS
+  fh  6       0.427          0.436         0.381
+  fh 12       0.376          0.371         0.308
+  fh 18       0.251          0.145         0.163
+  fh 24       0.236          0.140           -
+```
+
+Skill decays with lead time, exactly as a real forecast does. The earlier claim
+that GEFS "correlates with nothing at any lag" was an artefact of the statistic,
+not a property of the data.
+
+**What stands from the investigation.** The structural checks were sound and are
+still worth keeping: the NCEP bucket convention is positively confirmed by the
+(3,6), (9,12), (15,18), (21,24) pairing at 0.89-0.98; the 30 members are
+correctly assembled; the grid is right; there is no cycle offset. The 34-row
+latitude axis is sparsification, not truncation.
+
+**What was wrong.** The conclusion that GEFS precipitation is unusable, the
+inference that the `gefs_dwnld.py` substring variable match had produced the
+wrong field, and the "+5 degree longitude shift" curiosity — that shift is just
+what happens when you slide a peaky field across a broad one and re-fit a
+Pearson coefficient, which is why it was inconsistent across lead times.
+
+GEFS does verify worse than UKMO here (Spearman against observations 0.38/0.31/0.16
+against UKMO's 0.67/0.69/0.75). That is a statement about model performance on
+this case, not a data fault.
+
+### Method correction
+
+**Never use raw Pearson correlation on precipitation.** Use Spearman, or Pearson
+on log1p, or a categorical score at a threshold. This mistake also produced the
+withdrawn "-4 h UKMO labelling" note in finding 14, so it has now caused two
+false findings. Before reporting any correlation-based conclusion:
+
+1. Check the skew of both fields (median against max).
+2. Run the same statistic on a **known-good pair** as a control — model against
+   model is the natural one. If the control also collapses, the statistic is at
+   fault, not the data.
+
+## 14 — qualified after the same review
+
+Finding 14 was re-checked against the same failure mode and **holds**, but its
+strongest claim is softened.
+
+Wind speed is only mildly skewed (max/median 5.5 for AIFS, 2.7 for ERA5) and
+rank correlation tracks Pearson closely, so the finding is not a skew artefact:
+
+```
+  fh   pair            pearson   spearman
+   0   AIFS vs GEFS      0.951      0.872
+   0   AIFS vs ERA5      0.435      0.417
+   6   AIFS vs GEFS      0.956      0.948
+   6   AIFS vs ERA5      0.565      0.643
+  12   AIFS vs GEFS      0.954      0.924
+  12   AIFS vs ERA5      0.631      0.667
+```
+
+The control finding 15 lacked was then run — the same per-cell temporal anomaly
+view applied to a known-good pair:
+
+```
+  UKMO vs ERA5 anomalies (24 times, 1521 cells) : pearson 0.017  spearman 0.084
+  UKMO vs AIFS anomalies (model against model)  : pearson 0.813  spearman 0.805
+```
+
+The anomaly view registers 0.81 between two models, so its near-zero reading
+against ERA5 is a real signal rather than a broken statistic.
+
+**Softened claim.** "Every wind verification number is meaningless" was too
+strong. Per-hour spatial correlation between UKMO and ERA5 averages 0.54
+(Spearman 0.55), so wind verification is not noise — the fields agree on
+large-scale structure. What they do not share is temporal evolution. Bias and
+MAE against ERA5 are defensible; anything reading hour-to-hour change, and the
+low SSRs in particular, should not be trusted until the field is confirmed.
+
+The model-model anomaly control used 4 time samples against 24 for the ERA5
+comparison, which favours the control. The gap is large enough that this does not
+overturn the conclusion, but a like-for-like sample would make it airtight.
