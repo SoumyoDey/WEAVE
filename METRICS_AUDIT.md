@@ -1567,6 +1567,29 @@ there the detail is the point.
 Wind is untouched. It is an instantaneous rate rather than an accumulation, so
 there is no window to reconcile.
 
+### It also removed a double-count
+
+GEFS's records overlap by construction — the `h%6==0` bucket contains the
+`h%6==3` one before it — so scoring every record pooled hours 0-3, 6-9, 12-15 and
+18-21 **twice**:
+
+```
+  before   fh3 (0,3]   fh6 (0,6]   fh9 (6,9]   fh12 (6,12]   fh15 (12,15] ...
+           4 overlapping pairs, 36 h of coverage over a 24 h span
+
+  after    fh6 (0,6]   fh12 (6,12]   fh18 (12,18]   fh24 (18,24]
+           0 overlaps, 24 h over 24 h — the windows tile exactly
+```
+
+Twelve of every twenty-four hours were counted double, weighting those hours'
+contribution to bias, MAE and the contingency counts. It was invisible because
+each record was individually paired with its own correct observation window —
+nothing was wrong per record, only in the pooling.
+
+Re-binning removes it as a side effect: the wider record wins, the narrower one
+it contains is dropped, and what survives tiles the span exactly. AIFS and UKMO
+never had the problem, their records being non-overlapping already.
+
 ### Result
 
 ```
