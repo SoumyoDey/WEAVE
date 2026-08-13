@@ -32,6 +32,7 @@
 | 13 | A **partially observed** verification window was accepted, scoring a 6 h forecast against one observation up to 5 h from its valid time | High | Confirmed |
 | 14 | ~~ERA5 wind is a different weather field~~ — **interpretation withdrawn 2026-08-13**; data confirmed correct by its owner. The measurement stands as an open verification result | Open question | Reframed |
 | 15 | ~~GEFS precipitation correlates with nothing~~ — **RETRACTED 2026-08-13**, the analysis was invalid (raw Pearson on a heavily skewed field) | — | Withdrawn |
+| 16 | GEFS precipitation was **double-converted** — its export already produced mm/h and the code divided by the bucket length again | Critical | Confirmed |
 
 ---
 
@@ -1282,3 +1283,69 @@ candidate explanations, and usually not the first one to reach for. Before
 concluding that reference data is wrong, the burden is external evidence about
 the data itself — provenance, timestamps, source parameters — not a correlation
 gap, however large.
+
+---
+
+## 16. GEFS precipitation was double-converted — Critical (2026-08-13)
+
+Confirmed by the data owner: **the "scaled" JSON export converted precipitation
+to mm/h before loading.** The loader folders name it —
+`json_data_aifs_ensemble_scaled` and `json_data_gefs_ensemble_scaled`, against
+`json_data_ukmo_ensemble` for UKMO, which is native mm/h and was never scaled.
+
+`_precip_rate_series` then divided GEFS by its bucket length a second time, so
+every GEFS precipitation number was 3-6x too low. Domain mean over 0-24 h:
+
+```
+  divided by bucket length (before)  0.053 mm/h
+  read as stored                     0.235 mm/h
+  observed                           0.387 mm/h
+  UKMO, never scaled                 0.418 mm/h
+```
+
+This is the same defect as finding 12, which caught AIFS. AIFS is cumulative so
+it surfaced as "the increment is already a rate"; GEFS is bucketed so it surfaces
+as "the stored value is already a rate". One cause, two shapes. The two are now
+expressed as one concept, `RATE_STORED_PRECIP_MODELS = {'AIFS', 'GEFS'}`, and
+`_increment_divisor` returns 1 for both.
+
+The record's own window is untouched — `_precip_period_hours` still reports 3 or
+6 h for GEFS — because that is the window observations are averaged over. Only
+the divisor changed.
+
+Effect on the region suite (32-40N, 80-72W, 6-18 h, threshold 1 mm/6h):
+
+```
+              bias      mae      csi      fss
+  GEFS before  -0.6236   0.8874   0.1396   0.3072
+  GEFS after   -0.0053   1.0620   0.2886   0.5426
+```
+
+Bias goes from strongly dry to essentially unbiased. MAE and RMSE rise because
+the values are several times larger, so absolute errors scale with them: GEFS now
+gets the domain total about right but places it less well than AIFS or UKMO,
+which its CSI and FSS already said.
+
+This also removes the last support for the retracted finding 15. GEFS's weak
+scores were part statistic (raw Pearson on a skewed field) and part this
+double conversion — not a broken data feed.
+
+### Still outstanding: the 3-hour records read 2x low
+
+The export appears to have divided **every** GEFS record by 6. That is right for
+the `h%6==0` buckets, which cover 6 h, but 2x too small for the `h%6==3` ones,
+which cover 3. Read as stored, the domain mean alternates in lockstep with the
+6-hourly cycle:
+
+```
+  fh      3      6      9     12     15     18     21     24
+       0.163  0.287  0.147  0.309  0.163  0.333  0.169  0.313
+```
+
+Seven of seven consecutive jumps exceed 1.6x. Doubling only the `h%6==3` records
+removes the alternation completely (0 of 7) and lifts the domain mean to
+0.316 mm/h, against 0.387 observed and 0.418 for UKMO.
+
+**Not applied.** Compensating in the metric layer would paper over an upstream
+export bug, and a re-export is the correct fix. Until then GEFS's 3-hourly
+records read about half what they should, so its odd-step scores are pessimistic.

@@ -268,12 +268,19 @@ MODEL_ACCUM_HOURS = {
 CUMULATIVE_PRECIP_MODELS = {'AIFS'}
 
 
-# Of the cumulative models, those whose running total accumulates a mean RATE
-# (mm/h) per output step rather than an AMOUNT (mm). Differencing two
-# consecutive records of such a model yields the mean rate over that window
-# directly; dividing by the window length again understates it by exactly that
-# factor. AIFS is one, established three independent ways from the loaded
-# 2025-09-08 00Z run (METRICS_AUDIT.md finding 12):
+# Models whose stored precipitation is ALREADY a mean rate in mm/h rather than
+# an amount in mm. Their JSON export converted to mm/h before loading — the
+# loader folders say so (`json_data_aifs_ensemble_scaled`,
+# `json_data_gefs_ensemble_scaled`; UKMO is native mm/h and was never scaled).
+# Dividing such a value by its window again understates it by exactly that
+# factor.
+#
+# For a cumulative model (AIFS) it is the *increment* that is already a rate;
+# for a bucketed one (GEFS) it is the stored value itself. Either way the
+# divisor is 1.
+#
+# AIFS was established three independent ways from the loaded 2025-09-08 00Z run
+# (METRICS_AUDIT.md finding 12):
 #
 #   1. Cell-level fit of the AIFS 6-h increment against the observed mean rate
 #      over the same window: obs = 1.15*incr + 0.07, n=3953, obs/incr = 1.33 —
@@ -285,15 +292,33 @@ CUMULATIVE_PRECIP_MODELS = {'AIFS'}
 #   3. 48-h water budget: summing the 6-h mean rates x 6 h gives 17.95 mm
 #      against 17.64 mm observed (1.8%). As an amount it would be 2.99 mm.
 #
-# The record still COVERS 6 h — _precip_period_hours stays 6, so the increment
-# is matched against the observed mean rate over the same 6 h. Only the divisor
-# that converts the increment to mm/h changes.
-RATE_CUMULATED_PRECIP_MODELS = {'AIFS'}
+# GEFS reads the same way, confirmed against the same run:
+#
+#   4. Dividing the stored value by its bucket length gives a domain mean of
+#      0.053 mm/h against 0.387 observed — the same ~7x understatement.
+#      Read as-is it is 0.235, and in family with UKMO's unscaled 0.418.
+#
+# The record still COVERS its own window — _precip_period_hours is unchanged, so
+# each record is matched against the observed mean rate over the same window.
+# Only the divisor that converts the stored value to mm/h changes.
+#
+# CAVEAT for GEFS: the export appears to have divided every record by 6, which
+# is right for the 6 h buckets but 2x too small for the 3 h ones — read as-is
+# the domain mean alternates 0.163 / 0.287 / 0.147 / 0.309 in lockstep with the
+# 6-hourly cycle (7 of 7 consecutive jumps > 1.6x). Doubling only the h%6==3
+# records removes the alternation entirely (0 of 7) and lands at 0.316 mm/h.
+# That correction is NOT applied here — it compensates for an upstream export
+# bug, and re-exporting is the right fix. See METRICS_AUDIT.md finding 16.
+RATE_STORED_PRECIP_MODELS = {'AIFS', 'GEFS'}
+
+# Retained under its former name for callers that imported it directly.
+RATE_CUMULATED_PRECIP_MODELS = RATE_STORED_PRECIP_MODELS
 
 
 def _increment_divisor(model_name, period):
-    """Hours to divide a differenced cumulative increment by to reach mm/h."""
-    return 1 if model_name in RATE_CUMULATED_PRECIP_MODELS else period
+    """Hours to divide a stored precipitation value (or a differenced cumulative
+    increment) by to reach mm/h. 1 when the value is already a rate."""
+    return 1 if model_name in RATE_STORED_PRECIP_MODELS else period
 
 
 def _obs_window_mean(cell_obs, valid_time, period):
@@ -360,7 +385,7 @@ def _precip_member_rate_series(model_name, series, is_wind=False):
         period = _precip_period_hours(model_name, hour)
         value  = series[hour]
         if not cumulative:
-            out[hour] = (value / period, period)
+            out[hour] = (value / _increment_divisor(model_name, period), period)
             continue
         prev_hour = hour - period
         if prev_hour <= 0:
@@ -400,7 +425,8 @@ def _precip_rate_series(model_name, series, is_wind=False):
         mean, std = series[hour]
         period    = _precip_period_hours(model_name, hour)
         if not cumulative:
-            out[hour] = (mean / period, (std / period) if std is not None else None, period)
+            div = _increment_divisor(model_name, period)
+            out[hour] = (mean / div, (std / div) if std is not None else None, period)
             continue
 
         prev_hour = hour - period
