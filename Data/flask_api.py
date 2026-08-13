@@ -52,7 +52,7 @@ from metrics import (                                    # noqa: E402
     _neighbourhood_fractions, _fss_components, _fss_from_components,
     _fractions_skill_score, _fss_from_pairs,
     _precip_period_hours, _precip_lookback_hours, _increment_divisor,
-    _obs_window_mean,
+    _obs_window_mean, _rebin_to_common_window, COMMON_VERIFICATION_WINDOW_HOURS,
     _precip_rate_series, _precip_member_rate_series,
     _categorical_summary, _region_mean, _region_pooled_metrics,
     _spatial_diff_points,
@@ -660,6 +660,11 @@ def _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
         cell: _precip_rate_series(model_name, series, is_wind)
         for cell, series in raw_by_cell.items()
     }
+    # Wind is instantaneous and already on one footing; precipitation is not, so
+    # every model is re-expressed on the common window before anything is scored.
+    if not is_wind:
+        rates_by_cell = {cell: _rebin_to_common_window(r)
+                         for cell, r in rates_by_cell.items()}
 
     max_period = max((p for rates in rates_by_cell.values()
                       for _, _, p in rates.values()), default=1)
@@ -2223,8 +2228,10 @@ def compare_skill():
                       for r in cursor.fetchall()}
             if not series:
                 continue
-            rates = {h: v for h, v in _precip_rate_series(m, series, is_wind).items()
-                     if hour_min <= h <= hour_max}
+            _r = _precip_rate_series(m, series, is_wind)
+            if not is_wind:
+                _r = _rebin_to_common_window(_r)   # one window for every model
+            rates = {h: v for h, v in _r.items() if hour_min <= h <= hour_max}
             if rates:
                 rates_of[m] = rates
                 periods_used.update(p for _, _, p in rates.values())
@@ -2775,12 +2782,14 @@ def categorical_metrics_endpoint():
             key = (round(float(r['latitude']), 2), round(float(r['longitude']), 2))
             raw_by_cell[key][r['forecast_hour']] = (float(r['mean_value']),
                                                     float(r['std_dev']))
-        rates_by_cell = {
-            cell: {h: v for h, v in
-                   _precip_rate_series(model_name, series, is_wind).items()
-                   if hour_min <= h <= hour_max}
-            for cell, series in raw_by_cell.items()
-        }
+        def _cell_rates(series):
+            r = _precip_rate_series(model_name, series, is_wind)
+            if not is_wind:
+                r = _rebin_to_common_window(r)     # one window for every model
+            return {h: v for h, v in r.items() if hour_min <= h <= hour_max}
+
+        rates_by_cell = {cell: _cell_rates(series)
+                         for cell, series in raw_by_cell.items()}
         centre_key = (round(c_lat, 2), round(c_lon, 2))
         rates = rates_by_cell.get(centre_key, {})
         if not rates:
@@ -3056,7 +3065,9 @@ def region_categorical_metrics_endpoint():
             key = (round(float(row['latitude']), 2), round(float(row['longitude']), 2))
             raw_by_cell[key][row['forecast_hour']] = (float(row['mean_value']),
                                                       float(row['std_dev']))
-        rates_by_cell = {cell: _precip_rate_series(model_name, series, is_wind)
+        rates_by_cell = {cell: (_precip_rate_series(model_name, series, is_wind) if is_wind
+                                else _rebin_to_common_window(
+                                    _precip_rate_series(model_name, series, is_wind)))
                          for cell, series in raw_by_cell.items()}
         in_range = [(cell, h, v) for cell, rates in rates_by_cell.items()
                     for h, v in rates.items() if hour_min <= h <= hour_max]
@@ -3306,7 +3317,9 @@ def _categorical_hours_for_box(cursor, model_name, fcst_var, obs_var, obs_src,
         key = (round(float(row['latitude']), 2), round(float(row['longitude']), 2))
         raw_by_cell[key][row['forecast_hour']] = (float(row['mean_value']),
                                                   float(row['std_dev']))
-    rates_by_cell = {cell: _precip_rate_series(model_name, series, is_wind)
+    rates_by_cell = {cell: (_precip_rate_series(model_name, series, is_wind) if is_wind
+                            else _rebin_to_common_window(
+                                _precip_rate_series(model_name, series, is_wind)))
                      for cell, series in raw_by_cell.items()}
 
     in_range = [(cell, h, v) for cell, rates in rates_by_cell.items()

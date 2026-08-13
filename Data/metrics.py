@@ -340,6 +340,51 @@ def _increment_divisor(model_name, period):
     return period
 
 
+# Every model is verified over this many hours, whatever cadence it emits at.
+#
+# A threshold only means one thing if the window means one thing. A 1 h mean rate
+# keeps peaks that a 6 h mean averages away, so a short-window model crosses a
+# high bar more often for no reason but its cadence — on the loaded run, UKMO's
+# hourly records exceeded 25 mm/6h 1.64x more often than the identical data
+# averaged to 6 h. Comparing its CSI against AIFS's 6-hourly CSI was therefore
+# comparing two different questions.
+#
+# 6 h is the coarsest native window in the set (AIFS throughout, GEFS at
+# h%6==0), so it is the only one every model can supply without inventing data.
+COMMON_VERIFICATION_WINDOW_HOURS = 6
+
+
+def _rebin_to_common_window(rates, window=COMMON_VERIFICATION_WINDOW_HOURS):
+    """{hour: (rate, std, period)} -> the same series on one common window.
+
+    A record already spanning `window` passes through untouched. Shorter records
+    are combined into it, weighted by their own periods, and only when they tile
+    the window exactly — a partial cover would understate the mean rate, which is
+    the same trap `_obs_window_mean` guards against on the observation side.
+    Anything that neither spans nor tiles the window is dropped.
+
+    Spread does not survive the combination: the spread of a mean is not the mean
+    of spreads, and the members needed to compute it properly are not in scope
+    here. Combined records return None, which SSR/CRPS/Brier already skip.
+    """
+    if not rates:
+        return {}
+    out = {}
+    for target in sorted(h for h in rates if h > 0 and h % window == 0):
+        record = rates.get(target)
+        if record is not None and record[2] == window:
+            out[target] = record                      # already the right span
+            continue
+        # Records whose own (h-period, h] lies inside (target-window, target].
+        parts = [(rate, period) for hour, (rate, _std, period) in rates.items()
+                 if hour <= target and hour - period >= target - window]
+        covered = sum(period for _rate, period in parts)
+        if parts and covered == window:
+            mean = sum(rate * period for rate, period in parts) / window
+            out[target] = (mean, None, window)
+    return out
+
+
 def _obs_window_mean(cell_obs, valid_time, period):
     """Mean observed rate over the window (valid_time - period, valid_time].
 
