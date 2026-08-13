@@ -1590,6 +1590,33 @@ Re-binning removes it as a side effect: the wider record wins, the narrower one
 it contains is dropped, and what survives tiles the span exactly. AIFS and UKMO
 never had the problem, their records being non-overlapping already.
 
+### Sweep for the same defect elsewhere
+
+The overlap affects any aggregate built across forecast hours, not only the
+pooled region metrics, so every such path was audited:
+
+| path | pools across hours? | verdict |
+|---|---|---|
+| `_fetch_fcst_obs_pairs_spatial` (region + spatial maps) | yes | re-binned |
+| `/api/compare/skill` | yes | re-binned |
+| `/api/compare/categorical`, `/api/categorical-metrics`, region categorical | yes | re-binned |
+| `_compute_correlation_points` (spatial correlation map) | **yes** | **was affected — now re-binned** |
+| `/api/spread-skill` (point) | **yes** | **was affected — now re-binned** |
+| `_compute_ssr_points` | no — a single hour | safe |
+| `/api/compare/timeseries`, `/api/forecast-data`, `point_timeseries` | no — per-hour display | safe, native cadence kept |
+
+The two that were still affected both compute a spread-skill **correlation**, which
+pairs spread against error over every available lead time — precisely the shape
+that inherits the overlap. Both now re-bin first, so GEFS contributes windows that
+tile: lead times 6, 12, 18 at period 6 h rather than 3, 6, 9, 12, 15, 18 with four
+overlapping pairs among them.
+
+`_rebin_member_to_common_window()` handles the per-member series that
+`/api/spread-skill` uses, re-binning each member before they are pooled so the
+resulting spread is the spread of 6 h means rather than of a mixture of window
+lengths.
+
+
 ### Result
 
 ```

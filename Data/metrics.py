@@ -417,6 +417,19 @@ def _rebin_to_common_window(rates, window=COMMON_VERIFICATION_WINDOW_HOURS):
     return out
 
 
+def _rebin_member_to_common_window(rates, window=COMMON_VERIFICATION_WINDOW_HOURS):
+    """`_rebin_to_common_window` for a per-member series, which carries no spread.
+
+    {hour: (rate, period)} -> {hour: (rate, period)}. Members are re-binned
+    individually and only then pooled, so the spread across the result is the
+    spread of the 6 h means rather than of a mixture of window lengths.
+    """
+    widened = {hour: (rate, None, period) for hour, (rate, period) in rates.items()}
+    return {hour: (rate, period)
+            for hour, (rate, _std, period)
+            in _rebin_to_common_window(widened, window).items()}
+
+
 def _obs_window_mean(cell_obs, valid_time, period):
     """Mean observed rate over the window (valid_time - period, valid_time].
 

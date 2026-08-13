@@ -54,6 +54,7 @@ from metrics import (                                    # noqa: E402
     _precip_period_hours, _precip_lookback_hours, _increment_divisor,
     _obs_window_mean, _rebin_to_common_window, COMMON_VERIFICATION_WINDOW_HOURS,
     _infer_scaled_export_divisor, SCALED_EXPORT_DIVISOR_HOURS,
+    _rebin_member_to_common_window,
     _precip_rate_series, _precip_member_rate_series,
     _categorical_summary, _region_mean, _region_pooled_metrics,
     _spatial_diff_points,
@@ -530,8 +531,15 @@ def _compute_correlation_points(cursor, run_id, variable_id, init_time,
     if not raw_by_cell:
         return [], 0
 
+    # Correlating spread against error pools ACROSS hours, so overlapping records
+    # would weight the hours they share twice (GEFS's h%6==0 bucket contains the
+    # h%6==3 one). Re-binning leaves windows that tile exactly.
+    def _cell_rates(series):
+        r = _precip_rate_series(model_name, series, is_wind)
+        return r if is_wind else _rebin_to_common_window(r)
+
     rates_by_cell = {
-        key: _precip_rate_series(model_name, entry['series'], is_wind)
+        key: _cell_rates(entry['series'])
         for key, entry in raw_by_cell.items()
     }
 
@@ -1488,8 +1496,13 @@ def get_spread_skill():
         members_by_hour = defaultdict(list)
         periods = {}
         for series in by_member.values():
-            for hour, (rate, period) in _precip_member_rate_series(
-                    model_name, series, is_wind=is_wind).items():
+            member_rates = _precip_member_rate_series(model_name, series, is_wind=is_wind)
+            if not is_wind:
+                # The correlation below pools across lead times, so overlapping
+                # records would count their shared hours twice. Re-bin each
+                # member before pooling, so the spread is of 6 h means.
+                member_rates = _rebin_member_to_common_window(member_rates)
+            for hour, (rate, period) in member_rates.items():
                 members_by_hour[hour].append(rate)
                 periods[hour] = period
         if not members_by_hour:
