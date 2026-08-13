@@ -31,6 +31,7 @@
 | 12 | AIFS cumulates a **mean rate (mm/h)**, not an amount — differencing then dividing by 6 made every AIFS precip number 6× too dry | Critical | Confirmed |
 | 13 | A **partially observed** verification window was accepted, scoring a 6 h forecast against one observation up to 5 h from its valid time | High | Confirmed |
 | 14 | The **ERA5 wind truth field does not describe the same weather as the forecasts** — every wind verification number is meaningless | Critical | Confirmed |
+| 15 | **GEFS precipitation correlates with nothing** — not the other two models, not the observations, at any lag | Critical | Confirmed |
 
 ---
 
@@ -875,10 +876,110 @@ re-run and checked against the forecast valid times before wind verification
 means anything. Flagged rather than patched: no code change can recover the
 right field, and silently suppressing the wind panels is the user's call.
 
-### Secondary observation
+### Secondary observation — superseded, see finding 15
 
-The precipitation anomaly test peaked at **dh = -4 h** rather than 0. The
-water-budget and cell-level fits in finding 12 were computed over 6-hourly
-windows, which would absorb an offset of this size, so this does not overturn
-them — but it is worth checking whether UKMO's hourly precipitation records are
-labelled with the start rather than the end of their valid hour.
+An earlier draft of this section reported that the precipitation anomaly test
+"peaked at dh = -4 h" and suggested UKMO's hourly records might be labelled with
+the start of their valid hour. **That reading was an artefact of the anomaly
+convention used** and is withdrawn. That scan removed each cell's *temporal*
+mean, which measures timing at a fixed point and is dominated by intermittency.
+Under the standard verification view — per-hour spatial anomalies, 6-hourly mean
+rates — the picture is:
+
+```
+model vs obs        dh=0     best
+  AIFS              0.522    0.597 at -3 h
+  UKMO              0.527    0.576 at -3 h
+```
+
+Both models shift together and the improvement is ~14%, not the five-fold effect
+the earlier view implied. UKMO's labelling is not the cause: it tracks AIFS at
+0.84 and observations at 0.53, which is a healthy, correctly-labelled model. The
+residual ~3 h preference is shared by both models and may be a real sub-window
+timing signal or an artefact of the observation record boundary; it is not worth
+acting on without a second case.
+
+The IMERG record does begin exactly 4.0 h before the run initialises
+(2025-09-07 20:00 against a 00Z init), which would also be explained by the
+download deliberately including lookback for the accumulation windows. Given the
+weak correlation evidence above, that benign explanation is the more likely one.
+
+---
+
+## 15. GEFS precipitation correlates with nothing — Critical (2026-08-13)
+
+Found while checking whether UKMO's hourly precipitation was mislabelled. It was
+not — but GEFS turned out to have the same signature as the ERA5 wind field in
+finding 14.
+
+Six-hourly mean precipitation rate on the shared grid, per-hour spatial
+anomalies, lead times 6/12/18/24 h:
+
+```
+model vs model (no observations involved)
+  AIFS - UKMO :  0.8425
+  AIFS - GEFS :  0.0563
+  GEFS - UKMO :  0.0164
+
+model vs observations, by applied shift
+    dh      AIFS      GEFS      UKMO
+    -6    0.5702    0.0111    0.5488
+    -4    0.5913    0.0315    0.5505
+    -3    0.5973    0.0273    0.5757
+    -2    0.5730    0.0291    0.5586
+    +0    0.5220    0.0327    0.5267
+    +2    0.4844    0.0330    0.4921
+```
+
+AIFS and UKMO agree strongly with each other (0.84) and verify sensibly against
+IMERG (~0.53). GEFS agrees with neither model, and with the observations at no
+lag. The bucket convention is not the explanation — the test was repeated
+treating the `h % 6 == 0` records as independent 3-hour buckets differenced
+against the `h-3` record, and GEFS stayed flat at ~0.03 either way:
+
+```
+  current (divide by own window)          peak dh=-1  corr=0.0357
+  differenced (independent 3 h buckets)   peak dh=+2  corr=0.0351
+```
+
+### What this means
+
+This retrospectively explains GEFS's poor region scores, which had been read as
+GEFS simply being the weaker model:
+
+```
+             bias      mae      csi      fss
+  AIFS    -0.2141   0.6741   0.6595   0.8988
+  GEFS    -0.6236   0.8874   0.1396   0.3072
+  UKMO     0.0207   0.9405   0.5701   0.8454
+```
+
+A CSI of 0.14 and FSS of 0.31 against 0.66/0.90 and 0.57/0.85 is not a model
+being worse — it is a model being scored against weather it never forecast.
+
+As with finding 14 the magnitudes are plausible (GEFS domain-mean rate sits
+between AIFS and UKMO), the field is spatially smooth, and nothing looks wrong
+until it is correlated against anything else.
+
+### Not fixed here
+
+Same class of problem as finding 14 and the same remedy: a data-acquisition
+issue that no code change can repair. The GEFS precipitation ingest needs
+re-checking against the 2025-09-08 00Z run — most likely the wrong cycle, date,
+or member set. Until then GEFS precipitation scores should not be presented as
+model skill.
+
+### Method note
+
+Two anomaly conventions were used across findings 14 and 15 and they answer
+different questions:
+
+- **per-cell temporal anomaly** (remove each cell's time mean) — measures whether
+  a model gets the timing right at a fixed location. Dominated by intermittency
+  for precipitation and easy to over-read.
+- **per-hour spatial anomaly** (remove each hour's domain mean) — the standard
+  verification view, measures whether the spatial pattern is right at each time.
+
+Conclusions here use the second. Where the two disagree, prefer the second, and
+never quote a peak shift from the first without checking it against the second —
+that mistake produced the withdrawn "-4 h UKMO labelling" note in finding 14.
