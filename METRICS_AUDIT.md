@@ -1387,3 +1387,35 @@ factors. Both readings flattened the alternation; only the source could say
 which. Do not infer a constant from a filename when the code that produced it can
 be found — and if it cannot be found, say the number is unknown rather than
 picking the one that fits.
+
+### Confirmed against the raw source files
+
+The 3 h / 6 h interleaving was originally inferred from a containment signature in
+the loaded data. It has since been verified directly against the untouched GRIB
+derivatives for the same 2025-09-08 00Z run — `test_data/` (f003) and
+`PRESENTATIONS/` (f006):
+
+```
+  f003: step=3.0   valid_time = init + 3 h
+  f006: step=6.0   valid_time = init + 6 h
+
+  WEAVE domain, all 30 members, 50,430 values
+    f003 mean 1.0240    f006 mean 1.9645    ratio 1.92
+    f006 >= f003 at 95.3% of points
+    f006 <  f003 at 2,388 points, largest shortfall 0.07 mm (GRIB packing)
+```
+
+An independent 3-6 h bucket would sit below the 0-3 h one at about half of
+points, with large negatives. `f006` contains `f003`. The interleaving is real,
+and `_increment_divisor` halving the `h%6==0` records is correct.
+
+**The filename is the trap.** Both files are named
+`Total_precipitation_surface_3_Hour_Accumulation_ens_...`, because that is the
+variable label the download config applies across `f000-f240`. It is accurate for
+f003 and wrong for f006, which holds a 6-hour accumulation. `gefs_dwnld.py`
+declares both products and `gefs_processing_readme_txt.txt` says plainly
+"Total precipitation (3h and 6h accumulations)" — the directory listing is the
+only thing that suggests otherwise, and it is what misleads.
+
+Anyone re-checking this should read `step` from the file rather than trusting the
+name.
