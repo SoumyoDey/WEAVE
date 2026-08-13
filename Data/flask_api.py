@@ -2697,8 +2697,15 @@ def categorical_metrics_endpoint():
         lon               = float(body.get('lon',        -75.0))
         hour_min          = int(body.get('hour_min',     0))
         hour_max          = int(body.get('hour_max',     168))
+        # FSS needs a neighbourhood. `box_cells` = 1 keeps this a true point —
+        # CSI/POD/FAR describe the clicked cell and FSS is undefined. Raising it
+        # gives FSS a field to work with WITHOUT moving the point metrics, which
+        # stay on the centre cell so their meaning never silently changes.
+        box_cells         = max(1, min(int(body.get('box_cells',  1)), 41))
+        fss_window        = max(1, min(int(body.get('fss_window', 3)), 21))
     except (TypeError, ValueError):
-        return jsonify({'error': 'lat, lon, hour_min, hour_max must be numeric'}), 400
+        return jsonify({'error': 'lat, lon, hour_min, hour_max, box_cells, '
+                                 'fss_window must be numeric'}), 400
 
     is_wind = (variable == 'wind')
     try:
@@ -2722,7 +2729,27 @@ def categorical_metrics_endpoint():
         # Wind → forecast SPEED via u/v self-join (see _fcst_speed_sql).
         # Cumulative models need one record below hour_min to difference against.
         lookback = 0 if is_wind else _precip_lookback_hours(model_name)
-        _sel, _frm, _varw, _vnn = _fcst_speed_sql(is_wind, "u.forecast_hour")
+
+        # Centre the box on the nearest grid cell rather than the raw click, so
+        # box_cells maps to exactly that many cells per axis instead of 1-or-4
+        # depending on where in a cell the user happened to click.
+        cursor.execute("""
+            SELECT latitude, longitude FROM regridded_forecast
+            WHERE model_name = %s AND variable_name = %s
+              AND latitude BETWEEN %s AND %s AND longitude BETWEEN %s AND %s
+            ORDER BY POWER(latitude - %s, 2) + POWER(longitude - %s, 2)
+            LIMIT 1
+        """, (model_name, fcst_var, lat - 1.0, lat + 1.0, lon - 1.0, lon + 1.0, lat, lon))
+        centre_row = cursor.fetchone()
+        if not centre_row:
+            return jsonify({'error': 'No forecast data found for the selected parameters.'}), 404
+        c_lat, c_lon = float(centre_row['latitude']), float(centre_row['longitude'])
+        hw = max(box_cells * 0.25 - 0.01, 0.05)
+        min_lat, max_lat = c_lat - hw, c_lat + hw
+        min_lon, max_lon = c_lon - hw, c_lon + hw
+
+        _sel, _frm, _varw, _vnn = _fcst_speed_sql(
+            is_wind, "u.forecast_hour, u.latitude, u.longitude")
         cursor.execute(f"""
             SELECT {_sel}
             FROM {_frm}
@@ -2734,7 +2761,7 @@ def categorical_metrics_endpoint():
             ORDER BY u.forecast_hour
         """, (model_name, *(() if is_wind else (fcst_var,)),
               max(0, hour_min - lookback), hour_max,
-              lat - 0.26, lat + 0.26, lon - 0.26, lon + 0.26))
+              min_lat, max_lat, min_lon, max_lon))
         fcst_rows = cursor.fetchall()
 
         if not fcst_rows:
@@ -2743,13 +2770,20 @@ def categorical_metrics_endpoint():
         # Convert to mm/h with this model's record semantics (findings 1-2).
         # Several cells can fall in the box; keep the first per hour so the
         # series stays one value per lead time.
-        raw_series = {}
+        from collections import defaultdict
+        raw_by_cell = defaultdict(dict)
         for r in fcst_rows:
-            raw_series.setdefault(r['forecast_hour'],
-                                  (float(r['mean_value']), float(r['std_dev'])))
-        rates = {h: v for h, v in
-                 _precip_rate_series(model_name, raw_series, is_wind).items()
-                 if hour_min <= h <= hour_max}
+            key = (round(float(r['latitude']), 2), round(float(r['longitude']), 2))
+            raw_by_cell[key][r['forecast_hour']] = (float(r['mean_value']),
+                                                    float(r['std_dev']))
+        rates_by_cell = {
+            cell: {h: v for h, v in
+                   _precip_rate_series(model_name, series, is_wind).items()
+                   if hour_min <= h <= hour_max}
+            for cell, series in raw_by_cell.items()
+        }
+        centre_key = (round(c_lat, 2), round(c_lon, 2))
+        rates = rates_by_cell.get(centre_key, {})
         if not rates:
             return jsonify({'error': 'No forecast data found for the selected parameters.'}), 404
 
@@ -2760,16 +2794,23 @@ def categorical_metrics_endpoint():
         max_obs_t = max(valid_times)
 
         cursor.execute("""
-            SELECT obs_time, AVG(value) AS obs_val
+            SELECT obs_time, latitude, longitude, AVG(value) AS obs_val
             FROM regridded_observation
             WHERE variable_name = %s AND source = %s
               AND obs_time BETWEEN %s AND %s
               AND latitude  BETWEEN %s AND %s
               AND longitude BETWEEN %s AND %s
-            GROUP BY obs_time ORDER BY obs_time
+            GROUP BY obs_time, latitude, longitude ORDER BY obs_time
         """, (obs_var, obs_src, min_obs_t, max_obs_t,
-              lat - 0.26, lat + 0.26, lon - 0.26, lon + 0.26))
-        obs_by_time = {r['obs_time']: float(r['obs_val']) for r in cursor.fetchall()}
+              min_lat, max_lat, min_lon, max_lon))
+        obs_by_cell_time = {}
+        for r in cursor.fetchall():
+            key = (round(float(r['latitude']), 2), round(float(r['longitude']), 2))
+            obs_by_cell_time[(key, r['obs_time'])] = float(r['obs_val'])
+        # The point metrics read the centre cell only, so their meaning is
+        # unchanged by the box: they still describe the clicked location.
+        obs_by_time = {t: v for (cell, t), v in obs_by_cell_time.items()
+                       if cell == centre_key}
 
         if not obs_by_time:
             return jsonify({
@@ -2782,6 +2823,26 @@ def categorical_metrics_endpoint():
         hits = misses = false_alarms = correct_neg = 0
         brier_sq_sum = 0.0
         n_brier      = 0
+        # FSS is the one metric here that needs a field rather than a cell, so
+        # it is accumulated separately over every cell in the box.
+        fss_num = fss_den = 0.0
+
+        def _fss_for_hour(hour):
+            f_bin, o_bin = {}, {}
+            for cell, cell_rates in rates_by_cell.items():
+                rec = cell_rates.get(hour)
+                if rec is None:
+                    continue
+                c_mean, _c_std, c_period = rec
+                c_vt = init_time_val + timedelta(hours=hour)
+                window = [obs_by_cell_time[(cell, c_vt - timedelta(hours=dh))]
+                          for dh in range(c_period - 1, -1, -1)
+                          if (cell, c_vt - timedelta(hours=dh)) in obs_by_cell_time]
+                if not window:
+                    continue
+                f_bin[cell] = float(c_mean > threshold_rate)
+                o_bin[cell] = float(sum(window) / len(window) > threshold_rate)
+            return _fss_components(f_bin, o_bin, fss_window)
 
         for hour in sorted(rates):
             mean_rate, std_rate, period = rates[hour]
@@ -2802,6 +2863,11 @@ def categorical_metrics_endpoint():
             is_obs  = obs_rate  > threshold_rate
 
             # Contingency table
+            if box_cells > 1:
+                h_num, h_den, _n = _fss_for_hour(hour)
+                fss_num += h_num
+                fss_den += h_den
+
             if   is_fcst and     is_obs:  hits         += 1
             elif is_fcst and not is_obs:  false_alarms += 1
             elif not is_fcst and is_obs:  misses       += 1
@@ -2845,14 +2911,21 @@ def categorical_metrics_endpoint():
         fbi  = round(n_fcst_yes  / n_obs_yes,   4) if n_obs_yes   > 0 else None
         csi  = round(hits / n_denom_csi, 4) if n_denom_csi > 0 else None
         bs   = round(brier_sq_sum / n_brier, 6) if n_brier else None
+        # None at box_cells == 1: a single cell has no neighbourhood to take an
+        # event fraction over, so FSS is undefined rather than zero.
+        fss  = _fss_from_components(fss_num, fss_den) if box_cells > 1 else None
 
         # Composite Confidence (FSS excluded — spatial-only metric)
         # Original weights: 0.40 CSI + 0.30 FSS + 0.20 POD + 0.10(1-FAR)
         # Without FSS re-normalise remaining to sum = 1 (÷ 0.70)
         if csi is not None and pod is not None and far is not None:
-            composite = round(
-                (0.40 * csi + 0.20 * pod + 0.10 * (1.0 - far)) / 0.70, 4
-            )
+            if fss is not None:
+                composite = round(0.40*csi + 0.30*fss + 0.20*pod + 0.10*(1.0-far), 4)
+            else:
+                # Re-normalise the remaining weights when FSS is unavailable.
+                composite = round(
+                    (0.40 * csi + 0.20 * pod + 0.10 * (1.0 - far)) / 0.70, 4
+                )
         else:
             composite = None
 
@@ -2871,6 +2944,15 @@ def categorical_metrics_endpoint():
               f"CSI={csi} POD={pod} FAR={far} FBI={fbi} BS={bs} CC={composite}")
 
         threshold_info = {'threshold_rate': round(threshold_rate, 4), 'model': model_name}
+        # The area actually scored, so the UI never has to guess.
+        scored_area = {
+            'centre':     [c_lat, c_lon],
+            'box_cells':  box_cells,
+            'fss_window': fss_window,
+            'bbox':       [round(min_lat, 3), round(max_lat, 3),
+                           round(min_lon, 3), round(max_lon, 3)],
+            'n_cells':    len(rates_by_cell),
+        }
         if is_wind:
             threshold_info['threshold_ms'] = threshold_rate
             threshold_info['unit']         = 'm/s'
@@ -2890,11 +2972,13 @@ def categorical_metrics_endpoint():
                 'fbi':                   fbi,
                 'csi':                   csi,
                 'brier_score':           bs,
+                'fss':                   fss,
                 'composite_confidence':  composite,
             },
             'obs_hours':    obs_hours_list,
             'obs_warning':  obs_warning,
             'threshold_info': threshold_info,
+            'scored_area':    scored_area,
         })
 
     except Exception as e:

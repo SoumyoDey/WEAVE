@@ -945,7 +945,7 @@ export function ComparisonTab({
             <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.xs }}>
               {isRegionMode
                 ? 'Compare models over the region drawn on the map'
-                : 'Compare models at a single location'}
+                : 'Forecasts and skill at one grid cell; categorical scores over a box around it'}
             </span>
           </div>
 
@@ -1883,6 +1883,21 @@ export function ComparisonTab({
                     </>
                   );
                 })()}
+
+                {catData?.bbox && (
+                  <div style={{ marginBottom: '12px' }}>
+                    <span style={{
+                      fontSize: t.fontSize.xs, color: 'rgba(255,255,255,0.45)',
+                      background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.12)',
+                      borderRadius: '10px', padding: '3px 10px',
+                    }}>
+                      scored: {catData.box_cells ?? boxCells}×{catData.box_cells ?? boxCells} cells
+                      {' '}({catData.bbox[0].toFixed(1)}–{catData.bbox[1].toFixed(1)}°N,
+                      {' '}{catData.bbox[2].toFixed(1)}–{catData.bbox[3].toFixed(1)}°E)
+                      {' · FSS over '}{catData.fss_window ?? fssWindow}×{catData.fss_window ?? fssWindow}
+                    </span>
+                  </div>
+                )}
 
                 {catData && catData.threshold_info && (
                   <div style={{ marginTop: '10px', fontSize: t.fontSize.xs, color: 'rgba(255,255,255,0.35)' }}>
