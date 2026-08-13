@@ -40,7 +40,12 @@ export function MetricPanel({
   const metricCfg = METRIC_CONFIG.find(m => m.key === metricType);
   // Thresholds are variable-specific, and the API sends them under different
   // parameter names (threshold_ms vs threshold_mm_6h) — the label has to agree.
-  const thresholdUnit = selectedVariable === 'wind' ? 'm/s' : 'mm/6h';
+  const isWind = selectedVariable === 'wind';
+  const thresholdUnit = isWind ? 'm/s' : 'mm/6h';
+  // The map is drawn in mm/h but the threshold is conventionally quoted over a
+  // 6 h window, so show the rate the backend actually compares against
+  // (threshold_mm_6h / 6) rather than leaving two units side by side unexplained.
+  const thresholdRate = isWind ? null : Number(metricThreshold) / 6;
 
   return (
     <div style={{
@@ -146,6 +151,11 @@ export function MetricPanel({
                 />
                 <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', whiteSpace: 'nowrap' }}>{thresholdUnit}</span>
               </div>
+              {thresholdRate != null && Number.isFinite(thresholdRate) && (
+                <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.35)', marginTop: '4px' }}>
+                  ≡ {thresholdRate.toFixed(2)} mm/h — the rate compared against the map
+                </div>
+              )}
             </div>
           )}
 

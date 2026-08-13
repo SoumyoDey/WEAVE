@@ -1071,47 +1071,72 @@ def get_forecast_data():
         if not run_id:
             return jsonify({'error': f'No data found for model {model_name}'}), 404
 
-        if member == 'mean':
+        # The map is labelled mm/h, so it has to BE mm/h. The three models do not
+        # share a record convention (AIFS cumulates, GEFS buckets, UKMO is already
+        # a rate), so the same conversion the metric endpoints use is applied here
+        # — otherwise AIFS simply looks wetter the further out you scrub, because
+        # its raw value is a running total since initialisation.
+        from collections import defaultdict
+        lookback = _precip_lookback_hours(model_name)
+        hours = sorted({forecast_hour, forecast_hour - lookback} - {h for h in (forecast_hour - lookback,) if h < 0})
+
+        def _fill_predecessor(series):
+            """A cumulative model needs the record one period back. Precipitation
+            was sparsified on load, so a cell absent at the earlier hour was dry
+            there — an implicit zero, not a gap that should void the cell."""
+            prev = forecast_hour - lookback
+            if lookback and prev >= 0 and prev not in series and forecast_hour in series:
+                series[prev] = (0.0, 0.0) if isinstance(series[forecast_hour], tuple) else 0.0
+            return series
+
+        if member in ('mean', 'std'):
             cursor.execute("""
-                SELECT latitude as lat, longitude as lon, mean_value as value
+                SELECT forecast_hour, latitude AS lat, longitude AS lon, mean_value, std_dev
                 FROM ensemble_statistics es
                 WHERE es.run_id = %s
                   AND es.variable_id = (SELECT variable_id FROM variables WHERE variable_name = %s)
-                  AND es.forecast_hour = %s
-            """, (run_id, variable_name, forecast_hour))
-
-        elif member == 'std':
-            cursor.execute("""
-                SELECT latitude as lat, longitude as lon, std_dev as value
-                FROM ensemble_statistics es
-                WHERE es.run_id = %s
-                  AND es.variable_id = (SELECT variable_id FROM variables WHERE variable_name = %s)
-                  AND es.forecast_hour = %s
-                  AND std_dev IS NOT NULL
-            """, (run_id, variable_name, forecast_hour))
-
+                  AND es.forecast_hour = ANY(%s)
+            """, (run_id, variable_name, hours))
+            by_cell = defaultdict(dict)
+            for row in cursor.fetchall():
+                if row['mean_value'] is None:
+                    continue
+                by_cell[(float(row['lat']), float(row['lon']))][row['forecast_hour']] = (
+                    float(row['mean_value']),
+                    float(row['std_dev']) if row['std_dev'] is not None else None)
+            idx = 0 if member == 'mean' else 1
+            result = []
+            for (lat, lon), series in by_cell.items():
+                rec = _precip_rate_series(model_name, _fill_predecessor(series)).get(forecast_hour)
+                # A None std is the unrecoverable-increment-spread case; it is
+                # dropped rather than shown as zero (see _precip_rate_series).
+                if rec is None or rec[idx] is None:
+                    continue
+                result.append({'lat': lat, 'lon': lon, 'value': rec[idx]})
         else:
             member_num = int(member)
             cursor.execute("""
-                SELECT latitude as lat, longitude as lon, value
+                SELECT forecast_hour, latitude AS lat, longitude AS lon, value
                 FROM forecast_data
                 WHERE run_id = %s
                   AND variable_id = (SELECT variable_id FROM variables WHERE variable_name = %s)
-                  AND forecast_hour = %s
+                  AND forecast_hour = ANY(%s)
                   AND ensemble_member = %s
-            """, (run_id, variable_name, forecast_hour, member_num))
+            """, (run_id, variable_name, hours, member_num))
+            by_cell = defaultdict(dict)
+            for row in cursor.fetchall():
+                if row['value'] is None:
+                    continue
+                by_cell[(float(row['lat']), float(row['lon']))][row['forecast_hour']] = float(row['value'])
+            result = []
+            for (lat, lon), series in by_cell.items():
+                rec = _precip_member_rate_series(model_name, _fill_predecessor(series)).get(forecast_hour)
+                if rec is None:
+                    continue
+                result.append({'lat': lat, 'lon': lon, 'value': rec[0]})
 
-        data   = cursor.fetchall()
-        result = [
-            {
-                'lat':   float(row['lat']),
-                'lon':   float(row['lon']),
-                'value': float(row['value']) if row['value'] else 0
-            }
-            for row in data
-        ]
-
-        print(f"✅ Returned {len(result)} precipitation points for {model_name} +{forecast_hour}h")
+        print(f"✅ Returned {len(result)} precipitation points (mm/h) for "
+              f"{model_name} +{forecast_hour}h")
         return jsonify(result)
 
     except Exception as e:
