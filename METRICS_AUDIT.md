@@ -1463,3 +1463,55 @@ value would have been 1000x too wet.
 No code change follows — every convention the metric layer implements is
 confirmed. The verification is recorded so the next person does not have to
 re-derive it from statistics, and because the GEFS filenames actively mislead.
+
+### Independently re-verified on a second run — 2025-09-16 00Z
+
+The GEFS convention and the correction derived from it were both established on
+the 2025-09-08 00Z case. A second, unrelated run was later supplied in
+`test_data/` — steps f003 to f024, eight consecutive records covering four
+complete reset cycles, on a date that never entered the database.
+
+Containment, globally (259,920 points x 30 members per step):
+
+```
+  pair          later >= earlier   ratio   reading
+  f003 -> f006          91.1%      2.01    contains the earlier (bucket open)
+  f006 -> f009          56.0%      0.50    independent (reset)
+  f009 -> f012          94.3%      1.99    contains the earlier (bucket open)
+  f012 -> f015          60.0%      0.50    independent (reset)
+  f015 -> f018          95.1%      2.04    contains the earlier (bucket open)
+  f018 -> f021          59.4%      0.51    independent (reset)
+  f021 -> f024          95.0%      1.98    contains the earlier (bucket open)
+```
+
+Four cycles, alternating without exception, and the ratios land on 2.00 and 0.50
+almost exactly — a 0-6 h total is twice the 0-3 h total it contains, and the next
+3 h bucket is about half the 0-6 h total it follows.
+
+The implied non-overlapping 3-hour amounts are smooth where the stored records
+are not:
+
+```
+  amounts  0.419  0.317  0.367  0.402  0.393  0.387  0.407  0.348   0 of 7 jumps >1.6x
+  raw records as stored                                             7 of 7
+```
+
+**End to end through the real code path.** Simulating the export (÷3 flat) and
+running `_precip_rate_series('GEFS', ...)` against the mean rate computed straight
+from the raw files:
+
+```
+    fh  window   raw mm   stored  code rate  true rate       err
+     3      3h   0.4188   0.1396     0.1396     0.1396   0.00e+00
+     6      6h   0.7358   0.2453     0.1226     0.1226   0.00e+00
+     9      3h   0.3670   0.1223     0.1223     0.1223   0.00e+00
+    12      6h   0.7687   0.2562     0.1281     0.1281   0.00e+00
+    15      3h   0.3929   0.1310     0.1310     0.1310   0.00e+00
+    18      6h   0.7799   0.2600     0.1300     0.1300   0.00e+00
+    21      3h   0.4074   0.1358     0.1358     0.1358   0.00e+00
+    24      6h   0.7548   0.2516     0.1258     0.1258   0.00e+00
+```
+
+Exact to the last digit at every step. This closes the one weakness left in
+finding 16: the correction was derived from a single case, and it now demonstrably
+generalises to an independent run.
