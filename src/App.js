@@ -424,31 +424,68 @@ function App() {
     const map = mapInstanceRef.current;
     if (!map || selectionMode !== 'rectangle') return;
     map.dragging.disable(); map.scrollWheelZoom.disable(); map.doubleClickZoom.disable();
-    map.getContainer().style.cursor = 'crosshair';
-    let startLL = null, previewRect = null;
-    const onMouseDown = (e) => { startLL = e.latlng; };
-    const onMouseMove = (e) => {
-      if (!startLL) return;
-      if (previewRect) map.removeLayer(previewRect);
-      previewRect = L.rectangle(L.latLngBounds(startLL, e.latlng), { color: '#3498db', weight: 2, dashArray: '5 4', fillOpacity: 0.08, fillColor: '#3498db', interactive: false }).addTo(map);
+    const container = map.getContainer();
+    const prevCursor = container.style.cursor;
+    const prevTouchAction = container.style.touchAction;
+    container.style.cursor = 'crosshair';
+    // Pointer events rather than Leaflet's mouse events: Leaflet derives
+    // 'mousedown'/'mousemove'/'mouseup' from DOM mouse events only, so on a
+    // touchscreen none of them fire and the rectangle could never be drawn.
+    // touch-action:none is required too — without it the browser claims the
+    // gesture as a pan and no pointermove ever reaches us.
+    container.style.touchAction = 'none';
+
+    let startLL = null, previewRect = null, activePointer = null;
+    const toLatLng = (e) => {
+      const r = container.getBoundingClientRect();
+      return map.containerPointToLatLng(L.point(e.clientX - r.left, e.clientY - r.top));
     };
-    const onMouseUp = (e) => {
-      if (!startLL) return;
+    const clearPreview = () => {
       if (previewRect) { map.removeLayer(previewRect); previewRect = null; }
-      const bounds = L.latLngBounds(startLL, e.latlng);
+    };
+    const onPointerDown = (e) => {
+      if (!e.isPrimary || activePointer !== null) return;
+      activePointer = e.pointerId;
+      // Capture so a drag that leaves the map still delivers move/up to us.
+      try { container.setPointerCapture(e.pointerId); } catch { /* non-fatal */ }
+      startLL = toLatLng(e);
+      e.preventDefault();
+    };
+    const onPointerMove = (e) => {
+      if (!startLL || e.pointerId !== activePointer) return;
+      clearPreview();
+      previewRect = L.rectangle(L.latLngBounds(startLL, toLatLng(e)), { color: '#3498db', weight: 2, dashArray: '5 4', fillOpacity: 0.08, fillColor: '#3498db', interactive: false }).addTo(map);
+      e.preventDefault();
+    };
+    const onPointerUp = (e) => {
+      if (!startLL || e.pointerId !== activePointer) return;
+      clearPreview();
+      const bounds = L.latLngBounds(startLL, toLatLng(e));
       const sw = bounds.getSouthWest(), ne = bounds.getNorthEast();
-      if (Math.abs(ne.lat - sw.lat) < 0.1 || Math.abs(ne.lng - sw.lng) < 0.1) { startLL = null; return; }
+      startLL = null; activePointer = null;
+      try { container.releasePointerCapture(e.pointerId); } catch { /* non-fatal */ }
+      // A tap is a zero-area drag: ignore it rather than selecting a sliver.
+      if (Math.abs(ne.lat - sw.lat) < 0.1 || Math.abs(ne.lng - sw.lng) < 0.1) return;
       if (selectionLayerRef.current) map.removeLayer(selectionLayerRef.current);
       selectionLayerRef.current = L.rectangle(bounds, { color: '#e67e22', weight: 2, dashArray: '6 4', fillOpacity: 0.06, fillColor: '#e67e22', interactive: false }).addTo(map);
       setSelectedRegion({ type: 'rectangle', bounds: { min_lat: sw.lat, max_lat: ne.lat, min_lon: sw.lng, max_lon: ne.lng } });
-      setSelectionMode(null); setShowMetricPanel(true); startLL = null;
+      setSelectionMode(null); setShowMetricPanel(true);
     };
-    map.on('mousedown', onMouseDown); map.on('mousemove', onMouseMove); map.on('mouseup', onMouseUp);
+    const onPointerCancel = () => { clearPreview(); startLL = null; activePointer = null; };
+
+    container.addEventListener('pointerdown', onPointerDown);
+    container.addEventListener('pointermove', onPointerMove);
+    container.addEventListener('pointerup', onPointerUp);
+    container.addEventListener('pointercancel', onPointerCancel);
     return () => {
-      map.off('mousedown', onMouseDown); map.off('mousemove', onMouseMove); map.off('mouseup', onMouseUp);
-      if (previewRect) map.removeLayer(previewRect);
+      container.removeEventListener('pointerdown', onPointerDown);
+      container.removeEventListener('pointermove', onPointerMove);
+      container.removeEventListener('pointerup', onPointerUp);
+      container.removeEventListener('pointercancel', onPointerCancel);
+      clearPreview();
       map.dragging.enable(); map.scrollWheelZoom.enable(); map.doubleClickZoom.enable();
-      map.getContainer().style.cursor = '';
+      container.style.cursor = prevCursor;
+      container.style.touchAction = prevTouchAction;
     };
   }, [selectionMode, mapReady]); // eslint-disable-line
 
@@ -457,7 +494,14 @@ function App() {
     const map = mapInstanceRef.current;
     if (!map || selectionMode !== 'polygon') return;
     map.dragging.disable(); map.scrollWheelZoom.disable(); map.doubleClickZoom.disable();
-    map.getContainer().style.cursor = 'crosshair';
+    const polyContainer = map.getContainer();
+    const prevPolyCursor = polyContainer.style.cursor;
+    const prevPolyTouchAction = polyContainer.style.touchAction;
+    polyContainer.style.cursor = 'crosshair';
+    // Vertices come from Leaflet 'click', which browsers do synthesise from a
+    // tap, so the event model is left alone here. touch-action still has to be
+    // pinned so the tap is not consumed as a page pan first.
+    polyContainer.style.touchAction = 'none';
     const vertices = [], markers = [];
     let polyline = null;
     const updatePolyline = () => {
@@ -489,7 +533,8 @@ function App() {
       if (polyline) map.removeLayer(polyline);
       markers.forEach(m => map.removeLayer(m));
       map.dragging.enable(); map.scrollWheelZoom.enable(); map.doubleClickZoom.enable();
-      map.getContainer().style.cursor = '';
+      polyContainer.style.cursor = prevPolyCursor;
+      polyContainer.style.touchAction = prevPolyTouchAction;
     };
   }, [selectionMode, mapReady]); // eslint-disable-line
 
