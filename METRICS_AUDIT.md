@@ -30,6 +30,7 @@
 | 11 | Two parallel truth paths (native vs regridded) for the same metric names | Design | **Resolved 2026-08-13** |
 | 12 | AIFS cumulates a **mean rate (mm/h)**, not an amount — differencing then dividing by 6 made every AIFS precip number 6× too dry | Critical | Confirmed |
 | 13 | A **partially observed** verification window was accepted, scoring a 6 h forecast against one observation up to 5 h from its valid time | High | Confirmed |
+| 14 | The **ERA5 wind truth field does not describe the same weather as the forecasts** — every wind verification number is meaningless | Critical | Confirmed |
 
 ---
 
@@ -788,3 +789,96 @@ rather than erroring when a cell has no members. 156 backend + 22 frontend pass;
 be compared. Once you are satisfied, it can be dropped. The wind member grid was
 regridded the same way (u and v separately, combined as √(u²+v²) per member,
 since the combination is not linear and cannot be done before interpolating).
+
+---
+
+## 14. The ERA5 wind truth field is not the same weather — Critical (2026-08-13)
+
+Chasing an apparent wind bias (forecast ~13 m/s against ~8 m/s observed at one
+point) turned up something worse than a bias. **There is no wind bias.** The
+domain means agree closely — AIFS 4.45 m/s against ERA5 4.25 m/s at fh 0, a
++0.19 m/s difference. What is wrong is that the two fields describe *different
+weather*, so every wind verification score in the app is currently meaningless.
+
+### Evidence
+
+**1. The models agree with each other, not with the truth field.** Wind speed on
+the shared grid:
+
+```
+       AIFS-GEFS   AIFS-ERA5   GEFS-ERA5
+fh  0     0.951       0.435       0.424
+fh  6     0.956       0.565       0.562
+fh 12     0.954       0.631       0.658
+fh 18     0.937       0.526       0.538
+```
+
+Two independently developed models agree at 0.95. Both agree with ERA5 at half
+that. When independent forecasts agree with each other and disagree with the
+verification field, the verification field is the outlier.
+
+**2. The lead-time pattern is backwards.** Agreement with ERA5 is *worst* at
+fh 0 (0.435) and improves to fh 12 (0.631). At analysis time a forecast should
+match the analysis most closely and decay from there. This is the opposite.
+
+**3. Separating the static pattern from the weather.** Decomposing each field
+into its time mean and its anomaly:
+
+```
+time-mean fields (land/sea contrast, climatology):  corr = 0.616
+anomalies (the actual weather), pooled            :  corr = 0.029
+```
+
+The agreement that exists is entirely geography — winds are stronger over water
+in both fields. The weather itself is uncorrelated.
+
+**4. No alignment error explains it.** Every candidate was tested and rejected:
+
+```
+spatial shift scan, dlat/dlon in +/-2 deg  -> best is (0,0), no improvement
+N-S flip, E-W flip, both                   -> all worse than direct
+transpose (the grid is 81x81, so a         -> -0.075, far worse
+  transposed array fails silently)
+time shift, dh in -12..+12 h, anomalies    -> flat at ~0.02 everywhere,
+  (UKMO hourly, 24 lead times, 1521 cells)    best +1 h at 0.024
+```
+
+**5. It is specific to wind.** The same anomaly test on precipitation against
+IMERG gives a coherent structure — monotone through zero, peaking at 0.174 —
+where wind is flat noise. Precipitation truth was separately confirmed by the
+48 h water budget matching observations to 1.8% (finding 12). The IMERG field is
+sound; the ERA5 wind field is not.
+
+**6. The component signature.** At 37.0 N 72.25 W, fh 0, all 50 AIFS members
+agree on u = -17.9 m/s (spread 1.94) while ERA5 has u = +0.70 m/s. The v
+components nearly match (-4.19 against -4.34). Both AIFS and GEFS anticorrelate
+with ERA5 on u (-0.31, -0.26) and weakly correlate on v (+0.46, +0.37) — the
+same signature in both models, which again points at the shared truth field.
+
+### What this means
+
+Magnitudes are plausible, the field is spatially smooth, and the land/sea
+pattern is right, which is exactly why this was invisible: wind verification
+*looks* reasonable and is entirely uninformative. Every wind number — bias, MAE,
+RMSE, SSR, CSI, POD, FAR — is computed against a field that is not the weather
+being forecast. The low wind SSRs (0.14-0.48) are a symptom: the "error" term is
+dominated by the mismatch, so the ensemble looks far more overconfident than it is.
+
+Precipitation is unaffected and remains trustworthy.
+
+### Not fixed here
+
+This is a data-acquisition problem, not a code one — most likely the ERA5 pull
+fetched a different date (or a different year) from the 2025-09-08 00Z forecast
+run, since the labels would still read as requested. It needs the ERA5 download
+re-run and checked against the forecast valid times before wind verification
+means anything. Flagged rather than patched: no code change can recover the
+right field, and silently suppressing the wind panels is the user's call.
+
+### Secondary observation
+
+The precipitation anomaly test peaked at **dh = -4 h** rather than 0. The
+water-budget and cell-level fits in finding 12 were computed over 6-hourly
+windows, which would absorb an offset of this size, so this does not overturn
+them — but it is worth checking whether UKMO's hourly precipitation records are
+labelled with the start rather than the end of their valid hour.
