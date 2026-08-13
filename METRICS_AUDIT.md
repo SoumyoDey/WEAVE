@@ -30,7 +30,7 @@
 | 11 | Two parallel truth paths (native vs regridded) for the same metric names | Design | **Resolved 2026-08-13** |
 | 12 | AIFS cumulates a **mean rate (mm/h)**, not an amount — differencing then dividing by 6 made every AIFS precip number 6× too dry | Critical | Confirmed |
 | 13 | A **partially observed** verification window was accepted, scoring a 6 h forecast against one observation up to 5 h from its valid time | High | Confirmed |
-| 14 | The ERA5 wind field shares the large-scale spatial pattern with the forecasts but **not their temporal evolution** | High | Holds, qualified |
+| 14 | ~~ERA5 wind is a different weather field~~ — **interpretation withdrawn 2026-08-13**; data confirmed correct by its owner. The measurement stands as an open verification result | Open question | Reframed |
 | 15 | ~~GEFS precipitation correlates with nothing~~ — **RETRACTED 2026-08-13**, the analysis was invalid (raw Pearson on a heavily skewed field) | — | Withdrawn |
 
 ---
@@ -1213,3 +1213,72 @@ their temporal evolution. Bias and MAE against it are defensible. Anything that
 reads hour-to-hour change is not, and the low wind SSRs (0.14-0.48) in particular
 should be treated as an artefact of the mismatch rather than as ensemble
 overconfidence, until the field is confirmed against its source.
+
+---
+
+## 14 — interpretation withdrawn (2026-08-13). Data confirmed correct.
+
+**The ERA5 wind data has been confirmed correct by its owner, and the conclusion
+that it was "different weather" is withdrawn.** The GEFS precipitation data was
+likewise confirmed correct, and finding 15 was already retracted on its own
+merits (a bad statistic — see the method correction there).
+
+### The inference that was wrong
+
+The argument was: three independent models agree with each other at 0.60-0.69 on
+temporal evolution but with ERA5 at 0.08-0.15, therefore ERA5 is the outlier.
+
+That inference is weaker than it was presented. **Models cluster.** AIFS, GEFS
+and UKMO initialise from similar global analyses and share resolution limits and
+physics lineages, so their errors are correlated with each other. Agreeing with
+one another more closely than with an independent truth field is an expected
+property of a model ensemble, not evidence that the truth field is wrong. A known
+phenomenon was treated as a smoking gun.
+
+The same applies to the "worst at fh 0" observation. At analysis time the models
+are closest to their own shared initial state, which is not ERA5; there is no
+requirement that a model's own 10 m wind at fh 0 match an independent reanalysis
+closely, particularly for a near-surface field that depends heavily on the
+boundary-layer scheme and the land-surface representation, where models differ
+most from one another and from a reanalysis.
+
+### What the measurement still says
+
+The numbers themselves are not in dispute and are reproducible:
+
+```
+  per-cell temporal Spearman, matched times and cells
+    model vs model   +0.60 to +0.69   (frac of cells with rho>0: 0.89-0.94)
+    model vs ERA5    +0.08 to +0.15   (frac: 0.54-0.58)
+  per-hour spatial Spearman, UKMO vs ERA5:  ~0.55
+```
+
+Read against correct data, this is a **verification result about the models, not
+a fault in the truth**: on this case the three ensembles reproduce ERA5's
+large-scale wind pattern (spatial ~0.55) but have little cell-level skill at the
+hour-to-hour evolution of 10 m wind. That is a legitimate and interesting finding
+in its own right, and it is what the Comparison and Analysis tabs are for.
+
+It also means the low wind SSRs (0.14-0.48) should be read at face value: spread
+is small relative to error because the error is genuinely large, i.e. the
+ensembles are overconfident for 10 m wind on this case. The earlier advice to
+distrust them was based on the withdrawn interpretation.
+
+### Standing guidance, revised
+
+Wind verification numbers are **usable**. Nothing in the pipeline needs changing
+and no code fix follows from this finding.
+
+### What this cost, and the lesson
+
+Two findings in this audit (14's interpretation and 15 entirely) over-read a
+statistic into a data-quality accusation. The method correction under finding 15
+covers the statistical half (never raw Pearson on skewed fields; always control
+against a known-good pair). The second half is inferential:
+
+**Model-vs-model agreement is not a truth test.** When forecasts agree with each
+other and disagree with an observation, the observation is only one of the
+candidate explanations, and usually not the first one to reach for. Before
+concluding that reference data is wrong, the burden is external evidence about
+the data itself — provenance, timestamps, source parameters — not a correlation
+gap, however large.
