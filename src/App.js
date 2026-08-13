@@ -90,12 +90,23 @@ function App() {
   const [selectedRegion, setSelectedRegion]     = useState(null);
   const [metricType, setMetricType]             = useState('ssr');
   const [metricHour, setMetricHour]             = useState(6);
+  // 25 mm/6h for precipitation, 10 m/s for wind — the same defaults the
+  // Analysis and Comparison tabs use.
   const [metricThreshold, setMetricThreshold]   = useState(25);
   const [spatialData, setSpatialData]           = useState(null);
   const [spatialLoading, setSpatialLoading]     = useState(false);
   const [showMetricPanel, setShowMetricPanel]   = useState(false);
   const [panelPos, setPanelPos]                 = useState({ x: 16, y: 120 });
   const [panelMinimized, setPanelMinimized]     = useState(false);
+
+  // A threshold is meaningless across a variable change — 25 mm/6h carried into
+  // wind mode reads as 25 m/s, a storm-force bar that scores everything a miss.
+  // Reset to the variable's own default and drop the now-stale map, matching
+  // what the Analysis and Comparison tabs do.
+  useEffect(() => {
+    setMetricThreshold(selectedVariable === 'wind' ? 10 : 25);
+    setSpatialData(null);
+  }, [selectedVariable]);
 
   // ── Analysis tab state ────────────────────────────────────────────────────────
 
@@ -674,6 +685,7 @@ function App() {
         {showMetricPanel && selectedRegion && !selectionMode && (
           <MetricPanel
             selectedRegion={selectedRegion}
+            selectedVariable={selectedVariable}
             panelPos={panelPos} setPanelPos={setPanelPos}
             panelMinimized={panelMinimized} setPanelMinimized={setPanelMinimized}
             metricType={metricType} setMetricType={setMetricType}

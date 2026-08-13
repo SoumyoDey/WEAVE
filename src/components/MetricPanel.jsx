@@ -11,6 +11,7 @@ import { METRIC_CONFIG } from '../constants';
  *   setPanelPos       {fn}
  *   panelMinimized    {boolean}
  *   setPanelMinimized {fn}
+ *   selectedVariable  {string}  'precipitation' | 'wind' — sets the threshold unit
  *   metricType        {string}
  *   setMetricType     {fn}
  *   metricHour        {number}
@@ -24,6 +25,7 @@ import { METRIC_CONFIG } from '../constants';
  */
 export function MetricPanel({
   selectedRegion,
+  selectedVariable,
   panelPos, setPanelPos,
   panelMinimized, setPanelMinimized,
   metricType, setMetricType,
@@ -36,6 +38,9 @@ export function MetricPanel({
   if (!selectedRegion) return null;
 
   const metricCfg = METRIC_CONFIG.find(m => m.key === metricType);
+  // Thresholds are variable-specific, and the API sends them under different
+  // parameter names (threshold_ms vs threshold_mm_6h) — the label has to agree.
+  const thresholdUnit = selectedVariable === 'wind' ? 'm/s' : 'mm/6h';
 
   return (
     <div style={{
@@ -139,7 +144,7 @@ export function MetricPanel({
                   onChange={e => setMetricThreshold(Number(e.target.value))}
                   style={{ flex: 1, padding: '5px 8px', fontSize: '12px', fontWeight: '600', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'white', textAlign: 'right', outline: 'none' }}
                 />
-                <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', whiteSpace: 'nowrap' }}>mm/6h</span>
+                <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', whiteSpace: 'nowrap' }}>{thresholdUnit}</span>
               </div>
             </div>
           )}
