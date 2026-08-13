@@ -521,3 +521,42 @@ defaults to the window: at `fss_window` 3 the box was +/-0.75 degrees and is
 now +/-2.25.
 
 141 backend tests pass (was 134).
+
+
+## The scored area is now explicit, and FSS reaches Analysis point mode
+
+"Point" meant two different things and neither tab said so. Analysis point mode
+scored a single grid cell; Comparison point mode scored a box around the click
+(9x9 after the box/window split above, roughly 4.5 degrees across) under a
+heading reading "Compare models at a single location". Worse, within Comparison
+point mode the two halves disagreed: SSR/MAE/RMSE described one cell while
+CSI/POD/FAR described the box.
+
+That asymmetry is also the whole reason FSS was available in one and not the
+other. FSS compares event *fractions* in a neighbourhood; with one cell the
+fraction can only be 0 or 1 and the score degenerates into the hit-or-miss CSI
+already reports. It was undefined, not missing.
+
+**Both tabs now state the area they scored.** `/api/categorical-metrics`
+returns `scored_area` (centre cell, box_cells, fss_window, bbox, n_cells);
+`/api/compare/categorical` already returned its bbox and now its box. Each tab
+renders a "scored: ..." badge beside the results, and the Comparison mode
+subtitle no longer claims a single location.
+
+**Analysis point mode can now produce an FSS,** via a `box_cells` control
+(default 1). The design keeps the point metrics honest: the contingency table
+and CSI/POD/FAR are always read from the **centre cell only**, so widening the
+box gives FSS a field without moving them. Verified at 36.0N 75.5W, threshold
+0.2 mm/6h:
+
+    box   1 ( 1 cell ):  H=0 M=0 FA=9  csi=0.0  far=1.0  fss=None
+    box   5 (25 cells):  H=0 M=0 FA=9  csi=0.0  far=1.0  fss=0.6773
+    box   9 (81 cells):  H=0 M=0 FA=9  csi=0.0  far=1.0  fss=0.7937
+
+The contingency counts are byte-identical across all three; only FSS changes.
+At `box_cells` 1 FSS is None and the UI says why rather than showing a zero.
+
+This also closes the residual finding-3 case in that endpoint: it centres on
+the nearest grid cell instead of taking whichever row the +/-0.26 degree window
+returned first, so the box is exactly `box_cells` per axis regardless of where
+in a cell the user clicked.

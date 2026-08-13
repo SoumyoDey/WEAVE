@@ -37,6 +37,8 @@ export async function fetchCategoricalMetrics({
   thresholdMm6h,
   hourMin,
   hourMax,
+  boxCells,
+  fssWindow,
 }) {
   const thresholdField = variable === 'wind'
     ? { threshold_ms: thresholdMm6h }
@@ -45,7 +47,15 @@ export async function fetchCategoricalMetrics({
   const response = await fetch(`${API_BASE}/categorical-metrics`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, variable, lat, lon, hour_min: hourMin, hour_max: hourMax, ...thresholdField }),
+    body: JSON.stringify({
+      model, variable, lat, lon,
+      hour_min: hourMin, hour_max: hourMax,
+      // box_cells 1 keeps this a true point (FSS undefined). Above 1 it gives
+      // FSS a field without moving CSI/POD/FAR, which stay on the centre cell.
+      ...(boxCells  != null ? { box_cells:  boxCells }  : {}),
+      ...(fssWindow != null ? { fss_window: fssWindow } : {}),
+      ...thresholdField,
+    }),
   });
 
   if (!response.ok) {

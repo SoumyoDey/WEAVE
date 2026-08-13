@@ -103,6 +103,9 @@ export function AnalysisTab({
   // a spatial scale — "skilful at 2.5 degrees" — so this is a parameter of the
   // score, not a display option. Odd values centre cleanly on a cell.
   const [fssWindow,      setFssWindow]      = useState(3);
+  // Cells scored around the clicked point. 1 = a true point (FSS undefined);
+  // above 1 gives FSS a field while CSI/POD/FAR stay on the centre cell.
+  const [catBoxCells,    setCatBoxCells]    = useState(1);
   const [regCatLoading,  setRegCatLoading]  = useState(false);
   const [regCatData,     setRegCatData]     = useState(null);
   const [regCatError,    setRegCatError]    = useState(null);
@@ -170,6 +173,8 @@ export function AnalysisTab({
         thresholdMm6h: parseFloat(catThreshold) || 25,
         hourMin:      catHourMin,
         hourMax:      catHourMax,
+        boxCells:     catBoxCells,
+        fssWindow,
       });
       setCatData(data);
     } catch (err) {
@@ -703,8 +708,31 @@ export function AnalysisTab({
                       </span>
                     </div>
 
-                    {/* FSS neighbourhood — region mode only, since FSS is spatial */}
-                    {catMode === 'region' && (
+                    {/* Scored area — point mode. FSS needs more than one cell,
+                        so this is what makes it available at a point. */}
+                    {catMode === 'point' && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span
+                          style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }}
+                          title="Cells scored around the clicked point. 1 is a true point and FSS is undefined; above 1 gives FSS a neighbourhood while CSI/POD/FAR stay on the centre cell."
+                        >
+                          Scored area
+                        </span>
+                        <input
+                          type="number" min="1" max="41" step="2" value={catBoxCells}
+                          aria-label="Scored area width (grid cells)"
+                          onChange={e => setCatBoxCells(Math.max(1, Math.min(41, parseInt(e.target.value, 10) || 1)))}
+                          style={{ width: '56px', padding: '4px 6px', fontSize: t.fontSize.sm, fontWeight: '600', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'center', outline: 'none' }}
+                        />
+                        <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }}>
+                          {catBoxCells === 1 ? 'cell (point)' : `cells (≈${(catBoxCells * 0.5).toFixed(1)}°)`}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* FSS neighbourhood — needs a field, so point mode only
+                        once the scored area is bigger than one cell */}
+                    {(catMode === 'region' || catBoxCells > 1) && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <span
                           style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }}
@@ -778,6 +806,27 @@ export function AnalysisTab({
                   </div>
 
                   {/* Error banner */}
+                  {/* What was actually scored — never leave the area implicit */}
+                  {(() => {
+                    const a = catMode === 'point' ? catData?.scored_area : null;
+                    const shown = catMode === 'point'
+                      ? (a && `${a.n_cells} cell${a.n_cells === 1 ? '' : 's'} at ${fmtLat(a.centre[0], 2)}, ${fmtLon(a.centre[1], 2)}`)
+                      : (regCatData?.summary?.n_grid_pts != null
+                          && `${regCatData.summary.n_grid_pts} cells over the drawn region`);
+                    if (!shown) return null;
+                    return (
+                      <div style={{ marginBottom: '12px' }}>
+                        <span style={{
+                          fontSize: t.fontSize.xs, color: 'rgba(255,255,255,0.45)',
+                          background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.12)',
+                          borderRadius: '10px', padding: '3px 10px',
+                        }}>
+                          scored: {shown}
+                        </span>
+                      </div>
+                    );
+                  })()}
+
                   {(catMode === 'point' ? catError : regCatError) && (
                     <div style={{ background: 'rgba(231,76,60,0.12)', border: '1px solid rgba(231,76,60,0.3)', borderRadius: t.radius, padding: '10px 14px', marginBottom: '14px', color: '#e74c3c', fontSize: t.fontSize.sm }}>
                       ⚠️ {catMode === 'point' ? catError : regCatError}
@@ -827,10 +876,12 @@ export function AnalysisTab({
                       { key: 'fbi', label: 'FBI',   hint: 'Frequency Bias (1=unbiased)',         val: s.fbi   },
                       { key: 'bs',  label: 'Brier', hint: 'Brier Score (0=perfect)',             val: s.brier_score },
                     ];
-                    if (catMode === 'region') {
+                    if (fss != null) {
+                      const w = (catMode === 'region' ? regCatData?.fss_window
+                                                     : catData?.scored_area?.fss_window) ?? fssWindow;
                       badges.push({
                         key: 'fss', label: 'FSS', val: fss,
-                        hint: `Fractions Skill Score over a ${regCatData?.fss_window ?? fssWindow}×${regCatData?.fss_window ?? fssWindow}-cell neighbourhood (0→1, higher=better)`,
+                        hint: `Fractions Skill Score over a ${w}×${w}-cell neighbourhood (0→1, higher=better)`,
                       });
                     }
 
@@ -862,11 +913,15 @@ export function AnalysisTab({
                             </div>
                             <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: t.fontSize.sm, marginTop: '4px', fontWeight: '700' }}>Composite Confidence</div>
                             <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.micro, marginTop: '2px' }}>
-                              {catMode === 'region' && fss != null
+                              {fss != null
                                 ? '0.40×CSI + 0.30×FSS + 0.20×POD + 0.10×(1–FAR)'
                                 : '0.40×CSI + 0.20×POD + 0.10×(1–FAR) ÷ 0.70'}
                             </div>
-                            {catMode === 'point' && <div style={{ color: 'rgba(255,255,255,0.2)', fontSize: t.fontSize.micro, marginTop: '1px' }}>FSS = N/A (spatial-only)</div>}
+                            {fss == null && (
+                              <div style={{ color: 'rgba(255,255,255,0.2)', fontSize: t.fontSize.micro, marginTop: '1px' }}>
+                                FSS needs more than one cell — raise the scored area
+                              </div>
+                            )}
                           </div>
                         </div>
 
