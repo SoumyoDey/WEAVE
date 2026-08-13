@@ -1597,16 +1597,59 @@ pass.
 The metric-layer correction in finding 16 was written as a compensation for the
 old fixed-factor export, on the assumption a re-export would eventually retire
 it. **That is not going to happen** — decided 2026-08-13 — so it is permanent.
+`SCALED_EXPORT_DIVISOR_HOURS = {'AIFS': 6.0, 'GEFS': 3.0}` is not debt awaiting
+cleanup; it is the description of how the loaded data was produced.
 
-What this means in practice:
+### The footgun, and why it is now the code's problem
 
-- `SCALED_EXPORT_DIVISOR_HOURS = {'AIFS': 6.0, 'GEFS': 3.0}` stays. It is not
-  technical debt awaiting cleanup; it is the description of how the loaded data
-  was produced, and removing it would make every GEFS 6-hour record 2x too high.
-- `Data_convert_weave/"aifs react.py"` has been fixed to divide by each record's
-  own window. That fix applies to any **future** ingest. If it is ever run and
-  the database reloaded from its output, the constant must change to
-  `{'AIFS': 6.0, 'GEFS': 6.0}` in the same change — otherwise the correction
-  applies twice. The original is kept at `"aifs react.py.orig-backup"`.
-- The numbers in the app today are correct either way. This is about which layer
-  owns the correction, not whether one is needed.
+That constant describes the **data**, not this code, so it goes stale the moment
+anyone re-exports — and a stale value corrects twice with no visible symptom.
+Precipitation would simply be wrong by a factor of two, and every score built on
+it along with it. A comment saying "remember to update this" is not a safeguard.
+
+The two conventions leave different fingerprints, so the code reads the answer
+back out of the data and compares:
+
+```
+  flat divisor      stored_6h / stored_3h = A(0-6) / A(0-3)       ~ 2.0
+  per-window        stored_6h / stored_3h = A(0-6) / (2 * A(0-3)) ~ 1.0
+```
+
+The 6 h accumulation contains the 3 h one and runs about twice it, so a flat
+divisor cancels out of the ratio while a per-window one halves it. On the loaded
+data the median ratio is **1.938** over 6,498 cell-cycles (quartiles 1.55-2.45)
+— unambiguously the flat convention.
+
+`_infer_scaled_export_divisor()` turns that into a verdict, and
+`/api/health` reports it:
+
+```json
+  "precip_export_convention": {
+    "model": "GEFS", "declared_divisor_h": 3.0,
+    "inferred_divisor_h": 3.0, "n_samples": 20000, "status": "ok"
+  }
+```
+
+Flip the constant without re-exporting and the check says so, in the terms
+needed to fix it:
+
+```
+  status  "MISMATCH"
+  detail  "the data looks like a divisor of 3.0 h but the code assumes 6.0 h.
+           If GEFS was re-exported, set SCALED_EXPORT_DIVISOR_HOURS['GEFS'] to
+           3.0; until then its precipitation is off by a factor of 2."
+```
+
+It returns `indeterminate` rather than a guess when the sample is thin or the
+median falls between the two predictions — a signal to look, not to pick.
+
+### What remains true
+
+- `Data_convert_weave/"aifs react.py"` is fixed to divide by each record's own
+  window, and applies to any **future** ingest. The original is kept at
+  `"aifs react.py.orig-backup"`.
+- If that script is ever run and the database reloaded, the constant must move to
+  `{'AIFS': 6.0, 'GEFS': 6.0}`. Forgetting no longer produces silently wrong
+  numbers — the health check fails first and names the fix.
+- The numbers in the app today are correct either way. This was only ever about
+  which layer owns the correction, and now about making the ownership verifiable.
