@@ -1330,22 +1330,60 @@ This also removes the last support for the retracted finding 15. GEFS's weak
 scores were part statistic (raw Pearson on a skewed field) and part this
 double conversion — not a broken data feed.
 
-### Still outstanding: the 3-hour records read 2x low
+### The 3-hour records — resolved, and my inference corrected
 
-The export appears to have divided **every** GEFS record by 6. That is right for
-the `h%6==0` buckets, which cover 6 h, but 2x too small for the `h%6==3` ones,
-which cover 3. Read as stored, the domain mean alternates in lockstep with the
-6-hourly cycle:
+I first guessed the export divided everything by 6 and proposed doubling the 3 h
+records. **That was wrong in both directions.** The export script was later found
+at `Data_convert_weave/"aifs react.py"` and states the factors outright:
+
+```python
+scale_json_files(..., scale_factor=6, model_name='AIFS')
+scale_json_files(..., scale_factor=3, model_name='GEFS')
+```
+
+One fixed factor per model, applied to every record whatever window it covers.
+UKMO never passes through it — `React.py` converts its native
+`total_rainfall_rate` (m/s) straight to mm/h with x3.6e6.
+
+So the factor is right where it happens to match the record, and wrong where it
+does not:
+
+| model | export ÷ | record window | stored is | correction |
+|---|---|---|---|---|
+| AIFS | 6 | 6 h throughout | correct | none (÷1) |
+| GEFS | 3 | 3 h buckets | correct | none (÷1) |
+| GEFS | 3 | 6 h buckets | **2x too high** | halve (÷2) |
+
+The 6 h buckets needed halving; the 3 h ones needed nothing. `_increment_divisor`
+is now `period / SCALED_EXPORT_DIVISOR_HOURS[model]`, which yields 1, 1 and 2 for
+those three rows and leaves unscaled models dividing by their own window.
+
+GEFS domain mean by lead time, before and after:
 
 ```
-  fh      3      6      9     12     15     18     21     24
-       0.163  0.287  0.147  0.309  0.163  0.333  0.169  0.313
+  before  0.163  0.287  0.147  0.309  0.163  0.333  0.169  0.313   7 of 7 jumps >1.6x
+  after   0.163  0.144  0.147  0.154  0.163  0.167  0.169  0.156   0 of 7
 ```
 
-Seven of seven consecutive jumps exceed 1.6x. Doubling only the `h%6==3` records
-removes the alternation completely (0 of 7) and lifts the domain mean to
-0.316 mm/h, against 0.387 observed and 0.418 for UKMO.
+Domain mean 0.158 mm/h against 0.387 observed and 0.418 for UKMO. Region suite
+(32-40N, 80-72W, 6-18 h, threshold 1 mm/6h):
 
-**Not applied.** Compensating in the metric layer would paper over an upstream
-export bug, and a re-export is the correct fix. Until then GEFS's 3-hourly
-records read about half what they should, so its odd-step scores are pessimistic.
+```
+              bias      mae      csi      fss
+  AIFS       -0.1684   0.5273   0.6603   0.8994
+  GEFS       -0.2292   0.8946   0.2426   0.4799
+  UKMO       +0.0216   0.6925   0.5713   0.8541
+```
+
+GEFS remains the driest and weakest of the three on this case — bias -0.23, CSI
+0.24 — but that is now a model result on a 0.5 degree grid rather than an
+arithmetic artefact, and it is a long way from the -0.62 bias and 0.14 CSI it
+showed while being double-converted.
+
+**Lesson, third of three.** Findings 14 and 15 were over-read statistics. This one
+was an over-read *name*: I inferred a numeric factor from the word "scaled" in a
+folder path, and the fingerprint in the data was consistent with two different
+factors. Both readings flattened the alternation; only the source could say
+which. Do not infer a constant from a filename when the code that produced it can
+be found — and if it cannot be found, say the number is unknown rather than
+picking the one that fits.

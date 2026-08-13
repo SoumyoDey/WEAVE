@@ -456,26 +456,45 @@ class TestPrecipRateSeries:
         series = {6: (1.0, 0.0), 12: (0.999, 0.0)}
         assert api._precip_rate_series("AIFS", series)[12][0] == 0.0
 
-    def test_gefs_values_are_already_rates(self):
-        """GEFS was exported to mm/h before loading, like AIFS, so its stored
-        value is used as-is. The record's own PERIOD is still reported, because
-        that is the window observations are averaged over."""
+    def test_gefs_6h_buckets_are_halved_3h_buckets_are_not(self):
+        """The export divided every GEFS record by 3 (Data_convert_weave/"aifs
+        react.py", scale_factor=3). That is correct for a 3 h bucket and 2x too
+        high for a 6 h one, so only the 6 h records are scaled back. The record's
+        own PERIOD is still reported — that is the window obs are averaged over."""
         series = {3: (0.9, 0.0), 6: (0.9, 0.0)}
         rates = api._precip_rate_series("GEFS", series)
-        assert rates[3][0] == pytest.approx(0.9)   # not 0.9 / 3
-        assert rates[6][0] == pytest.approx(0.9)   # not 0.9 / 6
+        assert rates[3][0] == pytest.approx(0.9)    # 3 h bucket: as stored
+        assert rates[6][0] == pytest.approx(0.45)   # 6 h bucket: halved
         # the covered window is unchanged — only the divisor was wrong
         assert rates[3][2] == 3 and rates[6][2] == 6
 
-    def test_unscaled_model_still_divides_by_its_period(self):
-        """The divisor is a property of the export, not of bucketing. A model
-        that stores real accumulations must still be divided."""
-        series = {3: (0.9, 0.0), 6: (0.9, 0.0)}
-        rates = api._precip_rate_series("SOME_UNSCALED_MODEL", series)
-        assert rates[3][0] == pytest.approx(0.9)   # period defaults to 1
+    def test_divisor_is_the_window_over_the_export_factor(self):
+        """Regression guard for audit finding 16. Each model was divided once by
+        its own fixed factor (AIFS 6, GEFS 3), so what remains is window/factor."""
+        assert api._increment_divisor("AIFS", 6) == pytest.approx(1.0)   # 6/6
+        assert api._increment_divisor("GEFS", 3) == pytest.approx(1.0)   # 3/3
+        assert api._increment_divisor("GEFS", 6) == pytest.approx(2.0)   # 6/3
+        # models the export never touched divide by their own window
+        assert api._increment_divisor("UKMO", 1) == 1
         assert api._increment_divisor("SOME_UNSCALED_MODEL", 6) == 6
-        assert api._increment_divisor("GEFS", 6) == 1
-        assert api._increment_divisor("AIFS", 6) == 1
+
+    def test_gefs_3h_and_6h_records_land_on_one_scale(self):
+        """The point of the correction: steady rain reported over a 3 h and a 6 h
+        window must come out as the same rate, not a factor of two apart."""
+        # steady rain — the 0-6 h total is twice the 0-3 h total, and the export
+        # divided both by 3.
+        series = {3: (0.6, 0.0), 6: (1.2, 0.0)}
+        rates = api._precip_rate_series("GEFS", series)
+        assert rates[3][0] == pytest.approx(rates[6][0])
+
+    def test_gefs_3h_and_6h_records_land_on_one_scale(self):
+        """The point of the correction: equal rainfall RATES reported over a 3 h
+        and a 6 h window must come out equal, not a factor of two apart."""
+        # 0-3 h and 0-6 h of steady rain: the 6 h total is twice the 3 h total,
+        # and the export divided both by 6.
+        series = {3: (0.6, 0.0), 6: (1.2, 0.0)}
+        rates = api._precip_rate_series("GEFS", series)
+        assert rates[3][0] == pytest.approx(rates[6][0])
 
     def test_ukmo_passes_through(self):
         series = {5: (2.0, 0.5)}
@@ -538,11 +557,11 @@ class TestPrecipMemberRateSeries:
         for hour in series:
             assert member[hour][0] == pytest.approx(agg[hour][0])
 
-    def test_member_gefs_values_are_already_rates(self):
+    def test_member_gefs_6h_buckets_are_halved(self):
         rates = api._precip_member_rate_series("GEFS", {3: 0.9, 6: 0.9})
-        assert rates[3][0] == pytest.approx(0.9)
-        assert rates[6][0] == pytest.approx(0.9)
-        assert rates[3][1] == 3 and rates[6][1] == 6   # windows unchanged
+        assert rates[3][0] == pytest.approx(0.9)      # 3 h bucket: as stored
+        assert rates[6][0] == pytest.approx(0.45)     # 6 h bucket: halved
+        assert rates[3][1] == 3 and rates[6][1] == 6  # windows unchanged
 
     def test_member_wind_passes_through(self):
         assert api._precip_member_rate_series("AIFS", {6: 12.0}, is_wind=True) == {6: (12.0, 1)}
