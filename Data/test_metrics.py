@@ -355,15 +355,97 @@ class TestPrecipPeriodHours:
         assert api._precip_lookback_hours("UKMO") == 0
 
 
+class TestObsWindowMean:
+    """The forecast↔observation window. A record covering `period` hours must
+    verify against observations spanning that whole period — see audit finding
+    13, where a 6 h AIFS record at the edge of the observation record was being
+    scored against a single observation 5 h from its valid time."""
+
+    VT = datetime(2025, 9, 8, 12, 0)
+
+    def _hourly(self, n, start_offset, value=1.0):
+        """Observations on the hour, `n` of them, ending at VT - start_offset."""
+        return {self.VT - timedelta(hours=start_offset + i): value for i in range(n)}
+
+    def test_full_window_is_accepted(self):
+        obs = self._hourly(6, 0)                       # VT, VT-1 ... VT-5
+        mean, covered, n = api._obs_window_mean(obs, self.VT, 6)
+        assert covered == 6 and n == 6
+        assert mean == pytest.approx(1.0)
+
+    def test_partial_window_reports_short_coverage(self):
+        """The exact shape of the bug: one observation survives at the far edge
+        of a 6 h window. The mean is computable, but coverage says 1 of 6."""
+        obs = {self.VT - timedelta(hours=5): 4.0}
+        mean, covered, n = api._obs_window_mean(obs, self.VT, 6)
+        assert mean == 4.0 and n == 1
+        assert covered == 1                            # caller must reject this
+
+    def test_window_is_left_open_right_closed(self):
+        """(vt - period, vt] — the observation exactly one period back belongs
+        to the previous record's window, not this one."""
+        obs = {self.VT - timedelta(hours=6): 9.0, self.VT: 1.0}
+        mean, covered, _n = api._obs_window_mean(obs, self.VT, 6)
+        assert mean == 1.0                             # the 9.0 is excluded
+        assert covered == 1
+
+    def test_observations_outside_the_window_are_ignored(self):
+        obs = {self.VT + timedelta(hours=1): 99.0, self.VT - timedelta(hours=99): 99.0}
+        assert api._obs_window_mean(obs, self.VT, 6) == (None, 0, 0)
+
+    def test_sub_hourly_samples_all_contribute(self):
+        """IMERG is half-hourly. Both samples in an hour count toward the mean,
+        but they occupy the same one-hour coverage slot."""
+        obs = {self.VT: 2.0, self.VT - timedelta(minutes=30): 4.0}
+        mean, covered, n = api._obs_window_mean(obs, self.VT, 1)
+        assert mean == pytest.approx(3.0)              # not just the top of hour
+        assert (covered, n) == (1, 2)
+
+    def test_hourly_record_needs_one_slot(self):
+        obs = {self.VT: 5.0}
+        assert api._obs_window_mean(obs, self.VT, 1) == (5.0, 1, 1)
+
+    def test_empty_or_missing_cell(self):
+        assert api._obs_window_mean(None, self.VT, 6) == (None, 0, 0)
+        assert api._obs_window_mean({}, self.VT, 6) == (None, 0, 0)
+
+    def test_coverage_counts_slots_not_samples(self):
+        """Twelve half-hourly samples crammed into two hours still cover only
+        two of the six slots — a dense burst is not a covered window."""
+        obs = {self.VT - timedelta(minutes=30 * i): 1.0 for i in range(4)}
+        _mean, covered, n = api._obs_window_mean(obs, self.VT, 6)
+        assert n == 4 and covered == 2
+
+
 class TestPrecipRateSeries:
     def test_aifs_cumulative_is_differenced(self):
-        """AIFS stores a running total, so the rate is the increment / 6 —
-        not the total / 6, which grows without bound with lead time."""
+        """AIFS stores a running total, so the rate comes from the increment —
+        not the total, which grows without bound with lead time.
+
+        The increment is NOT divided by the 6 h window: what AIFS accumulates
+        is a mean rate in mm/h, so differencing already lands in mm/h (see
+        RATE_CUMULATED_PRECIP_MODELS)."""
         series = {6: (0.6, 0.0), 12: (1.2, 0.0), 18: (1.5, 0.0)}
         rates = api._precip_rate_series("AIFS", series)
-        assert rates[6][0] == pytest.approx(0.6 / 6)    # from init
-        assert rates[12][0] == pytest.approx(0.6 / 6)   # (1.2 - 0.6) / 6
-        assert rates[18][0] == pytest.approx(0.3 / 6)   # (1.5 - 1.2) / 6
+        assert rates[6][0] == pytest.approx(0.6)    # from init
+        assert rates[12][0] == pytest.approx(0.6)   # 1.2 - 0.6
+        assert rates[18][0] == pytest.approx(0.3)   # 1.5 - 1.2
+        # the record still covers 6 h — that's what obs are matched over
+        assert rates[12][2] == 6
+
+    def test_aifs_increment_is_a_rate_not_an_amount(self):
+        """Regression guard for the factor-of-6 dry bias (audit finding 12).
+
+        Dividing the increment by the window made every AIFS precipitation
+        number 6x too low: verification against the 2025-09-08 00Z run put
+        obs/forecast at 7.98 instead of 1.33, and the 48 h domain total at
+        2.99 mm against 17.64 mm observed."""
+        series = {6: (0.5, 0.0), 12: (1.0, 0.0)}
+        rate = api._precip_rate_series("AIFS", series)[12][0]
+        assert rate == pytest.approx(0.5)          # not 0.5 / 6
+        assert api._increment_divisor("AIFS", 6) == 1
+        # a cumulative model that banked amounts would still divide
+        assert api._increment_divisor("SOME_AMOUNT_MODEL", 6) == 6
 
     def test_aifs_drops_a_record_it_cannot_difference(self):
         series = {24: (3.0, 0.1)}          # no h=18 to difference against
@@ -392,9 +474,9 @@ class TestPrecipRateSeries:
         assert rates == {6: (12.0, 3.0, 1), 12: (14.0, 4.0, 1)}
 
     def test_cumulative_spread_uses_variance_difference(self):
-        # sigma 5 -> 13 : sqrt(169 - 25) = 12, then / 6
+        # sigma 5 -> 13 : sqrt(169 - 25) = 12, and the increment is already mm/h
         series = {6: (1.0, 5.0), 12: (2.0, 13.0)}
-        assert api._precip_rate_series("AIFS", series)[12][1] == pytest.approx(12.0 / 6)
+        assert api._precip_rate_series("AIFS", series)[12][1] == pytest.approx(12.0)
 
     def test_cumulative_spread_is_none_when_variance_shrinks(self):
         """~13% of real AIFS records have a shrinking cumulative variance, where
@@ -402,7 +484,7 @@ class TestPrecipRateSeries:
         series = {6: (1.0, 9.0), 12: (2.0, 4.0)}
         rate, std, _ = api._precip_rate_series("AIFS", series)[12]
         assert std is None
-        assert rate == pytest.approx(1.0 / 6)   # the amount is still fine
+        assert rate == pytest.approx(1.0)   # the increment is still fine
 
     def test_missing_std_on_either_record_yields_no_spread(self):
         """Differencing a cumulative model needs both records' spreads; if
@@ -429,9 +511,19 @@ class TestPrecipMemberRateSeries:
     def test_member_cumulative_is_differenced(self):
         series = {6: 0.6, 12: 1.2, 18: 1.5}
         rates = api._precip_member_rate_series("AIFS", series)
-        assert rates[6][0] == pytest.approx(0.1)
-        assert rates[12][0] == pytest.approx(0.1)
-        assert rates[18][0] == pytest.approx(0.05)
+        # increments are already mm/h — not divided by the 6 h window
+        assert rates[6][0] == pytest.approx(0.6)
+        assert rates[12][0] == pytest.approx(0.6)
+        assert rates[18][0] == pytest.approx(0.3)
+
+    def test_member_and_aggregate_paths_use_the_same_divisor(self):
+        """The two rate paths must agree, or the ensemble mean would sit at a
+        different scale from the members it is drawn from."""
+        series = {6: 1.0, 12: 2.5, 18: 3.0}
+        member = api._precip_member_rate_series("AIFS", series)
+        agg = api._precip_rate_series("AIFS", {h: (v, 0.0) for h, v in series.items()})
+        for hour in series:
+            assert member[hour][0] == pytest.approx(agg[hour][0])
 
     def test_member_gefs_uses_own_bucket(self):
         rates = api._precip_member_rate_series("GEFS", {3: 0.9, 6: 0.9})

@@ -15,6 +15,7 @@ Grouped as:
   * region aggregation and spatial differencing
 """
 import math
+from datetime import timedelta
 
 import numpy as np
 import scipy.stats
@@ -242,8 +243,9 @@ def _grid_step(sorted_coords, default=0.25):
 #
 #   AIFS — a running total since initialisation. Its domain mean is monotone in
 #          lead time (0.335, 0.787, 1.198, 1.583, ...), which only happens for a
-#          cumulative field. Records are 6-hourly, so the amount falling in a
-#          period is v(h) - v(h-6).
+#          cumulative field. Records are 6-hourly, so the increment covering a
+#          period is v(h) - v(h-6). That increment is ALREADY a mean rate in
+#          mm/h, not an amount in mm — see RATE_CUMULATED_PRECIP_MODELS.
 #   GEFS — buckets that reset every 6 h: records at h % 6 == 3 cover 3 h,
 #          records at h % 6 == 0 cover 6 h. Over ~100k records the h%6==0 mean
 #          is 1.86x the h%6==3 mean, i.e. ~2x, the standard NCEP pattern.
@@ -264,6 +266,65 @@ MODEL_ACCUM_HOURS = {
 
 # Models whose stored precipitation value is a running total since init.
 CUMULATIVE_PRECIP_MODELS = {'AIFS'}
+
+
+# Of the cumulative models, those whose running total accumulates a mean RATE
+# (mm/h) per output step rather than an AMOUNT (mm). Differencing two
+# consecutive records of such a model yields the mean rate over that window
+# directly; dividing by the window length again understates it by exactly that
+# factor. AIFS is one, established three independent ways from the loaded
+# 2025-09-08 00Z run (METRICS_AUDIT.md finding 12):
+#
+#   1. Cell-level fit of the AIFS 6-h increment against the observed mean rate
+#      over the same window: obs = 1.15*incr + 0.07, n=3953, obs/incr = 1.33 —
+#      an ordinary model dry bias. Reading the increment as an amount instead
+#      gives obs/forecast = 7.98, which is 6 x 1.33.
+#   2. Domain-mean rate over 6-18 h, no observations involved: AIFS 0.431
+#      against GEFS 0.381 and UKMO 0.559 mm/h. Dividing by 6 puts AIFS at
+#      0.072 mm/h, an order of magnitude outside the family.
+#   3. 48-h water budget: summing the 6-h mean rates x 6 h gives 17.95 mm
+#      against 17.64 mm observed (1.8%). As an amount it would be 2.99 mm.
+#
+# The record still COVERS 6 h — _precip_period_hours stays 6, so the increment
+# is matched against the observed mean rate over the same 6 h. Only the divisor
+# that converts the increment to mm/h changes.
+RATE_CUMULATED_PRECIP_MODELS = {'AIFS'}
+
+
+def _increment_divisor(model_name, period):
+    """Hours to divide a differenced cumulative increment by to reach mm/h."""
+    return 1 if model_name in RATE_CUMULATED_PRECIP_MODELS else period
+
+
+def _obs_window_mean(cell_obs, valid_time, period):
+    """Mean observed rate over the window (valid_time - period, valid_time].
+
+    Returns (mean, covered_hours, n_samples). `covered_hours` counts how many of
+    the `period` one-hour slots in the window contain at least one observation,
+    so the caller can reject a partially observed window — scoring a 6 h forecast
+    against whatever single observation happens to survive at the end of the
+    record is worse than reporting no score at all.
+
+    Every observation inside the window contributes, including sub-hourly ones:
+    IMERG is half-hourly, and averaging both samples per hour estimates the
+    period mean better than taking the top of each hour alone. So n_samples can
+    exceed covered_hours, and the two mean different things.
+    """
+    if not cell_obs:
+        return None, 0, 0
+    start  = valid_time - timedelta(hours=period)
+    values = []
+    slots  = set()
+    for obs_time, value in cell_obs.items():
+        if not (start < obs_time <= valid_time):
+            continue
+        values.append(value)
+        # Slot 0 is (start, start+1h], slot period-1 ends at valid_time.
+        offset = (obs_time - start).total_seconds() / 3600.0
+        slots.add(min(period - 1, max(0, math.ceil(offset) - 1)))
+    if not values:
+        return None, 0, 0
+    return sum(values) / len(values), len(slots), len(values)
 
 
 def _precip_period_hours(model_name, forecast_hour):
@@ -308,7 +369,7 @@ def _precip_member_rate_series(model_name, series, is_wind=False):
             amount = value - series[prev_hour]
         else:
             continue                             # can't difference — drop
-        out[hour] = (max(0.0, amount) / period, period)
+        out[hour] = (max(0.0, amount) / _increment_divisor(model_name, period), period)
     return out
 
 
@@ -358,8 +419,9 @@ def _precip_rate_series(model_name, series, is_wind=False):
 
         # Cumulative totals are non-decreasing; a small negative is rounding.
         amount    = max(0.0, amount)
-        std_rate  = (math.sqrt(variance) / period) if (variance is not None and variance > 0) else None
-        out[hour] = (amount / period, std_rate, period)
+        divisor   = _increment_divisor(model_name, period)
+        std_rate  = (math.sqrt(variance) / divisor) if (variance is not None and variance > 0) else None
+        out[hour] = (amount / divisor, std_rate, period)
     return out
 
 
