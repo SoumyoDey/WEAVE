@@ -1020,3 +1020,43 @@ class TestCommonVerificationWindow:
         sixhr  = {6: (0.5, 0.0, 6)}
         for series in (hourly, bucket, sixhr):
             assert api._rebin_to_common_window(series)[6][0] == pytest.approx(0.5)
+
+
+# ── Export-convention self-check (audit finding 16) ───────────────────────────
+class TestInferExportDivisor:
+    """SCALED_EXPORT_DIVISOR_HOURS describes the DATA, not this code, so it goes
+    stale the moment anyone re-exports — and a stale value corrects twice with no
+    visible symptom. The convention is therefore read back out of the data and
+    compared, so the mismatch surfaces on /api/health instead of in the numbers."""
+
+    def test_flat_divisor_leaves_the_containment_ratio_near_two(self):
+        """A 6 h accumulation contains the 3 h one and runs about twice it. A
+        flat divisor cancels out of the ratio, leaving ~2."""
+        assert api._infer_scaled_export_divisor([2.0] * 200) == 3.0
+
+    def test_per_window_divisor_halves_the_ratio(self):
+        """Dividing by each record's own window halves the 6 h side, so the same
+        rainfall reports ~1."""
+        assert api._infer_scaled_export_divisor([1.0] * 200) == 6.0
+
+    def test_realistic_scatter_still_resolves(self):
+        ratios = [1.55, 1.8, 1.94, 2.1, 2.45] * 40
+        assert api._infer_scaled_export_divisor(ratios) == 3.0
+
+    def test_too_few_samples_says_so_rather_than_guessing(self):
+        assert api._infer_scaled_export_divisor([2.0] * 5) is None
+        assert api._infer_scaled_export_divisor([]) is None
+
+    def test_ambiguous_median_says_so_rather_than_guessing(self):
+        """Between the two predictions is a signal to look, not to pick."""
+        assert api._infer_scaled_export_divisor([1.35] * 200) is None
+
+    def test_junk_values_are_discarded(self):
+        assert api._infer_scaled_export_divisor(
+            [float("inf"), float("nan"), 0.0, -1.0, None] * 100) is None
+
+    def test_the_declared_constant_matches_the_loaded_data(self):
+        """Guards the pairing itself: GEFS is declared at 3 h, which is the
+        convention the containment ratio reports for the data in hand."""
+        assert api.SCALED_EXPORT_DIVISOR_HOURS['GEFS'] == 3.0
+        assert api._infer_scaled_export_divisor([1.938] * 200) == 3.0

@@ -324,6 +324,38 @@ RATE_CUMULATED_PRECIP_MODELS = RATE_STORED_PRECIP_MODELS
 SCALED_EXPORT_DIVISOR_HOURS = {'AIFS': 6.0, 'GEFS': 3.0}
 
 
+def _infer_scaled_export_divisor(ratios, min_samples=100):
+    """Which divisor the export used, inferred from the loaded data itself.
+
+    `ratios` are, per cell and per cycle, the stored `h%6==0` record over the
+    stored `h%6==3` record before it. The two conventions separate cleanly:
+
+      flat divisor      stored_6h/stored_3h = A(0-6) / A(0-3)       ~ 2.0
+      per-window        stored_6h/stored_3h = A(0-6) / (2 * A(0-3)) ~ 1.0
+
+    because the 6 h accumulation contains the 3 h one and runs about twice it.
+    Dividing by the record's own window halves that ratio; a flat divisor leaves
+    it alone.
+
+    Returns 3.0 (flat — the stored 6 h records need halving), 6.0 (per-window —
+    nothing to correct), or None when the sample is too small or the median
+    falls between the two, which is a signal to look rather than to guess.
+
+    This exists so the declared SCALED_EXPORT_DIVISOR_HOURS can be checked
+    against reality instead of trusted. Re-exporting without updating the
+    constant would otherwise apply the correction twice, silently.
+    """
+    usable = sorted(r for r in ratios if r and r > 0 and math.isfinite(r))
+    if len(usable) < min_samples:
+        return None
+    median = usable[len(usable) // 2]
+    if median >= 1.5:
+        return 3.0
+    if median <= 1.25:
+        return 6.0
+    return None
+
+
 def _increment_divisor(model_name, period):
     """Hours to divide a stored precipitation value (or a differenced cumulative
     increment) by to reach mm/h.

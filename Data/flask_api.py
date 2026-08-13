@@ -53,6 +53,7 @@ from metrics import (                                    # noqa: E402
     _fractions_skill_score, _fss_from_pairs,
     _precip_period_hours, _precip_lookback_hours, _increment_divisor,
     _obs_window_mean, _rebin_to_common_window, COMMON_VERIFICATION_WINDOW_HOURS,
+    _infer_scaled_export_divisor, SCALED_EXPORT_DIVISOR_HOURS,
     _precip_rate_series, _precip_member_rate_series,
     _categorical_summary, _region_mean, _region_pooled_metrics,
     _spatial_diff_points,
@@ -1992,6 +1993,56 @@ def get_variables():
         return_db_connection(conn)
 
 
+def _check_export_convention(cursor, model_name='GEFS'):
+    """Does the loaded data still match the export convention we assume?
+
+    SCALED_EXPORT_DIVISOR_HOURS describes how the JSON export converted each
+    model to mm/h. It is a property of the DATA, not of this code, so it goes
+    stale the moment anyone re-exports — and a stale value corrects twice
+    without any visible symptom. This reads the answer back out of the data and
+    compares, so the mismatch surfaces on /api/health instead of in the numbers.
+
+    See METRICS_AUDIT.md finding 16.
+    """
+    declared = SCALED_EXPORT_DIVISOR_HOURS.get(model_name)
+    result = {'model': model_name, 'declared_divisor_h': declared}
+    try:
+        cursor.execute("""
+            SELECT a.mean_value / b.mean_value
+            FROM regridded_forecast_ens a
+            JOIN regridded_forecast_ens b
+              ON b.model_name = a.model_name AND b.variable_name = a.variable_name
+             AND b.forecast_hour = a.forecast_hour - 3
+             AND b.latitude = a.latitude AND b.longitude = a.longitude
+            WHERE a.model_name = %s AND a.variable_name = 'precipitation'
+              AND a.forecast_hour %% 6 = 0 AND a.forecast_hour > 0
+              AND a.mean_value > 0.01 AND b.mean_value > 0.01
+            LIMIT 20000
+        """, (model_name,))
+        ratios = [float(r[0]) for r in cursor.fetchall()]
+    except Exception as e:                      # a missing table is not fatal here
+        print(f"⚠️  export-convention check could not run: {e}")
+        return dict(result, status='unknown', reason='query failed')
+
+    inferred = _infer_scaled_export_divisor(ratios)
+    result.update(inferred_divisor_h=inferred, n_samples=len(ratios))
+    if inferred is None:
+        result['status'] = 'indeterminate'
+        result['detail'] = ('too few samples or an ambiguous ratio — check by hand '
+                            'before trusting precipitation scores')
+    elif declared is None or inferred == declared:
+        result['status'] = 'ok'
+    else:
+        result['status'] = 'MISMATCH'
+        result['detail'] = (
+            f'the data looks like a divisor of {inferred} h but the code assumes '
+            f'{declared} h. If {model_name} was re-exported, set '
+            f'SCALED_EXPORT_DIVISOR_HOURS[{model_name!r}] to {inferred}; until then '
+            f'its precipitation is off by a factor of {declared / inferred:g}.')
+        print(f"❌ export-convention MISMATCH for {model_name}: {result['detail']}")
+    return result
+
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     # Acquiring the connection is inside the try: an exhausted or unreachable
@@ -2006,7 +2057,11 @@ def health_check():
         return jsonify({
             "status": "healthy",
             "database": "connected",
-            "total_forecast_points": count
+            "total_forecast_points": count,
+            # Whether the loaded data still matches what the metric layer assumes
+            # about the export. Re-exporting without updating the constant would
+            # otherwise correct twice, silently and invisibly.
+            "precip_export_convention": _check_export_convention(cursor),
         })
     except Exception as e:
         # Log the detail server-side but don't leak the raw exception string
