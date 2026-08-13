@@ -27,7 +27,7 @@
 | 8 | Region metrics average per-cell ratios; point metrics pool counts | Medium | Confirmed |
 | 9 | Gaussian CRPS/Brier applied to zero-inflated precipitation | Medium | By inspection |
 | 10 | No ensemble-size correction `(M+1)/M` (AIFS 50, GEFS 30, UKMO 18) | Low | Confirmed |
-| 11 | Two parallel truth paths (native vs regridded) for the same metric names | Design | Confirmed |
+| 11 | Two parallel truth paths (native vs regridded) for the same metric names | Design | **Resolved 2026-08-13** |
 | 12 | AIFS cumulates a **mean rate (mm/h)**, not an amount — differencing then dividing by 6 made every AIFS precip number 6× too dry | Critical | Confirmed |
 | 13 | A **partially observed** verification window was accepted, scoring a 6 h forecast against one observation up to 5 h from its valid time | High | Confirmed |
 
@@ -685,3 +685,106 @@ coverage requirement costs no legitimate data.
 Tests: `TestObsWindowMean` (8 cases) pins the boundary convention, partial
 coverage, sub-hourly averaging, and slots-vs-samples. `metrics.py` remains at
 100% statement coverage; 151 backend + 22 frontend tests pass.
+
+---
+
+## 11 (resolved). One truth path, and a real ensemble spread — 2026-08-13
+
+Finding 11 sat open as "a data-architecture decision". Measuring it first made
+the decision obvious. The split was never Analysis-vs-Comparison — the Analysis
+tab straddled it, since `/api/categorical-metrics` already read the regridded
+grid. The real line was **display reads native, verification reads regridded**,
+with exactly one exception: `/api/spread-skill`.
+
+### What the divergence actually was
+
+AIFS precipitation at 36.0 N 75.5 W, same model, same lead times, before:
+
+```
+ fh   native mean  native obs  native SSR |  regrid mean  regrid obs  regrid SSR
+  6        0.1762      0.0042       0.875 |       0.1620      0.0259       1.039
+ 12        0.1025      0.0000       1.134 |       0.1103      0.0167       1.876
+ 18        0.0400      0.0030       2.792 |       0.0503      0.0836       5.911
+```
+
+The *forecasts* agreed within ~8%. The **observations** differed by up to 6× and
+the spread-skill correlation came out **+0.97 native against −0.97 regridded** —
+the same point, the same run, opposite conclusions. The cause was
+representativeness, not a bug in either: the native path scored a 0.25° forecast
+cell against a 0.1° IMERG point, the regridded path scored 0.5° area against
+0.5° area.
+
+### A second defect this exposed
+
+`regridded_forecast.std_dev` is the spread of the pooled (member × native-cell)
+population, so it carries within-cell **spatial** variance that is not ensemble
+spread at all. Measured per cell it runs about **1.235×** the true ensemble
+spread, and every spread-dependent score — SSR, CRPS, Brier — inherited that
+inflation. It also made exact per-member differencing of a cumulative model
+impossible, because the members were gone by the time the data was regridded.
+
+### Fix
+
+`Data/regrid_members.py` regrids each ensemble member onto the shared 0.5° grid
+by bilinear interpolation — the operator `cdo remapbil` applies — and derives the
+ensemble statistics from those members:
+
+```
+mean_value = mean over the regridded members
+std_dev    = sample spread across members, with no spatial variance mixed in
+```
+
+The original member files are not on this machine, so the interpolation runs from
+`forecast_data` rather than through CDO itself. Bilinear is a **linear** operator,
+which gives a free and exact check that the implementation is right:
+
+```
+mean(bilinear(members)) == bilinear(mean(members))     max|diff| = 0.000e+00
+```
+
+`--verify` asserts this. It also caught a real subtlety: precipitation was
+sparsified on load (dry cells were never written, the smallest stored AIFS value
+is 0.002 mm), so an absent cell means zero and the ensemble mean must divide by
+**every** member, not only those that reported. Averaging just the reporting
+members biases the field wet, and the linearity check fails by 1.0e-1 until the
+convention is applied consistently on both sides.
+
+Output goes to new tables — `regridded_forecast_member` (13.2M precipitation rows
++ wind) and `regridded_forecast_ens` — so nothing was overwritten before the two
+could be compared. The derived mean lands within **0.4%** of the stored one
+(0.33400 vs 0.33532), so bias/MAE/RMSE/CSI/FSS barely move; only the
+spread-dependent scores shift, which is the point.
+
+`/api/spread-skill` now reads the member grid and the regridded observations,
+snapping the click to its 0.5° cell, and every comparison endpoint reads
+`regridded_forecast_ens`.
+
+### Result
+
+The same point, after:
+
+```
+ fh | spread-skill mean     obs     SSR | compare mean     obs     SSR
+  6 |            0.1726  0.0250  1.0232 |      0.1726  0.0259  1.0400
+ 12 |            0.1010  0.0167  1.3712 |      0.1010  0.0167  1.7959
+ 18 |            0.0400  0.0836  2.3707 |      0.0400  0.0836  2.5719
+```
+
+Ensemble means are now **identical**, observations agree, and the correlation is
++0.9889 against +0.8149 — the same sign and the same story. The residual SSR gap
+is principled and documented: spread-skill differences the members exactly, while
+compare/skill still reconstructs the increment spread from aggregate mean/std via
+the variance difference. It is no longer the 2.37-vs-5.91 contradiction it was.
+
+Tests: `TestSpreadSkillSharedGrid` (5 cases) pins that the endpoint reads the
+member grid rather than the native tables, snaps off-grid clicks, reports
+`n_members` as the ensemble size and not members × cells, and returns empty
+rather than erroring when a cell has no members. 156 backend + 22 frontend pass;
+`metrics.py` stays at 100%.
+
+### Still open
+
+`regridded_forecast` is left in place, untouched, so the old and new numbers can
+be compared. Once you are satisfied, it can be dropped. The wind member grid was
+regridded the same way (u and v separately, combined as √(u²+v²) per member,
+since the combination is not linear and cannot be done before interpolating).

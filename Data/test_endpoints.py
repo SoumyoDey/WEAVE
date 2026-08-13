@@ -189,7 +189,7 @@ class TestCompareSkillContract:
     ROUTES = {
         "FROM forecast_runs fr": [{"initialization_time": INIT}],
         "ORDER BY POWER": [{"latitude": 36.0, "longitude": -75.5}],
-        "FROM regridded_forecast u": [_fcst_row(h) for h in (0, 1, 2)],
+        "FROM regridded_forecast_ens u": [_fcst_row(h) for h in (0, 1, 2)],
         "FROM regridded_observation": _obs_rows([0, 1, 2]),
     }
 
@@ -237,7 +237,7 @@ class TestCompareSkillContract:
 class TestCompareCategoricalContract:
     ROUTES = {
         "FROM forecast_runs fr": [{"initialization_time": INIT}],
-        "FROM regridded_forecast u": [
+        "FROM regridded_forecast_ens u": [
             _fcst_row(h, lat=lat, mean=mean)
             for h in (0, 1)
             for lat, mean in ((36.0, 10.0), (36.5, 0.0))
@@ -275,7 +275,7 @@ class TestRegionMetricsContract:
     def _routes(self):
         return {
             "FROM forecast_runs fr": [{"initialization_time": INIT}],
-            "FROM regridded_forecast u": [
+            "FROM regridded_forecast_ens u": [
                 _fcst_row(h, lat=lat, mean=2.0, std=1.0)
                 for h in (0, 1) for lat in (36.0, 36.5)
             ],
@@ -345,3 +345,67 @@ class TestHealth:
         assert r.status_code == 500
         assert "hunter2" not in str(r.get_json())
         assert r.get_json()["status"] == "unhealthy"
+
+
+# ── /api/spread-skill on the shared grid (audit finding 11) ───────────────────
+class TestSpreadSkillSharedGrid:
+    """spread-skill used to verify natively (0.25 deg forecast against a 0.1 deg
+    IMERG point) while every other scored endpoint used the 0.5 deg grid, so the
+    same point reported two different SSRs. It now reads the regridded member
+    grid and the regridded observations, like everything else."""
+
+    def _member_rows(self, hours, members=4, value=lambda h, m: 1.0 + 0.1 * m):
+        return [{"forecast_hour": h, "ensemble_member": m, "member_val": value(h, m)}
+                for h in hours for m in range(members)]
+
+    ROUTES_BASE = {
+        "FROM forecast_runs": [{"run_id": 1, "initialization_time": INIT}],
+        "SELECT initialization_time": [{"initialization_time": INIT}],
+    }
+
+    def _routes(self, hours, members=4):
+        r = dict(self.ROUTES_BASE)
+        r["FROM regridded_forecast_member"] = self._member_rows(hours, members)
+        r["FROM regridded_observation"] = _obs_rows(hours)
+        return r
+
+    def test_reads_the_member_grid_not_forecast_data(self, client, fake_db):
+        """The native tables must not be touched: if they were, the fake DB would
+        have no route for them and the query would come back empty."""
+        fake_db(self._routes([0, 1, 2]))
+        d = client.get("/api/spread-skill?model=UKMO&variable=precipitation"
+                       "&lat=36.0&lon=-75.5").get_json()
+        assert d["grid"] == "0.5deg"
+        assert d["cell"] == [36.0, -75.5]
+        assert d["n_cases"] >= 1
+
+    def test_snaps_an_off_grid_click_to_the_shared_cell(self, client, fake_db):
+        """A click anywhere inside a cell scores that cell — no radius box."""
+        fake_db(self._routes([0, 1, 2]))
+        d = client.get("/api/spread-skill?model=UKMO&variable=precipitation"
+                       "&lat=36.11&lon=-75.61").get_json()
+        assert d["cell"] == [36.0, -75.5]
+
+    def test_spread_is_across_members_only(self, client, fake_db):
+        """n_members must equal the ensemble size, not members x cells — the
+        defect that had a 50-member AIFS run reporting ~1200 'members'."""
+        fake_db(self._routes([0, 1, 2], members=7))
+        d = client.get("/api/spread-skill?model=UKMO&variable=precipitation"
+                       "&lat=36.0&lon=-75.5").get_json()
+        assert d["hours"], "expected at least one scored lead time"
+        assert all(h["n_members"] == 7 for h in d["hours"])
+
+    def test_reports_the_window_it_verified_over(self, client, fake_db):
+        fake_db(self._routes([0, 1, 2]))
+        d = client.get("/api/spread-skill?model=UKMO&variable=precipitation"
+                       "&lat=36.0&lon=-75.5").get_json()
+        for h in d["hours"]:
+            assert h["period_h"] >= 1
+            assert h["n_obs_in_window"] >= 1
+
+    def test_no_members_is_empty_not_an_error(self, client, fake_db):
+        fake_db(dict(self.ROUTES_BASE, **{"FROM regridded_forecast_member": []}))
+        d = client.get("/api/spread-skill?model=UKMO&variable=precipitation"
+                       "&lat=36.0&lon=-75.5").get_json()
+        assert d["n_cases"] == 0 and d["hours"] == []
+        assert "error" not in d

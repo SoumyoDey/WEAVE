@@ -360,7 +360,7 @@ def _latest_init_time(cursor, model_name):
 
 
 def _fcst_speed_sql(is_wind, base_cols):
-    """SQL fragments to select forecast mean/std from regridded_forecast (aliased
+    """SQL fragments to select forecast mean/std from regridded_forecast_ens (aliased
     `u`), deriving wind SPEED from the u/v component rows for wind.
 
     Verification/comparison compares against the observed scalar wind_speed, so
@@ -380,15 +380,15 @@ def _fcst_speed_sql(is_wind, base_cols):
         select_cols = (f"{base_cols}, "
                        "SQRT(POWER(u.mean_value, 2) + POWER(v.mean_value, 2)) AS mean_value, "
                        "SQRT(POWER(u.std_dev, 2)    + POWER(v.std_dev, 2))    AS std_dev")
-        from_clause = ("regridded_forecast u "
-                       "JOIN regridded_forecast v "
+        from_clause = ("regridded_forecast_ens u "
+                       "JOIN regridded_forecast_ens v "
                        "ON v.model_name = u.model_name AND v.forecast_hour = u.forecast_hour "
                        "AND v.latitude = u.latitude AND v.longitude = u.longitude "
                        "AND v.variable_name = 'wind_v_10m'")
         return (select_cols, from_clause, "u.variable_name = 'wind_u_10m'",
                 "AND v.mean_value IS NOT NULL AND v.std_dev IS NOT NULL")
     return (f"{base_cols}, u.mean_value, u.std_dev",
-            "regridded_forecast u", "u.variable_name = %s", "")
+            "regridded_forecast_ens u", "u.variable_name = %s", "")
 
 
 def _ensemble_speed_rows(cursor, run_id, variable_id, hour,
@@ -601,7 +601,7 @@ def _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
                                    hour_min=0, hour_max=168):
     """
     Fetches per-(lat,lon) lists of (hour, mean_rate, std_rate, obs_rate) tuples
-    from regridded_forecast + regridded_observation tables.
+    from regridded_forecast_ens + regridded_observation tables.
 
     Rates are mm/h via _precip_rate_series(), which applies each model's own
     record semantics (cumulative differencing for AIFS, per-record bucket length
@@ -1407,122 +1407,89 @@ def get_spread_skill():
         cursor.execute("SELECT initialization_time FROM forecast_runs WHERE run_id = %s", (run_id,))
         init_time = cursor.fetchone()['initialization_time']
 
-        obs_col = 'wind_speed' if variable == 'wind' else 'precipitation'
+        is_wind = (variable == 'wind')
+        obs_var = 'wind_speed' if is_wind else 'precipitation'
+        obs_src = 'ERA5_WIND'  if is_wind else 'GPM_IMERG_V07B'
 
-        # Find forecast hours that have a matching observation within the radius
-        cursor.execute("""
-            SELECT DISTINCT fd.forecast_hour
-            FROM forecast_data fd
-            WHERE fd.run_id = %s
-              AND fd.variable_id = (SELECT variable_id FROM variables WHERE variable_name = %s)
-              AND ABS(fd.latitude  - %s) <= %s
-              AND ABS(fd.longitude - %s) <= %s
-              AND EXISTS (
-                  SELECT 1 FROM observation_data o
-                  WHERE o.obs_time = %s::timestamp + (fd.forecast_hour || ' hours')::interval
-                    AND ABS(o.latitude  - %s) <= %s
-                    AND ABS(o.longitude - %s) <= %s
-                    AND o.""" + obs_col + """ IS NOT NULL
-              )
-            ORDER BY fd.forecast_hour
-        """, (run_id, 'wind_u_10m' if variable == 'wind' else variable,
-              lat, radius, lon, radius,
-              str(init_time), lat, radius, lon, radius))
+        # Verification runs on the shared 0.5 degree grid — the same truth path
+        # every other scored endpoint uses, so Analysis and Comparison no longer
+        # answer the same question two ways. `radius` is still accepted for URL
+        # compatibility but no longer selects a neighbourhood: the score
+        # describes one cell, and `cell` in the response says which.
+        cell = (round(lat * 2) / 2, round(lon * 2) / 2)
 
-        available_hours = [r['forecast_hour'] for r in cursor.fetchall()]
-
-        if not available_hours:
-            return jsonify({'hours': [], 'correlation': None, 'n_cases': 0})
-
-        is_precip = (variable != 'wind')
-        # Cumulative models need the record one period earlier to difference
-        # against, and that hour need not have an observation of its own.
-        lookback = _precip_lookback_hours(model_name) if is_precip else 0
-        fetch_hours = sorted({h for hour in available_hours
-                              for h in (hour, hour - lookback) if h >= 0})
-
-        # Batch-fetch members for ALL hours in one query (was a per-hour query →
-        # N+1). Member identity and cell are selected too: the ensemble spread is
-        # the spread ACROSS MEMBERS AT ONE CELL. Pooling every cell inside the
-        # radius into one list mixed spatial variance into "spread" (a 50-member
-        # AIFS ensemble was reporting ~1200 "members"), which inflated SSR.
         from collections import defaultdict
-        if variable == 'wind':
+        if is_wind:
             cursor.execute("""
-                SELECT u.forecast_hour, u.ensemble_member, u.latitude, u.longitude,
+                SELECT u.forecast_hour, u.ensemble_member,
                        SQRT(POWER(u.value, 2) + POWER(v.value, 2)) AS member_val
-                FROM forecast_data u
-                JOIN forecast_data v
-                    ON u.run_id = v.run_id AND u.forecast_hour = v.forecast_hour
-                   AND u.ensemble_member = v.ensemble_member
-                   AND u.latitude = v.latitude AND u.longitude = v.longitude
-                WHERE u.run_id = %s AND u.forecast_hour = ANY(%s)
-                  AND u.variable_id = (SELECT variable_id FROM variables WHERE variable_name = 'wind_u_10m')
-                  AND v.variable_id = (SELECT variable_id FROM variables WHERE variable_name = 'wind_v_10m')
-                  AND ABS(u.latitude  - %s) <= %s
-                  AND ABS(u.longitude - %s) <= %s
-                  AND u.ensemble_member IS NOT NULL
-            """, (run_id, fetch_hours, lat, radius, lon, radius))
+                FROM regridded_forecast_member u
+                JOIN regridded_forecast_member v
+                  ON v.model_name = u.model_name AND v.forecast_hour = u.forecast_hour
+                 AND v.ensemble_member = u.ensemble_member
+                 AND v.latitude = u.latitude AND v.longitude = u.longitude
+                 AND v.variable_name = 'wind_v_10m'
+                WHERE u.model_name = %s AND u.variable_name = 'wind_u_10m'
+                  AND ABS(u.latitude - %s) < 1e-6 AND ABS(u.longitude - %s) < 1e-6
+            """, (model_name, cell[0], cell[1]))
         else:
             cursor.execute("""
-                SELECT forecast_hour, ensemble_member, latitude, longitude,
-                       value AS member_val
-                FROM forecast_data
-                WHERE run_id = %s AND forecast_hour = ANY(%s)
-                  AND variable_id = (SELECT variable_id FROM variables WHERE variable_name = %s)
-                  AND ABS(latitude  - %s) <= %s
-                  AND ABS(longitude - %s) <= %s
-                  AND ensemble_member IS NOT NULL
-                ORDER BY forecast_hour, ensemble_member
-            """, (run_id, fetch_hours, variable, lat, radius, lon, radius))
+                SELECT forecast_hour, ensemble_member, value AS member_val
+                FROM regridded_forecast_member
+                WHERE model_name = %s AND variable_name = %s
+                  AND ABS(latitude - %s) < 1e-6 AND ABS(longitude - %s) < 1e-6
+            """, (model_name, variable, cell[0], cell[1]))
         raw_rows = cursor.fetchall()
-
-        # Pick the cell nearest the clicked point and keep only its members.
-        cells = {(float(r['latitude']), float(r['longitude'])) for r in raw_rows}
-        if not cells:
-            return jsonify({'hours': [], 'correlation': None, 'n_cases': 0})
-        cell = min(cells, key=lambda c: (c[0] - lat) ** 2 + (c[1] - lon) ** 2)
+        if not raw_rows:
+            return jsonify({'hours': [], 'correlation': None, 'n_cases': 0,
+                            'cell': list(cell), 'grid': '0.5deg'})
 
         by_member = defaultdict(dict)
         for r in raw_rows:
-            if (float(r['latitude']), float(r['longitude'])) != cell:
-                continue
             by_member[r['ensemble_member']][r['forecast_hour']] = float(r['member_val'])
 
         # De-accumulate PER MEMBER — exact for a cumulative model, so the spread
-        # of the resulting members is the true spread of the increment.
+        # of the differenced members is the true spread of the increment. This is
+        # what the regridded member grid exists for: regridded_forecast.std_dev
+        # is the spread of the pooled (member x native-cell) population, which
+        # carries within-cell spatial variance that is not ensemble spread at all
+        # (typically ~23% high — see METRICS_AUDIT.md finding 11).
         members_by_hour = defaultdict(list)
-        for _member, series in by_member.items():
-            for hour, (rate, _period) in _precip_member_rate_series(
-                    model_name, series, is_wind=(variable == 'wind')).items():
-                if hour in available_hours:
-                    members_by_hour[hour].append(rate)
+        periods = {}
+        for series in by_member.values():
+            for hour, (rate, period) in _precip_member_rate_series(
+                    model_name, series, is_wind=is_wind).items():
+                members_by_hour[hour].append(rate)
+                periods[hour] = period
+        if not members_by_hour:
+            return jsonify({'hours': [], 'correlation': None, 'n_cases': 0,
+                            'cell': list(cell), 'grid': '0.5deg'})
 
-        # Batch-fetch matched observations for every valid time at once, then map
-        # each back to its forecast hour. Centred on the chosen forecast cell, so
-        # the forecast and the observation describe the same place.
-        valid_time_to_hour = {init_time + timedelta(hours=h): h for h in available_hours}
-        cursor.execute(
-            "SELECT obs_time, AVG(" + obs_col + ") AS obs_val"
-            " FROM observation_data"
-            " WHERE obs_time = ANY(%s)"
-            "   AND ABS(latitude  - %s) <= %s AND ABS(longitude - %s) <= %s"
-            "   AND " + obs_col + " IS NOT NULL"
-            " GROUP BY obs_time",
-            (list(valid_time_to_hour.keys()), cell[0], radius, cell[1], radius)
-        )
-        obs_by_hour = {}
-        for r in cursor.fetchall():
-            h = valid_time_to_hour.get(r['obs_time'])
-            if h is not None and r['obs_val'] is not None:
-                obs_by_hour[h] = float(r['obs_val'])
+        max_period  = max(periods.values())
+        valid_times = [init_time + timedelta(hours=h) for h in members_by_hour]
+        cursor.execute("""
+            SELECT obs_time, AVG(value) AS obs_val
+            FROM regridded_observation
+            WHERE variable_name = %s AND source = %s
+              AND obs_time BETWEEN %s AND %s
+              AND ABS(latitude - %s) < 1e-6 AND ABS(longitude - %s) < 1e-6
+            GROUP BY obs_time
+        """, (obs_var, obs_src,
+              min(valid_times) - timedelta(hours=max_period), max(valid_times),
+              cell[0], cell[1]))
+        obs_by_time = {r['obs_time']: float(r['obs_val'])
+                       for r in cursor.fetchall() if r['obs_val'] is not None}
 
         results = []
-        for hour in available_hours:
-            members = members_by_hour.get(hour, [])
-            if not members or hour not in obs_by_hour:
+        for hour in sorted(members_by_hour):
+            members = members_by_hour[hour]
+            period  = periods[hour]
+            # Same window rule as every other scored endpoint: the observation
+            # must cover the whole period the record spans.
+            obs, covered, n_obs = _obs_window_mean(
+                obs_by_time, init_time + timedelta(hours=hour), period)
+            if not members or obs is None or covered < period:
                 continue
-            obs       = obs_by_hour[hour]
             n         = len(members)
             ens_mean  = sum(members) / n
             spread_sq = sum((x - ens_mean) ** 2 for x in members) / n   # population variance
@@ -1539,6 +1506,8 @@ def get_spread_skill():
                 'ens_mean':  round(ens_mean, 4),
                 'obs':       round(obs, 4),
                 'n_members': n,
+                'period_h':  period,
+                'n_obs_in_window': n_obs,
             })
 
         # Spread-Skill Correlation across available lead times
@@ -1558,11 +1527,13 @@ def get_spread_skill():
             )
             correlation = round(num / den, 4) if den > 1e-10 else None
 
-        print(f"✅ Spread-skill: {len(results)} hours matched, corr={correlation} "
-              f"for ({lat},{lon}) at cell {cell}")
+        print(f"\u2705 Spread-skill: {len(results)} hours matched, corr={correlation} "
+              f"for ({lat},{lon}) at 0.5deg cell {cell}")
         return jsonify({'hours': results, 'correlation': correlation,
                         'n_cases': len(results),
-                        # The grid cell the ensemble was actually read from.
+                        'units': 'm/s' if is_wind else 'mm/h',
+                        'grid': '0.5deg',
+                        # The shared-grid cell the ensemble was read from.
                         'cell': list(cell)})
 
     except Exception as e:
@@ -2029,14 +2000,14 @@ def health_check():
 
 
 
-# ── Comparison endpoints (multi-model, regridded_forecast / regridded_observation) ──
+# ── Comparison endpoints (multi-model, regridded_forecast_ens / regridded_observation) ──
 
 
 @app.route('/api/compare/timeseries', methods=['POST'])
 def compare_timeseries():
     """
     Returns ensemble mean and std per forecast hour for multiple models at a
-    single lat/lon point, queried from regridded_forecast.
+    single lat/lon point, queried from regridded_forecast_ens.
 
     Request JSON:
         { models, lat, lon, hour_min, hour_max, variable }
@@ -2136,7 +2107,7 @@ def compare_timeseries():
 def compare_skill():
     """
     Computes per-hour and summary skill metrics (SSR, CRPS, Bias, MAE, RMSE)
-    by matching regridded_forecast values against regridded_observation at the
+    by matching regridded_forecast_ens values against regridded_observation at the
     valid time = initialization_time + forecast_hour hours.
 
     Request JSON:
@@ -2190,7 +2161,7 @@ def compare_skill():
         for m in list(init_times):
             cursor.execute("""
                 SELECT latitude, longitude
-                FROM regridded_forecast
+                FROM regridded_forecast_ens
                 WHERE model_name = %s AND variable_name = %s
                   AND latitude  BETWEEN %s AND %s
                   AND longitude BETWEEN %s AND %s
@@ -2482,8 +2453,8 @@ def compare_spatial_agreement():
                 FROM (
                     SELECT u.model_name, u.latitude, u.longitude,
                            SQRT(POWER(u.mean_value, 2) + POWER(v.mean_value, 2)) AS speed
-                    FROM regridded_forecast u
-                    JOIN regridded_forecast v
+                    FROM regridded_forecast_ens u
+                    JOIN regridded_forecast_ens v
                       ON v.model_name = u.model_name AND v.forecast_hour = u.forecast_hour
                      AND v.latitude = u.latitude AND v.longitude = u.longitude
                      AND v.variable_name = 'wind_v_10m'
@@ -2505,7 +2476,7 @@ def compare_spatial_agreement():
                     STDDEV(mean_value)          AS disagreement,
                     AVG(mean_value)             AS avg_mean,
                     COUNT(DISTINCT model_name)  AS n_models
-                FROM regridded_forecast
+                FROM regridded_forecast_ens
                 WHERE model_name    = ANY(%s)
                   AND variable_name = %s
                   AND forecast_hour = %s
@@ -2737,7 +2708,7 @@ def categorical_metrics_endpoint():
         # box_cells maps to exactly that many cells per axis instead of 1-or-4
         # depending on where in a cell the user happened to click.
         cursor.execute("""
-            SELECT latitude, longitude FROM regridded_forecast
+            SELECT latitude, longitude FROM regridded_forecast_ens
             WHERE model_name = %s AND variable_name = %s
               AND latitude BETWEEN %s AND %s AND longitude BETWEEN %s AND %s
             ORDER BY POWER(latitude - %s, 2) + POWER(longitude - %s, 2)
