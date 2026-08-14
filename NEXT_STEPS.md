@@ -65,7 +65,18 @@ correctly returns nothing with a warning — but a user scrubbing to +48 h sees 
 empty panel and cannot tell that from a bug. Show the observation record's extent
 somewhere in the interface.
 
-## 5. Lower priority
+## 5. Two planned pieces of work, with their own documents
+
+- **`CONSISTENCY_AUDIT_PLAN.md`** — whether Analysis and Comparison behave like
+  one product: metric parity (a real `fss` gap is already identified), wind vs
+  precipitation parity in every context, page flow, chart grammar, typography,
+  and a sweep for wrong text. Six phases, survey before fixing.
+- **`DATA_EXPANSION_DESIGN.md`** — selecting date and initialisation. Blocked on
+  one thing: the regridded tables have **no `init_time` column**, and the API
+  resolves valid time from "the latest run". Loading a second run before that is
+  fixed makes every score wrong in a way that looks plausible.
+
+## 6. Lower priority
 
 - **Vite migration** — CRA is EOL.
 - **Cache the deterministic metric endpoints** — only the plot endpoint is cached.
