@@ -53,9 +53,22 @@ export function AboutModal({ onClose, stats, selectedVariable, currentModel, onR
         ><X size={18} /></button>
 
         <h1 style={{ fontSize: '32px', marginBottom: '20px', color: '#2c3e50', display: 'flex', alignItems: 'center', gap: '10px' }}><CloudRain size={30} style={{ color: '#3498db' }} />WEAVE</h1>
-        <p style={{ fontSize: '16px', lineHeight: '1.8', color: '#34495e', marginBottom: '30px' }}>
-          WEAVE is an advanced visualization platform that displays ensemble forecast data from multiple weather models. Our system provides real-time visualization of precipitation and wind speed data, enabling better understanding of forecast uncertainty and model agreement.
+        <p style={{ fontSize: '16px', lineHeight: '1.8', color: '#34495e', marginBottom: '24px' }}>
+          WEAVE displays ensemble forecast data from multiple weather models, and verifies it against observations. It shows precipitation and wind speed with their uncertainty, so you can see where the models agree, where they don't, and where they were right.
         </p>
+
+        <div style={{ marginBottom: '30px' }}>
+          {[
+            ['🌍 Visualization', 'The map. Ensemble mean or spread per lead time, uncertainty styling, and a drawn region for live metric maps.'],
+            ['📊 Analysis',      'One model in depth at a point or region — cone of uncertainty, spread-skill calibration, and verification against observations.'],
+            ['⚖️ Comparison',    'Several models side by side, at a point or over a region — skill over lead time, categorical scores, and per-cell difference maps.'],
+          ].map(([title, body]) => (
+            <div key={title} style={{ display: 'flex', gap: '12px', padding: '10px 0', borderBottom: '1px solid #ecf0f1' }}>
+              <div style={{ fontSize: '14px', fontWeight: 700, color: '#2c3e50', minWidth: '130px' }}>{title}</div>
+              <div style={{ fontSize: '13px', lineHeight: '1.6', color: '#5d6d7e' }}>{body}</div>
+            </div>
+          ))}
+        </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '30px' }}>
           <div style={{ background: '#ecf0f1', padding: '20px', borderRadius: '8px' }}>
@@ -77,6 +90,16 @@ export function AboutModal({ onClose, stats, selectedVariable, currentModel, onR
           <p style={{ fontSize: '14px', lineHeight: '1.6', margin: 0 }}>
             Dynamic canvas-based rendering using Inverse Distance Weighting (IDW) interpolation. Real-time spatial gradients from point-based weather data stored in PostgreSQL.
           </p>
+        </div>
+
+        <div style={{ background: '#f4f6f7', border: '1px solid #e1e5e8', padding: '20px', borderRadius: '8px', marginBottom: '20px' }}>
+          <h3 style={{ fontSize: '16px', marginBottom: '10px', marginTop: 0, color: '#2c3e50' }}>How the numbers work</h3>
+          <ul style={{ fontSize: '13px', lineHeight: '1.7', color: '#5d6d7e', paddingLeft: '18px', margin: 0 }}>
+            <li><strong>Everything is shown as a rate, in mm/h.</strong> The models don't agree on how they store precipitation — AIFS accumulates from initialisation, GEFS uses 3&nbsp;h and 6&nbsp;h buckets, UKMO reports an hourly rate — so each is converted with its own semantics before anything is drawn or scored.</li>
+            <li><strong>Thresholds are quoted in mm/6h</strong>, the conventional way to state an event bar, and converted to mm/h to compare against the map.</li>
+            <li><strong>Every model is verified over the same 6&nbsp;hour window</strong>, so a threshold asks one question of all of them. A shorter window keeps peaks a longer one averages away, which would otherwise flatter whichever model reports most often.</li>
+            <li><strong>A forecast is only scored where an observation covers its whole period</strong>, so lead times past the end of the observation record show nothing rather than something misleading.</li>
+          </ul>
         </div>
 
         {stats && (
