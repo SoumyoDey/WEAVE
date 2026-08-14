@@ -43,7 +43,7 @@ Deep-dive analysis for a clicked point or a drawn region, with plain-language re
 |---------|-------------|
 | **Cone of Uncertainty** | Ensemble mean ± 1σ / ± 2σ (or empirical P10–P90) shaded area chart across the full lead-time range |
 | **Spread-Skill Analysis** | Per-lead-time SSR bar chart, spread vs. \|error\| comparison chart, mean SSR and Pearson correlation badges, and a plain-language calibration readout (severely overconfident → overconfident → well calibrated → underconfident → severely underconfident) |
-| **Verification Metrics** | Run CSI, POD, FAR, FBI, Brier Score, and Composite Confidence at a configurable precipitation threshold and hour range; point or region sub-mode with charts |
+| **Verification Metrics** | Run CSI, POD, FAR, FBI, Brier Score, FSS and Composite Confidence at a configurable threshold and hour range; point or region sub-mode with charts. A **Scored area** control widens the box so FSS has a neighbourhood to work with, while the contingency table keeps reading the centre cell only — so the point metrics do not move |
 
 #### 🗺 Region Mode
 Computes all 10 spatial metrics in parallel for a drawn bounding box and renders each as a server-side Cartopy/Matplotlib PNG map. Controls: hour range, categorical threshold. Each card has individual ⬇ (download) and share buttons.
@@ -57,18 +57,38 @@ Computes all 10 spatial metrics in parallel for a drawn bounding box and renders
 ---
 
 ### ⚖️ Comparison Tab
-Side-by-side multi-model verification at a point or region. Location, model selection, and lead-time range sit in a responsive grid (side by side on wide screens, stacked on narrow ones).
+Side-by-side multi-model verification, with a **Point | Region** toggle. Location, model selection, and lead-time range sit in a responsive grid (side by side on wide screens, stacked on narrow ones).
 
-- **Time-series comparison** — Ensemble mean (± σ envelope) per model on a shared axis, with a friendly "Normalise" toggle when models report at very different magnitudes
-- **Skill score comparison** — MAE and RMSE per model per lead time as grouped bar/line charts
-- **Spatial agreement** — Per-grid-point agreement fraction map across selected models (requires ≥ 2 models)
-- Accumulation-period normalization (AIFS ÷ 6, GEFS ÷ 3, UKMO ÷ 1 → mm/h) applied before all cross-model comparisons
+#### 📍 Point Mode
+| Section | Description |
+|---------|-------------|
+| **Time series** | Ensemble mean (± σ envelope) per model on a shared axis, with a "Normalise" toggle when models report at very different magnitudes |
+| **Skill over lead time** | Bias, MAE, RMSE, CRPS and SSR per model per lead time, plus aggregate cards |
+| **Categorical skill** | CSI / POD / FAR / FSS per model at a configurable threshold, over a verification box whose size is set independently of the FSS neighbourhood |
+
+#### 🗺 Region Mode
+| Section | Description |
+|---------|-------------|
+| **Region metrics** | All 11 metrics per model over a drawn bbox, as grouped bars — pooled over samples, not averaged over per-cell ratios |
+| **Spatial small-multiples** | One Cartopy map per model for a chosen metric, on a shared colour scale so the panels are directly comparable |
+| **A − B difference map** | Per-cell difference between two models on a diverging scale centred at zero; swapping A/B flips sign and colour, leaving magnitude intact |
+| **Spatial agreement** | Per-grid-point agreement fraction across selected models (requires ≥ 2 models) |
+
+Both modes show a **scored-area badge** stating the cells and neighbourhood a number was computed over, because "point" means a box rather than a single cell.
+
+#### Verification conventions
+These matter for reading any cross-model number, and are the subject of `METRICS_AUDIT.md`:
+
+- **Everything is compared in mm/h.** The three models do not share a record convention — AIFS stores a running total since initialisation, GEFS alternates 3 h and 6 h accumulation buckets, UKMO is already an hourly rate — so each is converted with its own semantics rather than one divisor. AIFS and GEFS were additionally pre-scaled by the JSON export, which the metric layer accounts for; `/api/health` verifies that assumption against the loaded data and reports a mismatch.
+- **Every model is scored over a common 6-hour window.** A threshold only asks one question if the window means one thing: a 1 h mean keeps peaks a 6 h mean averages away, so an hourly model would otherwise cross a high bar more often for no reason but its cadence. Shorter records are combined only when they tile the window exactly.
+- **Observations are averaged over the same window a forecast record spans**, and a partially observed window is rejected rather than averaged — so lead times past the end of the observation record return no score instead of a misleading one.
+- **FSS needs more than one cell.** With a single cell an event fraction can only be 0 or 1, so FSS degenerates into CSI; it is reported as `null` and the UI says why.
 
 ---
 
 ## Spatial Verification Metrics
 
-All metrics are computed from `regridded_forecast` + `regridded_observation` tables and returned as `{lat, lon, value}` point lists, then rendered server-side by Cartopy.
+All metrics are computed from `regridded_forecast_ens` + `regridded_observation` and returned as `{lat, lon, value}` point lists, then rendered server-side by Cartopy. `regridded_forecast_ens` carries the ensemble mean and a **true ensemble spread**, derived from `regridded_forecast_member` — each member bilinearly regridded onto the shared 0.5° grid — rather than the pooled member × cell spread the older `regridded_forecast` table stored.
 
 | Key | Full name | Direction |
 |-----|-----------|-----------|
@@ -183,7 +203,10 @@ WEAVE_v3/
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/compare/timeseries` | Ensemble mean/spread per model at a point — `{models, lat, lon, hour_min, hour_max, variable}` |
-| `POST` | `/api/compare/skill` | MAE/RMSE per model per lead time — `{models, lat, lon, hour_min, hour_max, variable}` |
+| `POST` | `/api/compare/skill` | Bias/MAE/RMSE/CRPS/SSR per model per lead time — `{models, lat, lon, hour_min, hour_max, variable}` |
+| `POST` | `/api/compare/categorical` | CSI/POD/FAR/FSS per model over a verification box — `{models, lat, lon, hour_min, hour_max, variable, threshold_mm_6h \| threshold_ms, box_cells, fss_window}` |
+| `POST` | `/api/compare/region-metrics` | All region metrics per model over a bbox — `{models, variable, min_lat, max_lat, min_lon, max_lon, hour_min, hour_max, metrics[], threshold_mm_6h \| threshold_ms, fss_window}` |
+| `POST` | `/api/compare/spatial-diff` | Per-cell A − B difference map for one metric — `{model_a, model_b, metric, variable, bbox, hour_min, hour_max, threshold}` |
 | `POST` | `/api/compare/spatial-agreement` | Model agreement fraction per grid point — `{models, min_lat, max_lat, min_lon, max_lon, hour, variable}` |
 
 ### Robustness
