@@ -748,9 +748,6 @@ function App() {
         {showAbout && (
           <AboutModal
             onClose={() => setShowAbout(false)}
-            stats={stats}
-            selectedVariable={selectedVariable}
-            currentModel={currentModel}
             onReplayTour={() => { setShowAbout(false); setShowTour(true); }}
           />
         )}
