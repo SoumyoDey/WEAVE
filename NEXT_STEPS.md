@@ -238,11 +238,31 @@ precipitation, and the maps draw (36 precipitation cells at +6 h, 54 wind cells 
 Worth knowing before trusting a green run, and worth fixing if this layer is
 extended:
 
-- **It is on one clean grid.** Every table shares the same 0.5° cells, so the
-  0.25°-snap collapse in defect 6 is invisible — the fixture has nothing for two
-  cells to collapse *onto*. Seeding one model on an offset or finer native grid
-  would catch that whole class, which is also where audit finding 3 and the
-  cross-model join bug lived. **Do this before batching the ensemble queries.**
+- ~~**It is on one clean grid.**~~ **Fixed (2026-08-19).** The regridded tables are
+  on the shared 0.5° analysis grid, as before; the pre-regrid tables are now on each
+  model's own native grid, measured from the loaded run: **AIFS 0.25°, GEFS 0.5°,
+  UKMO 0.1875° × 0.28125° and aligned to neither**. UKMO's 10 native latitudes
+  collapse onto 7 keys under a 0.25° snap — latitude does because 0.1875 < 0.25,
+  longitude does not because 0.28125 > 0.25 — so the fixture can now see the defect
+  6 class, and `test_the_fixture_can_actually_see_a_collapse` fails if that
+  property is ever seeded away. It also reproduces the coordinate-precision split
+  (UKMO wind at `35.1562`, precipitation at `35.15625`).
+
+  Two things this bought beyond insurance. `/api/point-timeseries`' nearest-cell
+  choice now has **more than one candidate** — two UKMO cells straddle the band
+  boundary at 36.25 carrying 3.0 and 0.5 mm/h, and a 0.02° move flips the answer,
+  so `min(cells, key=distance)` is exercised for the first time. And "all three
+  models score identically" now means something much stronger: their native grids
+  differ by nearly 3× in cell count (81 / 25 / 70) and every score still comes back
+  on the same 25 analysis cells.
+
+  The enabling change was making the field a function of latitude
+  (`precip_scene`) rather than a dict keyed by exact cell, so it can be evaluated
+  on any grid. Being piecewise constant over the analysis bands, it regrids to
+  itself, so no second truth was introduced. **Lesson worth keeping:** the refactor
+  silently hollowed out two tests that filtered by exact latitude — they became
+  vacuous rather than failing, since UKMO has no cell at 35.0. Both now match by
+  band and assert non-emptiness first.
 - ~~**The aggregate and member tables agree by construction.**~~ **Fixed** while
   doing the migration above: `ensemble_statistics` is now seeded with a spread
   `NATIVE_SPREAD_INFLATION` (2x) the true ensemble spread, with the member values

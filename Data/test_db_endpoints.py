@@ -93,12 +93,18 @@ class TestUnitConventionParity:
     def test_the_map_shows_a_rate_for_every_model(self, db_client):
         """/api/forecast-data is labelled mm/h, so it has to BE mm/h. AIFS's raw
         value is a running total and GEFS's 6 h buckets are 2x too high; both must
-        come back as the same 3.0 mm/h UKMO stores natively."""
+        come back as the same 3.0 mm/h UKMO stores natively.
+
+        The display path serves each model's NATIVE grid, so the point count is per
+        model (AIFS 81, GEFS 25, UKMO 70) and cells are matched by the analysis band
+        their latitude falls in rather than by an exact latitude — UKMO's grid has
+        no cell at 35.0 at all."""
         for model in fx.MODELS:
             pts = db_client.get(
                 f'/api/forecast-data?model={model}&hour=6&member=mean').get_json()
-            assert len(pts) == fx.N_CELLS
-            wet = [p['value'] for p in pts if p['lat'] in (35.0, 35.5, 37.0)]
+            assert len(pts) == fx.n_native_cells(model), model
+            wet = [p['value'] for p in pts if fx.outcome(p['lat']) != 'miss']
+            assert wet, f'{model}: no wet cells matched — check the band mapping'
             assert wet == pytest.approx([fx.EXPECT_PRECIP['rate']] * len(wet), **APPROX)
 
     def test_the_member_path_converts_the_same_way(self, db_client):
@@ -108,7 +114,8 @@ class TestUnitConventionParity:
         for model in fx.MODELS:
             pts = db_client.get(
                 f'/api/forecast-data?model={model}&hour=6&member=0').get_json()
-            wet = [p['value'] for p in pts if p['lat'] == 35.0]
+            wet = [p['value'] for p in pts if fx.outcome(p['lat']) != 'miss']
+            assert wet, model
             assert wet == pytest.approx([expected] * len(wet), **APPROX), model
 
     def test_the_spread_is_reported_as_a_rate_too(self, db_client):
@@ -119,7 +126,7 @@ class TestUnitConventionParity:
             '/api/forecast-data?model=AIFS&hour=12&member=std').get_json()
         expected = fx.PRECIP_SPREAD * fx.NATIVE_SPREAD_INFLATION
         assert [p['value'] for p in pts] == pytest.approx(
-            [expected] * fx.N_CELLS, **APPROX)
+            [expected] * fx.n_native_cells('AIFS'), **APPROX)
 
     def test_timeseries_shows_the_rate_beside_the_raw_total(self, db_client):
         """AIFS looked wetter the further out you scrubbed because the raw value
@@ -546,10 +553,114 @@ class TestPointCategoricalMetrics:
         assert d['summary']['far'] == pytest.approx(1.0)
 
 
+class TestNativeGrids:
+    """The three models are ingested on three different native grids, and the
+    fixture now reproduces that: AIFS 0.25 degrees, GEFS 0.5, UKMO 0.1875 x 0.28125
+    aligned to neither (see NATIVE_GRIDS).
+
+    It used to put every table on the shared 0.5 degree analysis grid, which made a
+    whole class of bug invisible — a 0.25 degree snap key can only collapse two
+    cells if two cells are closer together than the key, and nothing was. That is
+    NEXT_STEPS.md defect 6, and audit finding 3 and the cross-model join bug lived
+    in the same place. The scored paths no longer key on native coordinates, so
+    these are guards rather than a live bug hunt: they fail if anyone puts a snap
+    back."""
+
+    def test_the_fixture_can_actually_see_a_collapse(self):
+        """The property that was missing. UKMO's native latitudes are 0.1875 apart,
+        so a 0.25 degree snap maps distinct cells onto a shared key — which is how
+        110 native cells became 77, with one cell's value reported at another's
+        coordinates. No database needed: this is about the seed."""
+        lats, _lons = fx.native_cells('UKMO')
+        snapped = {round(v * 4) / 4 for v in lats}
+        assert len(snapped) < len(lats), 'UKMO latitudes no longer collapse — ' \
+                                        'the fixture has stopped modelling defect 6'
+        # 35.15625 and 35.34375 are different cells and share the key 35.25.
+        assert round(lats[0] * 4) / 4 == round(lats[1] * 4) / 4
+
+        # Longitude must NOT collapse: 0.28125 is wider than the key.
+        _lats, lons = fx.native_cells('UKMO')
+        assert len({round(v * 4) / 4 for v in lons}) == len(lons)
+
+        # And the aligned models are unaffected, so a failure points at one model.
+        for model in ('AIFS', 'GEFS'):
+            m_lats, _ = fx.native_cells(model)
+            assert len({round(v * 4) / 4 for v in m_lats}) == len(m_lats), model
+
+    def test_wind_and_precipitation_coordinates_differ_for_ukmo(self):
+        """Two loaders wrote UKMO's rows and one passed coordinates through a
+        six-significant-digit conversion, so the same physical cell is 35.1562 for
+        wind and 35.15625 for precipitation. Nothing joins across variables today;
+        if anything starts to, it will match zero rows rather than fail loudly, so
+        the difference is pinned here."""
+        precip_lats, _ = fx.native_cells('UKMO', 'precipitation')
+        wind_lats, _   = fx.native_cells('UKMO', 'wind_u_10m')
+        assert precip_lats[0] != wind_lats[0]
+        assert set(precip_lats).isdisjoint(wind_lats)
+        # AIFS and GEFS sit on round numbers, so their two variables agree.
+        for model in ('AIFS', 'GEFS'):
+            assert fx.native_cells(model, 'precipitation') == \
+                   fx.native_cells(model, 'wind_u_10m'), model
+
+    @pytest.mark.parametrize('model', fx.MODELS)
+    def test_the_display_path_serves_the_native_grid_unchanged(self, db_client, model):
+        """No snapping, no regridding, no precision lost through the API — the
+        coordinates that come back are the ones in the table."""
+        pts = db_client.get(
+            f'/api/forecast-data?model={model}&hour=6&member=mean').get_json()
+        expected_lats, expected_lons = fx.native_cells(model)
+        assert sorted({p['lat'] for p in pts}) == pytest.approx(expected_lats)
+        assert sorted({p['lon'] for p in pts}) == pytest.approx(expected_lons)
+
+    @pytest.mark.parametrize('model', fx.MODELS)
+    def test_scores_are_on_the_analysis_grid_whatever_the_native_one(
+            self, db_client, model):
+        """The reason the three models are comparable at all. Their native grids
+        differ by a factor of nearly three in cell count (AIFS 81, GEFS 25, UKMO
+        70), and every score still comes back on the 25-cell analysis grid — so a
+        cell count that follows the native grid means something has started keying
+        on native coordinates again."""
+        d = region_metrics(db_client, model, ['mae', 'bias'])
+        assert d['n_cells'][model] == fx.N_CELLS
+        assert d['n_points'][model]['mae'] == fx.N_CELLS
+        assert fx.n_native_cells(model) != fx.N_CELLS or model == 'GEFS'
+
+    def test_a_finer_grid_does_not_change_the_score(self, db_client):
+        """UKMO is on the finest native grid and GEFS's is identical to the analysis
+        grid, and they must still agree exactly — the field is the same, so only the
+        resolution differs."""
+        ukmo = region_metrics(db_client, 'UKMO', ['mae', 'bias', 'rmse'])['models']['UKMO']
+        gefs = region_metrics(db_client, 'GEFS', ['mae', 'bias', 'rmse'])['models']['GEFS']
+        assert ukmo == gefs
+
+    # The nearest-cell choice in /api/point-timeseries only has more than one
+    # candidate when the native grid is finer than the radius — so before this
+    # fixture change, `min(cells, key=distance)` was never actually exercised.
+    # UKMO's cells at 36.09375 and 36.28125 straddle the analysis band boundary at
+    # 36.25, so they carry different forecast rates: 3.0 and 0.5. The midpoint is
+    # 36.1875, and the answer must flip either side of it.
+    @pytest.mark.parametrize('lat,expected_cell,expected_rate', [
+        (36.18, 36.09375, 3.0),
+        (36.20, 36.28125, 0.5),
+    ])
+    def test_the_timeseries_picks_the_nearest_native_cell(
+            self, db_client, lat, expected_cell, expected_rate):
+        pts = db_client.get('/api/point-timeseries?model=UKMO&variable=precipitation'
+                            f'&lat={lat}&lon=-75.515625&radius=0.2').get_json()
+        assert pts, 'expected the two straddling cells to be in range'
+        assert pts[0]['cell'][0] == pytest.approx(expected_cell, abs=1e-4)
+        assert pts[0]['mean'] == pytest.approx(expected_rate, **APPROX)
+
+
 class TestPointAndDisplayEndpoints:
-    def test_wind_data_reports_speed_and_direction(self, db_client):
-        pts = db_client.get('/api/wind-data?model=AIFS&hour=6').get_json()
-        assert len(pts) == fx.N_CELLS
+    @pytest.mark.parametrize('model', fx.MODELS)
+    def test_wind_data_reports_speed_and_direction(self, db_client, model):
+        """Also pins the u/v self-join across all three native grids, including
+        UKMO's reduced-precision coordinates: the join is on exact latitude and
+        longitude equality, so if the two components ever disagreed about a cell's
+        coordinates it would return nothing at all."""
+        pts = db_client.get(f'/api/wind-data?model={model}&hour=6').get_json()
+        assert len(pts) == fx.n_native_cells(model, 'wind_u_10m'), model
         for p in pts:
             assert p['u'] == pytest.approx(fx.WIND_U, **APPROX)
             assert p['v'] == pytest.approx(fx.WIND_V, **APPROX)
@@ -569,7 +680,7 @@ class TestPointAndDisplayEndpoints:
         scalar speed)."""
         pts = db_client.get(
             f'/api/wind-data?model=AIFS&hour=0&member={member}').get_json()
-        assert len(pts) == fx.N_CELLS
+        assert len(pts) == fx.n_native_cells('AIFS', 'wind_u_10m')
         assert pts[0]['speed'] == pytest.approx(expected_speed, **APPROX)
 
     def test_forecast_data_delegates_wind_to_the_wind_endpoint(self, db_client):
