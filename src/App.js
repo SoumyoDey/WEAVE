@@ -9,7 +9,7 @@ import { getLegendGradient }  from './utils/colorUtils';
 import { pointInPolygon }     from './utils/geoUtils';
 
 // ── API ───────────────────────────────────────────────────────────────────────
-import { fetchForecastData, fetchTimeseries as apiFetchTimeseries, fetchSpreadSkill as apiFetchSpreadSkill } from './api/forecastApi';
+import { fetchForecastData, fetchTimeseries as apiFetchTimeseries, fetchSpreadSkill as apiFetchSpreadSkill, fetchObservationCoverage } from './api/forecastApi';
 import { fetchSpatialMetric } from './api/spatialApi';
 
 // ── Layer renderers ───────────────────────────────────────────────────────────
@@ -84,6 +84,8 @@ function App() {
   const [timeseriesLoading, setTimeseriesLoading]   = useState(false);
   const [ssrData, setSsrData]                       = useState(null);
   const [ssrLoading, setSsrLoading]                 = useState(false);
+  // How far the observation record reaches — see the effect below.
+  const [obsCoverage, setObsCoverage]               = useState(null);
 
   // ── Spatial metric / region selection state ──────────────────────────────────
   const [selectionMode, setSelectionMode]       = useState(null);
@@ -386,6 +388,22 @@ function App() {
     return () => { cancelled = true; };
   }, [clickedPoint, selectedModel, selectedVariable]); // eslint-disable-line
 
+  // ── Observation coverage ──────────────────────────────────────────────────────
+  // How far the truth reaches. Verification correctly returns nothing past the
+  // end of the observation record, which looked identical to a bug — so the
+  // extent is fetched up front and shown on the timeline, before anything is
+  // clicked. Depends on the run and the variable, not on the selected hour.
+  useEffect(() => {
+    let cancelled = false;
+    fetchObservationCoverage(currentModel.name, selectedVariable)
+      .then(data => { if (!cancelled) setObsCoverage(data); })
+      .catch(err => {
+        // Non-fatal: the timeline just omits the marker.
+        if (!cancelled) { console.error('Observation coverage error:', err); setObsCoverage(null); }
+      });
+    return () => { cancelled = true; };
+  }, [currentModel.name, selectedVariable]);
+
   // ── Spatial metric computation ────────────────────────────────────────────────
   const computeSpatialMetric = async () => {
     if (!selectedRegion) return;
@@ -661,6 +679,7 @@ function App() {
           currentModel={currentModel}
           selectedHour={selectedHour} setSelectedHour={setSelectedHour}
           selectedVariable={selectedVariable}
+          obsCoverage={obsCoverage}
           isNarrow={isNarrow}
         />
 
@@ -764,6 +783,7 @@ function App() {
           selectedVariable={selectedVariable}
           timeseriesLoading={timeseriesLoading} timeseriesData={timeseriesData}
           ssrLoading={ssrLoading} ssrData={ssrData}
+          obsCoverage={obsCoverage}
           onCompare={() => setActiveTab('comparison')}
           selectedRegion={selectedRegion}
           active={activeTab === 'analysis'}

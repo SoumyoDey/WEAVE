@@ -36,6 +36,19 @@ export const fetchSpreadSkill = async (modelName, variable, lat, lon) => {
 };
 
 /**
+ * Fetches how far the observation record reaches, so the interface can say where
+ * verification stops instead of leaving the user to infer it from an empty panel.
+ * Returns { init_time, obs_start, obs_end, record_end_lead_hours,
+ *           last_verifiable_hour, window_hours, source }.
+ */
+export const fetchObservationCoverage = async (modelName, variable) => {
+  const params = new URLSearchParams({ model: modelName, variable });
+  const res    = await fetch(`${BASE}/observation-coverage?${params}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+};
+
+/**
  * Fetches mean + std fields simultaneously.
  * Used by uncertainty / bivariate layer renderers.
  * Returns { meanData, stdData }.

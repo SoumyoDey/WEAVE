@@ -302,6 +302,37 @@ class TestObservationCoverage:
                           f'&variable=wind&hour=0&{BOX_QS}').get_json()
         assert len(d['points']) == fx.N_CELLS
 
+    @pytest.mark.parametrize('variable,window,scored', [
+        ('precipitation', 6, fx.SCORED_PRECIP_HOURS),
+        ('wind',          1, fx.SCORED_WIND_HOURS),
+    ])
+    def test_the_coverage_endpoint_promises_what_the_scores_deliver(
+            self, db_client, variable, window, scored):
+        """/api/observation-coverage exists so the UI can state where verification
+        stops rather than showing an empty panel. Its promise is only worth making
+        if it matches what the scored endpoints actually return, so this pins the
+        two together: `last_verifiable_hour` must be the last lead time that really
+        does get scored."""
+        d = db_client.get('/api/observation-coverage?model=AIFS'
+                          f'&variable={variable}').get_json()
+        assert d['window_hours'] == window
+        assert d['obs_end'].startswith('2025-09-08T12:00')
+        assert d['record_end_lead_hours'] == pytest.approx(fx.OBS_HOUR_MAX)
+        assert d['last_verifiable_hour'] == max(scored)
+
+        # And nothing beyond it is scored, in the endpoint the UI actually reads.
+        skill = db_client.post('/api/compare/skill', json={
+            'models': ['AIFS'], 'lat': WET_CELL[0], 'lon': WET_CELL[1],
+            'variable': variable, 'hour_min': 0, 'hour_max': 36}).get_json()
+        assert max(skill['obs_hours']) == d['last_verifiable_hour']
+
+    def test_coverage_reports_the_run_it_is_relative_to(self, db_client):
+        """The lead times only mean something against an initialisation time, and
+        the frontend had that date hard-coded."""
+        d = db_client.get('/api/observation-coverage').get_json()
+        assert d['init_time'].startswith('2025-09-08T00:00')
+        assert d['source'] == fx.PRECIP_OBS_SOURCE
+
     def test_wind_stops_at_the_wind_record(self, db_client):
         d = db_client.post('/api/compare/skill', json={
             'models': ['UKMO'], 'lat': WET_CELL[0], 'lon': WET_CELL[1],
