@@ -22,7 +22,7 @@ const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
  *   summary: {
  *     hits, misses, false_alarms, correct_neg,
  *     pod, far, fbi, csi,
- *     brier_score, composite_confidence
+ *     brier, composite_confidence
  *   },
  *   obs_hours: number[],
  *   obs_warning: string,

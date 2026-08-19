@@ -16,11 +16,14 @@ import { t } from '../theme';
 const MODEL_COLORS = { AIFS: '#3498db', GEFS: '#e74c3c', UKMO: '#2ecc71' };
 
 // Advanced (categorical) metrics rendered per model over lead time in Section 5.
+// CSI, POD, FAR and FSS are all bounded in [0, 1], which is why these charts pin
+// the axis: auto-scaling makes a CSI of 0.05 fill the panel and look like skill.
+// AnalysisTab has always pinned its score axes; this is Comparison catching up.
 const CAT_METRICS = [
-  { key: 'csi', label: 'CSI', hint: 'Critical Success Index · higher is better' },
-  { key: 'pod', label: 'POD', hint: 'Probability of Detection · higher is better' },
-  { key: 'far', label: 'FAR', hint: 'False Alarm Ratio · lower is better' },
-  { key: 'fss', label: 'FSS', hint: 'Fractions Skill Score · higher is better' },
+  { key: 'csi', label: 'CSI', hint: 'Critical Success Index · higher is better', bounded: true },
+  { key: 'pod', label: 'POD', hint: 'Probability of Detection · higher is better', bounded: true },
+  { key: 'far', label: 'FAR', hint: 'False Alarm Ratio · lower is better', bounded: true },
+  { key: 'fss', label: 'FSS', hint: 'Fractions Skill Score · higher is better', bounded: true },
 ];
 
 // Verification metrics carried per lead time by /api/compare/skill.
@@ -34,9 +37,9 @@ const SKILL_METRICS = [
 
 // The same suite aggregated over all verified lead times (skill `summary`).
 const SKILL_SUMMARY_METRICS = [
-  { key: 'mean_ssr',    label: 'Mean SSR',    hint: 'ideal = 1',           refLine: 1, decimals: 3 },
+  { key: 'ssr_agg',     label: 'SSR (aggregated)', hint: 'ideal = 1',      refLine: 1, decimals: 3 },
   { key: 'correlation', label: 'Spread–skill corr.', hint: 'spread vs |error|',       decimals: 3 },
-  { key: 'mean_crps',   label: 'Mean CRPS',   hint: 'lower is better',                decimals: 4 },
+  { key: 'crps',        label: 'CRPS',        hint: 'lower is better',                decimals: 4 },
   { key: 'bias',        label: 'Bias',        hint: '0 is unbiased',       refLine: 0, decimals: 3 },
   { key: 'mae',         label: 'MAE',         hint: 'lower is better',                decimals: 3 },
   { key: 'rmse',        label: 'RMSE',        hint: 'lower is better',                decimals: 3 },
@@ -64,14 +67,14 @@ const REGION_METRIC_GROUPS = [
   {
     id: 'categorical', label: 'Categorical', hint: 'Event-based skill for threshold exceedances',
     metrics: [
-      { key: 'csi',   label: 'CSI',   hint: 'higher is better', decimals: 3 },
-      { key: 'pod',   label: 'POD',   hint: 'higher is better', decimals: 3 },
-      { key: 'far',   label: 'FAR',   hint: 'lower is better',  decimals: 3 },
-      { key: 'brier', label: 'Brier', hint: '0 is perfect',     decimals: 4 },
+      { key: 'csi',   label: 'CSI',   hint: 'higher is better', decimals: 3, bounded: true },
+      { key: 'pod',   label: 'POD',   hint: 'higher is better', decimals: 3, bounded: true },
+      { key: 'far',   label: 'FAR',   hint: 'lower is better',  decimals: 3, bounded: true },
+      { key: 'brier', label: 'Brier', hint: '0 is perfect',     decimals: 4, bounded: true },
       // FSS is a property of the whole field at a lead time, so it has a
       // region value but no per-cell value — hence no map (noMap).
       { key: 'fss',   label: 'FSS',   hint: 'placement skill · higher is better',
-        decimals: 3, noMap: true },
+        decimals: 3, noMap: true, bounded: true },
     ],
   },
 ];
@@ -90,11 +93,11 @@ const SPATIAL_MAP_METRICS = REGION_METRIC_GROUPS.flatMap(g =>
 
 // Categorical scores pooled over lead times (compare/categorical `summaries`).
 const CAT_SUMMARY_METRICS = [
-  { key: 'csi',   label: 'CSI',   hint: 'higher is better', decimals: 3 },
-  { key: 'pod',   label: 'POD',   hint: 'higher is better', decimals: 3 },
-  { key: 'far',   label: 'FAR',   hint: 'lower is better',  decimals: 3 },
-  { key: 'fss',   label: 'FSS',   hint: 'higher is better', decimals: 3 },
-  { key: 'brier', label: 'Brier', hint: '0 is perfect',     decimals: 4 },
+  { key: 'csi',   label: 'CSI',   hint: 'higher is better', decimals: 3, bounded: true },
+  { key: 'pod',   label: 'POD',   hint: 'higher is better', decimals: 3, bounded: true },
+  { key: 'far',   label: 'FAR',   hint: 'lower is better',  decimals: 3, bounded: true },
+  { key: 'fss',   label: 'FSS',   hint: 'higher is better', decimals: 3, bounded: true },
+  { key: 'brier', label: 'Brier', hint: '0 is perfect',     decimals: 4, bounded: true },
 ];
 const MODEL_NAMES  = ['AIFS', 'GEFS', 'UKMO'];
 
@@ -301,7 +304,7 @@ function LeadTimeChart({ label, hint, metricKey, rows, models, refLine, decimals
 }
 
 // One aggregate metric, a bar per model. `values` is parallel to `models`.
-function AggregateBar({ label, hint, models, values, refLine, decimals = 3 }) {
+function AggregateBar({ label, hint, models, values, refLine, decimals = 3, bounded = false }) {
   const data    = models.map((m, i) => ({ model: m, value: values[i] }));
   const hasData = values.some(v => v != null);
   return (
@@ -313,12 +316,14 @@ function AggregateBar({ label, hint, models, values, refLine, decimals = 3 }) {
             <XAxis dataKey="model" stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.6)', fontSize: 10 }} />
             {/* Bar length encodes magnitude, so the axis has to include 0 —
                 otherwise all-negative metrics (e.g. a negative spread-skill
-                correlation) hang from the top and read as large positives. */}
+                correlation) hang from the top and read as large positives. A
+                bounded score gets the whole [0, 1] instead, so a bad score looks
+                bad rather than filling the panel. */}
             <YAxis
               stroke="rgba(255,255,255,0.3)"
               tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
               width={46}
-              domain={[v => Math.min(0, v), v => Math.max(0, v)]}
+              domain={bounded ? [0, 1] : [v => Math.min(0, v), v => Math.max(0, v)]}
               tickFormatter={axisTick}
             />
             <Tooltip
@@ -1312,7 +1317,7 @@ export function ComparisonTab({
                             <span style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.3)' }}>{group.hint}</span>
                           </div>
                           <div style={SMALL_GRID}>
-                            {group.metrics.map(({ key, label, hint, refLine, decimals }) => (
+                            {group.metrics.map(({ key, label, hint, refLine, decimals, bounded }) => (
                               <AggregateBar
                                 key={key}
                                 label={label}
@@ -1321,6 +1326,7 @@ export function ComparisonTab({
                                 values={selectedModels.map(m => regionData.models?.[m]?.[key] ?? null)}
                                 refLine={refLine}
                                 decimals={decimals}
+                                bounded={bounded}
                               />
                             ))}
                           </div>
@@ -1603,12 +1609,12 @@ export function ComparisonTab({
                           if (!mData) return null;
                           const s = mData.summary || {};
                           const color = MODEL_COLORS[m];
-                          const mSSR = s.mean_ssr;
+                          const mSSR = s.ssr_agg;
                           const mCorr = s.correlation;
                           const stats = [
-                            { label: 'Mean SSR', value: mSSR != null ? mSSR.toFixed(3) : 'N/A', color: ssrColor(mSSR) },
+                            { label: 'SSR (agg.)', value: mSSR != null ? mSSR.toFixed(3) : 'N/A', color: ssrColor(mSSR) },
                             { label: 'Corr', value: mCorr != null ? mCorr.toFixed(3) : 'N/A', color: corrColor(mCorr) },
-                            { label: 'Mean CRPS', value: s.mean_crps != null ? s.mean_crps.toFixed(3) : 'N/A', color: 'rgba(255,255,255,0.85)' },
+                            { label: 'CRPS', value: s.crps != null ? s.crps.toFixed(3) : 'N/A', color: 'rgba(255,255,255,0.85)' },
                             { label: 'Bias', value: s.bias != null ? s.bias.toFixed(3) : 'N/A', color: 'rgba(255,255,255,0.85)' },
                             { label: 'MAE', value: s.mae != null ? s.mae.toFixed(3) : 'N/A', color: 'rgba(255,255,255,0.85)' },
                             { label: 'RMSE', value: s.rmse != null ? s.rmse.toFixed(3) : 'N/A', color: 'rgba(255,255,255,0.85)' },
@@ -1762,13 +1768,13 @@ export function ComparisonTab({
                     </div>
                   </div>
                   <div>
-                    <div style={LABEL}>Verification box</div>
+                    <div style={LABEL}>Scored area</div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <input
                         type="number"
                         value={boxCells}
                         min={1} max={41} step={2}
-                        aria-label="Verification box width (grid cells)"
+                        aria-label="Scored area width (grid cells)"
                         onChange={e => setBoxCells(Math.max(1, Math.min(41, Number(e.target.value) || 1)))}
                         style={{ ...INPUT, width: '56px' }}
                       />
@@ -1827,7 +1833,7 @@ export function ComparisonTab({
                         </span>
                       </div>
                       <div style={SMALL_GRID}>
-                        {CAT_SUMMARY_METRICS.map(({ key, label, hint, decimals }) => (
+                        {CAT_SUMMARY_METRICS.map(({ key, label, hint, decimals, bounded }) => (
                           <AggregateBar
                             key={key}
                             label={label}
@@ -1835,6 +1841,7 @@ export function ComparisonTab({
                             models={selectedModels}
                             values={selectedModels.map(m => catData.summaries?.[m]?.[key] ?? null)}
                             decimals={decimals}
+                            bounded={bounded}
                           />
                         ))}
                       </div>
@@ -1842,7 +1849,7 @@ export function ComparisonTab({
 
                     <div style={SUBHEAD}><span style={{ fontWeight: '600' }}>By lead time</span></div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px' }}>
-                      {CAT_METRICS.map(({ key, label, hint }) => (
+                      {CAT_METRICS.map(({ key, label, hint, bounded }) => (
                         <div key={key} style={{ ...CARD, padding: '14px 12px 8px' }}>
                           <div style={{ fontSize: t.fontSize.md, fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>{label}</div>
                           <div style={{ fontSize: t.fontSize.xs, color: 'rgba(255,255,255,0.4)', marginBottom: '6px' }}>{hint}</div>
@@ -1851,7 +1858,8 @@ export function ComparisonTab({
                               <LineChart data={buildCatRows(key)} margin={{ top: 6, right: 16, left: -8, bottom: 20 }}>
                                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
                                 <XAxis dataKey="hour" stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} tickFormatter={h => `+${h}h`} />
-                                <YAxis stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} width={34} />
+                                <YAxis stroke="rgba(255,255,255,0.3)" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} width={34}
+                                       domain={bounded ? [0, 1] : ['auto', 'auto']} />
                                 <Tooltip
                                   contentStyle={TOOLTIP_STYLE}
                                   formatter={(value, name) => [value != null ? Number(value).toFixed(3) : 'N/A', name.replace(`${key}_`, '')]}

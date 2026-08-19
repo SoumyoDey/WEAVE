@@ -2453,14 +2453,16 @@ def compare_skill():
             # Aggregate SSR as mean(sigma^2)/mean(err^2), NOT the mean of the
             # per-case ratios: E[X/Y] != E[X]/E[Y], and a single near-zero error
             # sends its ratio to the clamp, which then drags the mean up. This
-            # matches the estimator the spatial ssr_agg metric already uses.
-            mean_ssr = None
+            # matches the estimator the spatial ssr_agg metric already uses —
+            # hence the name. It was `mean_ssr`, which claimed to be the one thing
+            # this deliberately is not.
+            ssr_agg = None
             if paired:
                 mean_var    = sum(s ** 2 for s, _ in paired) / len(paired)
                 mean_sq_err = sum(e ** 2 for _, e in paired) / len(paired)
                 if mean_sq_err > 1e-10:
-                    mean_ssr = _ssr_from_variances(mean_var, mean_sq_err,
-                                                  n_members_of.get(m_name))
+                    ssr_agg = _ssr_from_variances(mean_var, mean_sq_err,
+                                                 n_members_of.get(m_name))
 
             # Spread-skill correlation (spread vs |error|)
             corr_val = _pearson([s for s, _ in paired], [e for _, e in paired])
@@ -2468,9 +2470,9 @@ def compare_skill():
             result_models[m_name] = {
                 'hours':   hours_list,
                 'summary': {
-                    'mean_ssr':     mean_ssr,
+                    'ssr_agg':      ssr_agg,
                     'correlation':  corr_val,
-                    'mean_crps':    mean_crps,
+                    'crps':         mean_crps,
                     'bias':         bias_val,
                     'mae':          mae_val,
                     'rmse':         rmse_val,
@@ -3072,7 +3074,7 @@ def categorical_metrics_endpoint():
                 'far':                   far,
                 'fbi':                   fbi,
                 'csi':                   csi,
-                'brier_score':           bs,
+                'brier':                 bs,
                 'fss':                   fss,
                 'composite_confidence':  composite,
             },
@@ -3285,7 +3287,7 @@ def region_categorical_metrics_endpoint():
                 'hits': h_hits, 'misses': h_misses,
                 'false_alarms': h_fa, 'correct_neg': h_cn,
                 'csi': h_csi, 'pod': h_pod, 'far': h_far, 'fbi': h_fbi,
-                'brier_score': h_bs, 'fss': fss_hour,
+                'brier': h_bs, 'fss': fss_hour,
                 'fcst_frac': round(fcst_frac, 4), 'obs_frac': round(obs_frac, 4),
             })
 
@@ -3346,7 +3348,7 @@ def region_categorical_metrics_endpoint():
                 'hits': total_hits, 'misses': total_misses,
                 'false_alarms': total_fa, 'correct_neg': total_cn,
                 'pod': pod, 'far': far, 'fbi': fbi, 'csi': csi,
-                'brier_score': bs, 'fss': mean_fss,
+                'brier': bs, 'fss': mean_fss,
                 'composite_confidence': composite,
                 'n_grid_pts': n_grid_pts,
             },
