@@ -358,8 +358,14 @@ class TestSpreadSkillSharedGrid:
 
     # Verification runs on a common 6 h window, so an hourly model needs the whole
     # window present — hours 1-6, not 0-2.
-    def _member_rows(self, hours, members=4, value=lambda h, m: 1.0 + 0.1 * m):
-        return [{"forecast_hour": h, "ensemble_member": m, "member_val": value(h, m)}
+    #
+    # The member and observation rows carry lat/lon because one implementation now
+    # serves both this endpoint and the spatial ssr/correlation maps, so it reads a
+    # bounding box and keys cells at 2 dp (a degenerate box for a single cell).
+    def _member_rows(self, hours, members=4, value=lambda h, m: 1.0 + 0.1 * m,
+                     lat=36.0, lon=-75.5):
+        return [{"latitude": lat, "longitude": lon, "forecast_hour": h,
+                 "ensemble_member": m, "value": value(h, m)}
                 for h in hours for m in range(members)]
 
     ROUTES_BASE = {
@@ -370,7 +376,7 @@ class TestSpreadSkillSharedGrid:
     def _routes(self, hours, members=4):
         r = dict(self.ROUTES_BASE)
         r["FROM regridded_forecast_member"] = self._member_rows(hours, members)
-        r["FROM regridded_observation"] = _obs_rows(hours)
+        r["FROM regridded_observation"] = _obs_rows(hours, per_cell=True)
         return r
 
     def test_reads_the_member_grid_not_forecast_data(self, client, fake_db):

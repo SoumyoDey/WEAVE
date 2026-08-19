@@ -35,6 +35,18 @@ export function MetricPanel({
   computeSpatialMetric, clearSelection,
   isDraggingPanelRef, dragStartRef,
 }) {
+  // Lead times the SSR map can be scored at. Precipitation is verified over a
+  // common 6 h window, so only a lead time such a window ends at is scorable —
+  // +0h has no window before it and always came back empty. Wind is instantaneous
+  // and does have a value at initialisation.
+  const hourOptions = selectedVariable === 'wind' ? [0, 6, 12, 18] : [6, 12, 18, 24];
+
+  // Switching variable can leave a lead time selected that the new one cannot
+  // score, which would compute an empty map with nothing to say why.
+  React.useEffect(() => {
+    if (!hourOptions.includes(metricHour)) setMetricHour(hourOptions[0]);
+  }, [selectedVariable, metricHour]);   // eslint-disable-line react-hooks/exhaustive-deps
+
   if (!selectedRegion) return null;
 
   const metricCfg = METRIC_CONFIG.find(m => m.key === metricType);
@@ -122,7 +134,7 @@ export function MetricPanel({
             <div style={{ marginBottom: '11px' }}>
               <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.45)', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Forecast Hour</div>
               <div style={{ display: 'flex', gap: '5px' }}>
-                {[0, 6, 12, 18].map(h => (
+                {hourOptions.map(h => (
                   <button key={h} onClick={() => setMetricHour(h)}
                     style={{ flex: 1, padding: '5px 0', fontSize: '11px', fontWeight: '600',
                       border: metricHour === h ? '2px solid #e67e22' : '2px solid rgba(255,255,255,0.12)',

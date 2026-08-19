@@ -164,12 +164,20 @@ WEAVE_v3/
 │       └── geoUtils.js
 └── Data/
     ├── flask_api.py              # Flask REST API (all endpoints)
+    ├── metrics.py                # The science, as pure functions — units, windows, scores
     ├── schema.sql                # PostgreSQL schema
     ├── add_indexes.sql           # Index migrations
     ├── requirements.txt          # Python dependencies
+    ├── requirements-dev.txt      # Test-only dependencies
     ├── load_to_postgres.py       # Forecast data ingestion
     ├── load_wind.py              # Wind data ingestion
-    └── load_gefs_ukmo_wind.py    # GEFS/UKMO wind ingestion
+    ├── load_gefs_ukmo_wind.py    # GEFS/UKMO wind ingestion
+    ├── regrid_members.py         # Per-member regrid → regridded_forecast_ens / _member
+    ├── conftest.py               # Test setup: pool stub + fixture-database fixtures
+    ├── fixture_db.py             # Builds a throwaway PostgreSQL DB with a known answer
+    ├── test_metrics.py           # The science, against golden vectors (no DB)
+    ├── test_endpoints.py         # Request validation + response contract (fake cursor)
+    └── test_db_endpoints.py      # The endpoints against real SQL (fixture database)
 ```
 
 ---
@@ -243,6 +251,31 @@ cd Data
 ```
 
 The API runs at `http://localhost:5000`. If port 5000 is occupied on macOS, disable **AirPlay Receiver** in System Settings → General → AirDrop & Handoff. Local dev enables the interactive debugger via `FLASK_DEBUG=true` in `Data/.env`; leave it unset (or `false`) for anything beyond local dev, since the debugger allows remote code execution.
+
+### Tests
+
+```bash
+cd Data
+pip install -r requirements.txt -r requirements-dev.txt
+python -m pytest -q                                    # everything
+python -m pytest -q --cov=flask_api --cov-report=term-missing
+```
+
+Three layers, deliberately separate:
+
+| File | What it covers | Database |
+|---|---|---|
+| `test_metrics.py` | The science as pure functions — unit conversions, verification windows, every score, against golden vectors | none |
+| `test_endpoints.py` | Request validation and the response keys the React components read, driven by a query-routing fake cursor | none |
+| `test_db_endpoints.py` | The endpoints against real SQL: joins, parameter order, `BETWEEN` boundaries, `GROUP BY`, and the Cartopy renders | a throwaway one, built by `fixture_db.py` |
+
+The third layer exists because a fake cursor returns whatever the test hands it, so it can never disagree with the SQL. `fixture_db.py` creates `weave_fixture_test`, loads the real schema, and seeds one 5×5 patch of grid whose answer is known by construction — **the same true field given to all three models in each one's own storage convention**, so any regression in the unit or window layer breaks exactly one model and the test names it. Read that module's docstring before changing an expected number; every one of them is derived there.
+
+Those tests skip themselves when PostgreSQL is unreachable (or with `WEAVE_SKIP_DB_TESTS=1`), so the suite still runs anywhere. To inspect the fixture by hand:
+
+```bash
+python fixture_db.py && psql -d weave_fixture_test
+```
 
 ---
 
