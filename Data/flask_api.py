@@ -1468,11 +1468,16 @@ def point_timeseries():
 @app.route('/api/spread-skill', methods=['GET'])
 def get_spread_skill():
     """
-    Computes Spread-Skill Ratio and Spread-Skill Correlation for a clicked grid point.
-    Matches ensemble forecast members against IMERG observations at each forecast hour
-    where observations exist (init_time + hour falls within observation_data range).
+    Spread-Skill Ratio and Spread-Skill Correlation for one clicked grid cell.
+
+    Reads the regridded MEMBER grid and verifies against `regridded_observation`
+    over the window each record spans — the same path the spatial ssr/correlation
+    maps use, so the point panel and the map agree (see _member_cases_by_cell).
+    A lead time is scored only where an observation covers its whole window, which
+    is why the list stops before the forecast does.
+
     SSR = spread² / error²  (1 = well-calibrated, <1 = overconfident, >1 = underconfident)
-    Correlation = corr(spread_per_hour, |error|_per_hour) across available lead times.
+    Correlation = corr(spread_per_hour, |error|_per_hour) across scored lead times.
     """
     model_name = request.args.get('model', 'AIFS')
     variable   = request.args.get('variable', 'precipitation')
@@ -1723,14 +1728,20 @@ PLOT_STYLE_REGISTRY = {
 def _render_metric_map_png(points, cmap, norm, cbar_label, title,
                            cbar_ticks=None, cbar_ticklabels=None,
                            cbar_fontsize=9):
-    """Render scattered 0.25° metric points as a Cartopy PNG, base64-encoded.
+    """Render scattered metric points as a Cartopy PNG, base64-encoded.
+
+    The points arrive on the shared 0.5° analysis grid; the cell size is measured
+    from them rather than assumed, so this does not care what grid they are on
+    (see the `_grid_step` call below — hard-coding 0.25 was a bug).
 
     Shared by /api/spatial-metric-plot and /api/compare/spatial-diff so both
     draw identical map furniture — only the colour mapping and title differ.
     Callers must release their DB connection first: rendering is CPU-bound and
     holding a pooled connection across it starves concurrent requests.
     """
-    # ── Build 2-D grid from scattered 0.25° points ────────────────────
+    # ── Build a 2-D grid from the scattered points ─────────────────────
+    # Keyed at 0.25°, which is lossless for 0.5° input and is what the
+    # difference map keys on too (see metrics._spatial_diff_points).
     lats_set = sorted(set(round(p['lat'] * 4) / 4 for p in points))
     lons_set = sorted(set(round(p['lon'] * 4) / 4 for p in points))
 

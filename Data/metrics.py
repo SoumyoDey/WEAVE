@@ -708,10 +708,17 @@ def _region_pooled_metrics(pairs, metrics, threshold_rate, n_members=None,
 def _spatial_diff_points(pts_a, pts_b):
     """Per-cell A − B over the cells the two models share.
 
-    Cells are keyed by a 0.25° snap — the same key the renderer and the
-    correlation path use. Plain 2-dp rounding is not enough: `correlation`
-    reports each model's *native* coordinates, which differ between models, so
-    a 2-dp key matched zero cells across models even over an identical region.
+    Cells are keyed by a 0.25° snap. That was once load-bearing: `correlation`
+    reported each model's *native* coordinates, which differ between models, so a
+    2-dp key matched zero cells across models even over an identical region.
+
+    It no longer is. Since the spread-dependent paths moved to the regridded
+    member grid, every metric reports cells on the shared 0.5° analysis grid, and
+    0.5° multiples snap to distinct 0.25° keys — so this is now a redundant no-op
+    kept only because removing it is a behaviour change nobody has needed. Do not
+    reinstate a snap elsewhere on the strength of the paragraph above; check
+    whether the inputs are still on one grid first.
+
     Returns (diff_points, n_cells_a, n_cells_b).
     """
     def _cell(p):
