@@ -887,7 +887,7 @@ export function AnalysisTab({
                       { key: 'pod', label: 'POD',   hint: 'Probability of Detection (hit rate)', val: s.pod   },
                       { key: 'far', label: 'FAR',   hint: 'False Alarm Ratio (0=perfect)',       val: s.far   },
                       { key: 'fbi', label: 'FBI',   hint: 'Frequency Bias (1=unbiased)',         val: s.fbi   },
-                      { key: 'bs',  label: 'Brier', hint: 'Brier Score (0=perfect)',             val: s.brier_score },
+                      { key: 'bs',  label: 'Brier', hint: 'Brier Score (0=perfect)',             val: s.brier },
                     ];
                     if (fss != null) {
                       const w = (catMode === 'region' ? regCatData?.fss_window

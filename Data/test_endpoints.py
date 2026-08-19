@@ -204,7 +204,7 @@ class TestCompareSkillContract:
         assert set(d) >= {"models", "obs_hours", "obs_warning", "units", "model_cells"}
         m = d["models"]["UKMO"]
         assert set(m) == {"hours", "summary"}
-        assert set(m["summary"]) == {"mean_ssr", "correlation", "mean_crps",
+        assert set(m["summary"]) == {"ssr_agg", "correlation", "crps",
                                      "bias", "mae", "rmse"}
         assert set(m["hours"][0]) >= {"hour", "ssr", "crps", "bias", "mae", "rmse",
                                       "spread", "mean_val", "obs", "period_h"}

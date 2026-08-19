@@ -60,7 +60,7 @@ already encodes that. So the honest statement is: FSS is available in all four
 surfaces, is never a map, and is reached through a different panel in Analysis
 than in Comparison. Worth documenting rather than fixing.
 
-### 1c. One metric, three key names — **accidental**
+### 1c. One metric, three key names — **accidental · FIXED**
 
 | quantity | Analysis | Comparison point | Comparison region |
 |---|---|---|---|
@@ -68,8 +68,15 @@ than in Comparison. Worth documenting rather than fixing.
 | CRPS | — | `mean_crps` | `crps` |
 | aggregate SSR | — | `mean_ssr` | `ssr_agg` |
 
-Same number, three names depending on which endpoint you ask. Cheap to fix and it
-is the kind of thing that makes a frontend accrete adapters.
+Same number, three names depending on which endpoint you ask.
+
+**Fixed.** `brier_score` → `brier`, `mean_crps` → `crps`, `mean_ssr` → `ssr_agg`.
+The last was more than a naming tidy: `mean_ssr` is computed as
+mean(σ²)/mean(err²), *deliberately not* the mean of per-case ratios — the code
+comment says so explicitly — so the key and its "Mean SSR" label both claimed the
+one thing it is not. It now carries the registry name for the estimator it
+actually uses, and the point summary and the region bars finally agree on both
+the key and the label ("SSR (aggregated)").
 
 ### 1d. `fbi` and `composite_confidence` are Analysis-only — **deliberate, undocumented**
 
@@ -132,11 +139,12 @@ Two controls with the same two words in one tab, scoping different things and
 styled differently. A user who learns Comparison's single toggle meets two in
 Analysis, one of which looks like the one they know and does something narrower.
 
-### 3b. The scored area has two names — **accidental**
+### 3b. The scored area has two names — **accidental · FIXED**
 
 Analysis calls it **"Scored area"** (`AnalysisTab.jsx:724`), Comparison calls it
 **"Verification box"** (`ComparisonTab.jsx:1765`). Same concept, both good names,
-only one should survive.
+only one should survive. **Fixed:** Comparison now says "Scored area" too, which
+also matches the backend's `scored_area` key.
 
 ### 3c. Loading and empty states are per-panel in Analysis, shared in Comparison
 
@@ -172,7 +180,7 @@ My initial read of the chart-type counts suggested otherwise — Analysis has no
 mark is the same. Worth recording because the same wrong inference is easy to make
 twice.
 
-### 4a. Bounded scores get a fixed axis in Analysis and an auto axis in Comparison — **accidental**
+### 4a. Bounded scores get a fixed axis in Analysis and an auto axis in Comparison — **accidental · FIXED**
 
 The plan's own rule: "Bounded scores (CSI, POD, FAR, FSS ∈ [0,1]) → a fixed 0–1
 axis, so panels are comparable at a glance and a bad score looks bad."
@@ -184,6 +192,12 @@ axis, so panels are comparable at a glance and a bad score looks bad."
 
 A CSI of 0.05 therefore fills the panel in Comparison and sits on the floor in
 Analysis. This is the clearest phase-4 finding and the cheapest to fix.
+
+**Fixed.** The metric descriptors now carry `bounded: true` for CSI, POD, FAR, FSS
+and Brier, and both shared chart components honour it — `AggregateBar` swaps its
+include-zero domain for `[0, 1]`, and the categorical line chart pins the same.
+Verified in the browser: all five now run 0.00 → 1.00. Unbounded metrics (SSR,
+CRPS, bias, MAE, RMSE) keep auto-scaling, which is correct for them.
 
 Note that Comparison's `normalizeScales` toggle also produces a `[0, 1]` axis
 (`ComparisonTab.jsx:1477`) but is a different thing: it normalises **raw forecast
@@ -204,8 +218,8 @@ sweep would find more.
 
 The plan says to budget by risk, and the findings sort cleanly:
 
-1. **Safe and mechanical** — 1c key names, 3b one name for the scored area, 4a the
-   fixed 0–1 axis. No behaviour change, no new backend.
+1. ~~**Safe and mechanical** — 1c key names, 3b one name for the scored area, 4a
+   the fixed 0–1 axis.~~ **Done 2026-08-19.**
 2. **Safe and worth it** — 1d and 1b: write down why `fbi`/`composite_confidence`
    are Analysis-only and why FSS is never a map. Documentation only.
 3. **A real feature, small** — 1a, accuracy metrics at an Analysis point. The
