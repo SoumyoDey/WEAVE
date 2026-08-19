@@ -64,6 +64,7 @@ function downloadChartAsPng(containerRef, filename) {
  *   timeseriesData       {Array|null}
  *   ssrLoading           {boolean}
  *   ssrData              {object|null}
+ *   obsCoverage          {object|null}  — /api/observation-coverage
  *   onCompare            {fn}
  *   selectedRegion       {object|null}
  */
@@ -73,6 +74,7 @@ export function AnalysisTab({
   selectedVariable,
   timeseriesLoading, timeseriesData,
   ssrLoading, ssrData,
+  obsCoverage,
   onCompare,
   selectedRegion,
   active = true,
@@ -500,7 +502,18 @@ export function AnalysisTab({
                   )}
 
                   {!ssrLoading && ssrData && ssrData.n_cases === 0 && (
-                    <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.base, padding: '20px 0' }}>No overlapping observations found for this location and time window</div>
+                    <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.base, padding: '20px 0' }}>
+                      No overlapping observations found for this location and time window
+                      {/* Name the extent rather than leaving the user to guess whether
+                          this is missing data, the wrong place, or a broken app. */}
+                      {obsCoverage?.last_verifiable_hour != null && (
+                        <div style={{ fontSize: t.fontSize.sm, color: 'rgba(243,156,18,0.75)', marginTop: '6px' }}>
+                          {obsCoverage.source} observations for this run end{' '}
+                          {obsCoverage.record_end_lead_hours}h after initialisation,
+                          so verification is available to +{obsCoverage.last_verifiable_hour}h.
+                        </div>
+                      )}
+                    </div>
                   )}
 
                   {!ssrLoading && ssrData && ssrData.n_cases > 0 && (() => {

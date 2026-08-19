@@ -1964,6 +1964,74 @@ def get_variables():
         return_db_connection(conn)
 
 
+@app.route('/api/observation-coverage', methods=['GET'])
+def observation_coverage():
+    """How far the observation record reaches, in lead-time terms.
+
+    Every scored endpoint already reports when a *particular* query found no
+    observations. None of them could say where the truth ends, so a user scrubbing
+    past it saw an empty panel and had no way to tell that from a bug. This exists
+    to be stated up front, in the interface, before anything is clicked.
+
+    `last_verifiable_hour` is the answer to "how far out can I expect a score":
+    a record covering `window_hours` must have that whole window observed, so it
+    is the last window boundary at or before the end of the record. On the loaded
+    run the observations stop 19.5 h after initialisation, which is +18 h for
+    precipitation (6 h windows) and +19 h for wind (instantaneous).
+
+    Query: model (default AIFS), variable (precipitation | wind)
+    """
+    model_name = request.args.get('model',    'AIFS')
+    variable   = request.args.get('variable', 'precipitation')
+    if _bad_token(model_name, variable):
+        return jsonify({'error': 'Invalid model or variable'}), 400
+
+    is_wind = (variable == 'wind')
+    obs_var = 'wind_speed' if is_wind else 'precipitation'
+    obs_src = 'ERA5_WIND'  if is_wind else 'GPM_IMERG_V07B'
+    # Wind is instantaneous, so its window is the hour it is valid for.
+    window  = 1 if is_wind else COMMON_VERIFICATION_WINDOW_HOURS
+
+    conn   = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        init_time = _latest_init_time(cursor, model_name)
+        cursor.execute("""
+            SELECT MIN(obs_time) AS first_obs, MAX(obs_time) AS last_obs
+            FROM regridded_observation
+            WHERE variable_name = %s AND source = %s
+        """, (obs_var, obs_src))
+        row = cursor.fetchone() or {}
+        first_obs, last_obs = row.get('first_obs'), row.get('last_obs')
+
+        record_end_lead = last_verifiable = None
+        if init_time is not None and last_obs is not None:
+            record_end_lead = (last_obs - init_time).total_seconds() / 3600.0
+            if record_end_lead >= window:
+                last_verifiable = int(math.floor(record_end_lead / window) * window)
+
+        return jsonify({
+            'model':        model_name,
+            'variable':     variable,
+            'source':       obs_src,
+            'init_time':    init_time.isoformat() if init_time else None,
+            'obs_start':    first_obs.isoformat() if first_obs else None,
+            'obs_end':      last_obs.isoformat()  if last_obs  else None,
+            # Hours after initialisation at which the record ends (19.5 on the
+            # loaded run) — not necessarily a scorable lead time itself.
+            'record_end_lead_hours': (round(record_end_lead, 2)
+                                      if record_end_lead is not None else None),
+            'last_verifiable_hour':  last_verifiable,
+            'window_hours':          window,
+        })
+    except Exception as e:
+        print(f"❌ Error in observation-coverage: {e}")
+        return jsonify({'error': 'Internal server error'}), 500
+    finally:
+        cursor.close()
+        return_db_connection(conn)
+
+
 def _check_export_convention(cursor, model_name='GEFS'):
     """Does the loaded data still match the export convention we assume?
 

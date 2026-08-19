@@ -193,6 +193,7 @@ WEAVE_v3/
 | `GET` | `/api/spread-skill` | Point-level SSR + correlation — `?model=&variable=&lat=&lon=` |
 | `GET` | `/api/models` | List available models |
 | `GET` | `/api/variables` | List available variables |
+| `GET` | `/api/observation-coverage` | How far the truth reaches — `?model=&variable=` → `{init_time, obs_end, record_end_lead_hours, last_verifiable_hour, window_hours}` |
 | `GET` | `/api/health` | Health check |
 
 ### Spatial metrics

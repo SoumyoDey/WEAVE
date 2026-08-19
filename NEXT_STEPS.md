@@ -258,17 +258,46 @@ extended:
   *both* an exact flat score and a non-degenerate correlation on the same variable
   cannot be tested against this fixture; put the variation on the other variable.
 
-## 4. Surface observation coverage in the UI
+## 4. Surface observation coverage in the UI — DONE (2026-08-19)
 
 Truth exists only to fh ≈ 19.5 for the loaded run. Beyond that, verification
-correctly returns nothing with a warning — but a user scrubbing to +48 h sees an
-empty panel and cannot tell that from a bug. Show the observation record's extent
-somewhere in the interface.
+correctly returns nothing — but a user scrubbing to +48 h saw an empty panel and
+could not tell that from a bug.
 
-The backend half is now pinned by `TestObservationCoverage`: past the record the
-endpoints return zero matched cells plus the "past the end of the observation
-record" warning, and a partly observed window is rejected rather than averaged.
-What is missing is the UI reading that warning.
+Every scored endpoint could already say that a *particular* query found no
+observations, and two panels rendered that message. What none of them could say is
+where the truth *ends*: the messages were all reactive, and the extent appeared
+nowhere. So `/api/observation-coverage` now reports it up front —
+`record_end_lead_hours` (19.5 on the loaded run) and `last_verifiable_hour`, the
+last lead time that can actually be scored. Those differ, and the difference is
+physical: a precipitation record needs its whole 6 h window observed, so
+precipitation stops at **+18 h**, while wind is instantaneous and reaches **+23 h**
+on its own ERA5 record. The UI shows both correctly.
+
+Surfaced in three places, in order of how early the user meets them:
+
+1. **The timeline** — the track past `last_verifiable_hour` is hatched, with a
+   `verified to +18h` marker on the lead-time axis. This is the one that matters:
+   it is on the control the lead time is chosen with, so the limit is visible
+   before anything is clicked.
+2. **The lead-time readout** — `beyond verification (+18h)` appears beside the
+   valid time whenever the selected hour is past the record, and clears when it
+   is not.
+3. **The Analysis spread-skill empty state** — now names the extent
+   ("GPM_IMERG_V07B observations for this run end 19.5h after initialisation, so
+   verification is available to +18h") instead of the generic "no overlapping
+   observations".
+
+`test_the_coverage_endpoint_promises_what_the_scores_deliver` ties the promise to
+the behaviour: `last_verifiable_hour` must equal the last lead time
+`/api/compare/skill` really does score. A coverage endpoint that drifts from the
+scoring endpoints would be worse than none.
+
+Also removed, while wiring this: `Timeline.jsx` had the initialisation time
+**hard-coded** as `2025-09-08T00:00:00Z`, so every "Valid …" timestamp would have
+silently lied the moment a second run was loaded. It now comes from
+`init_time` in the coverage response, with the old constant kept only as a
+fallback. That is one less thing for DATA_EXPANSION_DESIGN.md to trip over.
 
 ## 5. Two planned pieces of work, with their own documents
 
