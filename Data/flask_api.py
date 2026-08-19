@@ -393,216 +393,296 @@ def _fcst_speed_sql(is_wind, base_cols):
             "regridded_forecast_ens u", "u.variable_name = %s", "")
 
 
-def _ensemble_speed_rows(cursor, run_id, variable_id, hour,
-                         min_lat, max_lat, min_lon, max_lon, is_wind):
-    """ensemble_statistics forecast rows (latitude, longitude, mean_value,
-    std_dev) at one hour. For wind, forecast SPEED is derived from the u/v
-    component rows (variable_id is the u-component id; v = wind_v_10m) — the same
-    |mean vector| approximation used on the regridded tables — so it can be
-    compared against the observed scalar wind_speed rather than the raw
-    u-component (the old bug)."""
-    if is_wind:
-        cursor.execute("""
-            SELECT u.latitude, u.longitude,
-                   SQRT(POWER(u.mean_value, 2) + POWER(v.mean_value, 2)) AS mean_value,
-                   SQRT(POWER(u.std_dev, 2)    + POWER(v.std_dev, 2))    AS std_dev
-            FROM ensemble_statistics u
-            JOIN ensemble_statistics v
-              ON v.run_id = u.run_id AND v.forecast_hour = u.forecast_hour
-             AND v.latitude = u.latitude AND v.longitude = u.longitude
-             AND v.variable_id = (SELECT variable_id FROM variables WHERE variable_name = 'wind_v_10m')
-            WHERE u.run_id = %s AND u.variable_id = %s AND u.forecast_hour = %s
-              AND u.latitude BETWEEN %s AND %s AND u.longitude BETWEEN %s AND %s
-              AND u.std_dev IS NOT NULL AND v.std_dev IS NOT NULL
-        """, (run_id, variable_id, hour, min_lat, max_lat, min_lon, max_lon))
-    else:
-        cursor.execute("""
-            SELECT latitude, longitude, mean_value, std_dev
-            FROM ensemble_statistics
-            WHERE run_id = %s AND variable_id = %s AND forecast_hour = %s
-              AND latitude BETWEEN %s AND %s AND longitude BETWEEN %s AND %s
-              AND std_dev IS NOT NULL
-        """, (run_id, variable_id, hour, min_lat, max_lat, min_lon, max_lon))
-    return cursor.fetchall()
+def _pearson(xs, ys):
+    """Pearson r over two equal-length sequences, rounded, or None.
 
-
-def _compute_ssr_points(cursor, run_id, variable_id, init_time, hour,
-                        min_lat, max_lat, min_lon, max_lon, obs_col,
-                        model_name=None):
-    """SSR at a single forecast hour from ensemble_statistics + observation_data.
-
-    Forecast values are converted to mm/h with the model's own record semantics
-    (_precip_rate_series) rather than a single divisor — AIFS stores a running
-    total since init, GEFS alternates 3 h and 6 h buckets. Wind is already a
-    speed via _ensemble_speed_rows and passes through unchanged.
+    None when there are fewer than two pairs or either series has no variance —
+    a zero denominator is "there is nothing to correlate", which must not be
+    reported as 0.0 ("no relationship").
     """
-    is_wind   = (obs_col == 'wind_speed')
-    lookback  = 0 if is_wind else _precip_lookback_hours(model_name)
-    n_members = _ensemble_size(cursor, model_name) if model_name else None
+    n = len(xs)
+    if n < 2 or len(ys) != n:
+        return None
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    num = sum((xs[i] - mx) * (ys[i] - my) for i in range(n))
+    den = math.sqrt(sum((x - mx) ** 2 for x in xs) *
+                    sum((y - my) ** 2 for y in ys))
+    return round(num / den, 4) if den > 1e-10 else None
 
-    raw_by_cell = {}
-    for h in ({hour, hour - lookback} if lookback else {hour}):
-        if h < 0:
+
+# Lead times the spatial correlation map scores at. A fixed set, so the models
+# stay comparable — an hourly model would otherwise correlate over 24 samples
+# against a 6-hourly model's 4, and the region view puts those side by side.
+CORRELATION_LEAD_HOURS = (0, 6, 12, 18, 24, 48, 72, 96, 120, 144, 168)
+
+
+def _window_source_hours(model_name, targets, is_wind,
+                         window=COMMON_VERIFICATION_WINDOW_HOURS):
+    """Native forecast hours needed to build a score at each hour in `targets`.
+
+    Purely a query-pruning helper: the member grid is members x cells x hours, so
+    fetching every lead time to score one is the difference between a 5 s map and
+    a 55 s map. Verification runs on a common `window`, so a target needs every
+    native record whose own span lies inside (target - window, target] — six
+    hourly UKMO records, or the single 6 h record AIFS and GEFS emit — plus, for a
+    cumulative model, the record one period earlier to difference against. Wind is
+    instantaneous: no window, so just the target.
+    """
+    if is_wind:
+        return sorted({h for h in targets if h >= 0})
+
+    cadence  = max(1, MODEL_ACCUM_HOURS.get(model_name, 1))
+    lookback = _precip_lookback_hours(model_name)
+    needed   = set()
+    for target in targets:
+        hour = target
+        while hour > target - window:
+            needed.add(hour)
+            hour -= cadence
+    if lookback:
+        needed |= {h - lookback for h in set(needed)}
+    return sorted(h for h in needed if h >= 0)
+
+
+def _observation_record_end(cursor, obs_var, obs_src):
+    """Latest observation time for a variable/source, or None.
+
+    Deliberately not restricted to the bounding box: the record's extent is a
+    property of the ingest, and leaving the box out lets this use
+    idx_rgo_source_var_time instead of scanning. Used to drop lead times that run
+    past the end of the truth before querying forecasts that can never be scored.
+    """
+    cursor.execute("""
+        SELECT MAX(obs_time) AS t FROM regridded_observation
+        WHERE variable_name = %s AND source = %s
+    """, (obs_var, obs_src))
+    row = cursor.fetchone()
+    return row['t'] if row else None
+
+
+def _member_cases_by_cell(cursor, model_name, variable, init_time,
+                          min_lat, max_lat, min_lon, max_lon, hours=None):
+    """Per-cell, per-lead-time ensemble spread and error, from the MEMBER grid.
+
+    Returns {(lat, lon): {hour: case}}, where each case carries `ens_mean`,
+    `spread`, `spread_sq`, `error`, `obs`, `n_members`, `period_h` and
+    `n_obs_in_window`. Restrict to particular lead times with `hours`.
+
+    This is the one implementation behind /api/spread-skill and the spatial
+    ssr/correlation maps, so the point panel and the map cannot answer the same
+    question two different ways — which they did until this replaced a second
+    implementation reading `ensemble_statistics` + `observation_data`.
+
+    Why the member grid (METRICS_AUDIT.md finding 11): the aggregate `std_dev` is
+    the spread of the pooled (member x native-cell) population, so it carries
+    within-cell spatial variance that is not ensemble spread at all — about 23%
+    high on the loaded run. Differencing each member's own series instead is
+    EXACT for a cumulative model, and the spread of the differenced members is
+    the true spread of the increment.
+
+    It also makes an hourly model scorable at all. Re-binning a mean/spread pair
+    onto the common window has to discard the spread (the spread of a mean is not
+    the mean of spreads), so UKMO precipitation had no spread on the common window
+    and every spread metric came back empty. Re-binning each MEMBER first and
+    pooling afterwards gives the exact spread of the 6 h means.
+
+    Truth comes from `regridded_observation` over the window each record spans,
+    the same rule every other scored endpoint uses — not the instantaneous match
+    against the sparse `observation_data` the old path used.
+    """
+    from collections import defaultdict
+    is_wind = (variable == 'wind')
+    obs_var = 'wind_speed' if is_wind else 'precipitation'
+    obs_src = 'ERA5_WIND'  if is_wind else 'GPM_IMERG_V07B'
+
+    # Prune the query to the lead times that can actually produce a score: the
+    # records each target is built from, and nothing past the end of the
+    # observation record. The member grid is members x cells x hours, so fetching
+    # every hour to score one is the difference between a 5 s map and a 55 s one.
+    hour_pred, hour_param = '', ()
+    if hours is not None:
+        obs_end = _observation_record_end(cursor, obs_var, obs_src)
+        targets = sorted(h for h in hours
+                         if obs_end is None
+                         or init_time + timedelta(hours=h) <= obs_end)
+        if not targets:
+            return {}
+        hour_pred  = ' AND u.forecast_hour = ANY(%s)'
+        hour_param = (_window_source_hours(model_name, targets, is_wind),)
+
+    def _member_rows(var_name):
+        cursor.execute(f"""
+            SELECT u.latitude, u.longitude, u.forecast_hour, u.ensemble_member,
+                   u.value
+            FROM regridded_forecast_member u
+            WHERE u.model_name = %s AND u.variable_name = %s
+              AND u.latitude BETWEEN %s AND %s AND u.longitude BETWEEN %s AND %s
+              {hour_pred}
+        """, (model_name, var_name, min_lat, max_lat, min_lon, max_lon, *hour_param))
+        return cursor.fetchall()
+
+    # Cells are keyed at 2 dp, the same key the regridded pairs path uses — NOT a
+    # 0.25° snap, which silently collapsed several of UKMO's 0.1875° native cells
+    # onto one key and then kept one cell's coordinates with another's values.
+    def _key(row):
+        return (round(float(row['latitude']), 2), round(float(row['longitude']), 2),
+                row['forecast_hour'], row['ensemble_member'])
+
+    # Wind: per-member SPEED, which is exact — unlike the |mean vector|
+    # approximation the aggregate tables force. The two components are fetched
+    # separately and paired here rather than self-joined in SQL: the join predicate
+    # includes ensemble_member, which idx_rfm_lookup does not cover, so the planner
+    # rescans every member of a cell for each probe (~11 s on the full domain
+    # against ~0.4 s for two index range scans and a dict).
+    if is_wind:
+        v_value = {_key(r): float(r['value'])
+                   for r in _member_rows('wind_v_10m') if r['value'] is not None}
+        rows = [(r, v_value.get(_key(r))) for r in _member_rows('wind_u_10m')]
+        values = [(r, math.sqrt(float(r['value']) ** 2 + v ** 2))
+                  for r, v in rows if r['value'] is not None and v is not None]
+    else:
+        values = [(r, float(r['value']))
+                  for r in _member_rows(variable) if r['value'] is not None]
+
+    raw = defaultdict(lambda: defaultdict(dict))
+    for r, val in values:
+        cell = (round(float(r['latitude']), 2), round(float(r['longitude']), 2))
+        raw[cell][r['ensemble_member']][r['forecast_hour']] = val
+    if not raw:
+        return {}
+
+    pooled = {}
+    for cell, members in raw.items():
+        by_hour, periods = defaultdict(list), {}
+        for series in members.values():
+            rates = _precip_member_rate_series(model_name, series, is_wind=is_wind)
+            if not is_wind:
+                # Members are re-binned individually and only then pooled, so the
+                # spread is of 6 h means rather than of a mixture of windows.
+                rates = _rebin_member_to_common_window(rates)
+            for hour, (rate, period) in rates.items():
+                if hours is not None and hour not in hours:
+                    continue
+                by_hour[hour].append(rate)
+                periods[hour] = period
+        if by_hour:
+            pooled[cell] = (by_hour, periods)
+    if not pooled:
+        return {}
+
+    max_period  = max(p for _b, periods in pooled.values() for p in periods.values())
+    scored      = {h for by_hour, _p in pooled.values() for h in by_hour}
+    valid_times = [init_time + timedelta(hours=h) for h in scored]
+    cursor.execute("""
+        SELECT obs_time, latitude, longitude, AVG(value) AS obs_val
+        FROM regridded_observation
+        WHERE variable_name = %s AND source = %s
+          AND obs_time BETWEEN %s AND %s
+          AND latitude  BETWEEN %s AND %s
+          AND longitude BETWEEN %s AND %s
+        GROUP BY obs_time, latitude, longitude
+    """, (obs_var, obs_src,
+          min(valid_times) - timedelta(hours=max_period), max(valid_times),
+          min_lat, max_lat, min_lon, max_lon))
+    obs_by_cell = defaultdict(dict)
+    for r in cursor.fetchall():
+        if r['obs_val'] is None:
             continue
-        for row in _ensemble_speed_rows(cursor, run_id, variable_id, h,
-                                        min_lat, max_lat, min_lon, max_lon, is_wind):
-            if row['mean_value'] is None or row['std_dev'] is None:
+        key = (round(float(r['latitude']), 2), round(float(r['longitude']), 2))
+        obs_by_cell[key][r['obs_time']] = float(r['obs_val'])
+
+    out = {}
+    candidates = matched = 0
+    for cell, (by_hour, periods) in pooled.items():
+        cell_obs = obs_by_cell.get(cell)
+        cases = {}
+        for hour in sorted(by_hour):
+            members = by_hour[hour]
+            period  = periods[hour]
+            candidates += 1
+            # A partially observed window is rejected, not averaged.
+            obs, covered, n_obs = _obs_window_mean(
+                cell_obs, init_time + timedelta(hours=hour), period)
+            if not members or obs is None or covered < period:
                 continue
-            key = (float(row['latitude']), float(row['longitude']))
-            raw_by_cell.setdefault(key, {})[h] = (float(row['mean_value']),
-                                                  float(row['std_dev']))
-    ens_rows = [
-        {'latitude': lat, 'longitude': lon, 'rate': rates[hour]}
-        for (lat, lon), series in raw_by_cell.items()
-        for rates in [_precip_rate_series(model_name, series, is_wind)]
-        if hour in rates
-    ]
+            matched  += 1
+            n         = len(members)
+            ens_mean  = sum(members) / n
+            spread_sq = sum((x - ens_mean) ** 2 for x in members) / n  # population
+            cases[hour] = {
+                'hour':      hour,
+                'ens_mean':  ens_mean,
+                'spread':    math.sqrt(spread_sq),
+                'spread_sq': spread_sq,
+                'error':     abs(ens_mean - obs),
+                'obs':       obs,
+                'n_members': n,
+                'period_h':  period,
+                'n_obs_in_window': n_obs,
+            }
+        if cases:
+            out[cell] = cases
 
-    valid_time = init_time + timedelta(hours=hour)
-    cursor.execute(
-        "SELECT latitude, longitude, " + obs_col + " AS obs_val"
-        " FROM observation_data"
-        " WHERE obs_time = %s AND latitude BETWEEN %s AND %s"
-        "   AND longitude BETWEEN %s AND %s AND " + obs_col + " IS NOT NULL",
-        (valid_time, min_lat, max_lat, min_lon, max_lon)
-    )
-    obs_lookup = {
-        (round(float(r['latitude'])  * 4) / 4,
-         round(float(r['longitude']) * 4) / 4): float(r['obs_val'])
-        for r in cursor.fetchall()
-    }
+    if candidates and not matched:
+        print(f"⚠️  member↔obs join matched 0 of {candidates} records for "
+              f"{model_name}/{variable} — grid misalignment, or no fully observed "
+              f"window ({len(obs_by_cell)} obs cells, keys at 2 dp).")
+    return out
+
+
+def _compute_ssr_points(cursor, model_name, variable, init_time, hour,
+                        min_lat, max_lat, min_lon, max_lon):
+    """SSR per cell at one lead time, from the member grid.
+
+    Spread comes from the members themselves and the lead time is the common
+    verification window, so this map now reports the same number /api/spread-skill
+    reports for the same cell. See _member_cases_by_cell.
+    """
+    cases  = _member_cases_by_cell(cursor, model_name, variable, init_time,
+                                   min_lat, max_lat, min_lon, max_lon, hours={hour})
     points = []
-    matched = 0
-    for row in ens_rows:
-        lat  = float(row['latitude'])
-        lon  = float(row['longitude'])
-        mean, std, _period = row['rate']
-        if std is None:
-            continue                        # spread not recoverable for this record
-        obs = obs_lookup.get((round(lat * 4) / 4, round(lon * 4) / 4))
-        if obs is None:
+    for (lat, lon), by_hour in cases.items():
+        case = by_hour.get(hour)
+        if case is None:
             continue
-        matched += 1
-        err_sq = (mean - obs) ** 2
-        ssr    = _ssr_from_variances(std ** 2, err_sq, n_members)
+        ssr = _ssr_from_variances(case['spread_sq'], case['error'] ** 2,
+                                  case['n_members'])
         if ssr is not None:
             points.append({'lat': lat, 'lon': lon, 'value': ssr})
-    # Diagnose silent grid misalignment (quarter-degree key match to sparse obs).
-    if ens_rows and matched == 0:
-        print(f"⚠️  SSR ens↔obs join matched 0 of {len(ens_rows)} grid points "
-              f"at +{hour}h — likely grid misalignment or no obs "
-              f"({len(obs_lookup)} obs keys, snapped to 0.25°).")
     return points
 
 
-def _compute_correlation_points(cursor, run_id, variable_id, init_time,
-                                 min_lat, max_lat, min_lon, max_lon, obs_col,
-                                 model_name=None):
-    """Spread-skill correlation across verified hours from ensemble_statistics +
-    observation_data.
+def _compute_correlation_points(cursor, model_name, variable, init_time,
+                                min_lat, max_lat, min_lon, max_lon):
+    """Spread-skill correlation per cell, across lead times, from the member grid.
 
-    Forecast values are converted to mm/h with the model's own record semantics
-    (_precip_rate_series): AIFS is differenced against the previous record,
-    GEFS divided by its own bucket length. Records whose spread isn't
-    recoverable are skipped, since this metric is entirely about spread.
+    corr(spread, |error|) over the lead times a cell was scored at. A cell needs
+    at least two, and variance in both series — a flat spread or a flat error has
+    nothing to correlate and yields None rather than 0.
+
+    Returns (points, n_hours) where n_hours counts the distinct lead times that
+    contributed anywhere in the box.
+
+    Scored at CORRELATION_LEAD_HOURS rather than at every lead time the model
+    emits, so a 24-sample UKMO correlation is not put beside a 4-sample AIFS one
+    in the region view. /api/spread-skill, which describes a single cell rather
+    than comparing models, still uses every native lead time — so the two agree on
+    spread, error and SSR at any shared hour, but their correlations are over
+    different lead-time sets. See NEXT_STEPS.md.
     """
-    candidate_hours = [0, 6, 12, 18, 24, 48, 72, 96, 120, 144, 168]
-    is_wind = (obs_col == 'wind_speed')
-
-    # Cumulative models need the record one period earlier to difference against.
-    lookback = 0 if is_wind else _precip_lookback_hours(model_name)
-    fetch_hours = sorted({h for hour in candidate_hours
-                          for h in (hour, hour - lookback) if h >= 0})
-
-    # Raw per-cell series across every hour we need (candidates + lookback).
-    raw_by_cell = {}
-    for hour in fetch_hours:
-        for row in _ensemble_speed_rows(cursor, run_id, variable_id, hour,
-                                        min_lat, max_lat, min_lon, max_lon, is_wind):
-            if row['mean_value'] is None or row['std_dev'] is None:
-                continue
-            key = (round(float(row['latitude']) * 4) / 4,
-                   round(float(row['longitude']) * 4) / 4)
-            entry = raw_by_cell.setdefault(key, {'lat': float(row['latitude']),
-                                                 'lon': float(row['longitude']),
-                                                 'series': {}})
-            entry['series'][hour] = (float(row['mean_value']), float(row['std_dev']))
-
-    if not raw_by_cell:
-        return [], 0
-
-    # Correlating spread against error pools ACROSS hours, so overlapping records
-    # would weight the hours they share twice (GEFS's h%6==0 bucket contains the
-    # h%6==3 one). Re-binning leaves windows that tile exactly.
-    def _cell_rates(series):
-        r = _precip_rate_series(model_name, series, is_wind)
-        return r if is_wind else _rebin_to_common_window(r)
-
-    rates_by_cell = {
-        key: _cell_rates(entry['series'])
-        for key, entry in raw_by_cell.items()
-    }
-
-    hour_data = {}
-    for hour in candidate_hours:
-        valid_time = init_time + timedelta(hours=hour)
-        cursor.execute(
-            "SELECT latitude, longitude, " + obs_col + " AS obs_val"
-            " FROM observation_data"
-            " WHERE obs_time = %s AND latitude BETWEEN %s AND %s"
-            "   AND longitude BETWEEN %s AND %s AND " + obs_col + " IS NOT NULL",
-            (valid_time, min_lat, max_lat, min_lon, max_lon)
-        )
-        obs_rows = cursor.fetchall()
-        if not obs_rows:
-            continue
-        obs_lookup = {
-            (round(float(r['latitude'])  * 4) / 4,
-             round(float(r['longitude']) * 4) / 4): float(r['obs_val'])
-            for r in obs_rows
-        }
-        point_pairs = {}
-        for key, rates in rates_by_cell.items():
-            rec = rates.get(hour)
-            obs = obs_lookup.get(key)
-            if rec is None or obs is None:
-                continue
-            mean_rate, std_rate, _period = rec
-            if std_rate is None:
-                continue                  # no spread → nothing to correlate
-            point_pairs[key] = {'lat': raw_by_cell[key]['lat'],
-                                'lon': raw_by_cell[key]['lon'],
-                                'spread': std_rate,
-                                'abs_error': abs(mean_rate - obs)}
-        if point_pairs:
-            hour_data[hour] = point_pairs
-
-    all_keys = {}
-    for _hour, pairs in hour_data.items():
-        for key, vals in pairs.items():
-            if key not in all_keys:
-                all_keys[key] = {'lat': vals['lat'], 'lon': vals['lon'], 'hours': []}
-            all_keys[key]['hours'].append((vals['spread'], vals['abs_error']))
-
-    points = []
-    for _key, info in all_keys.items():
-        pairs = info['hours']
-        if len(pairs) < 2:
-            continue
-        spreads = [p[0] for p in pairs]
-        errors  = [p[1] for p in pairs]
-        n   = len(spreads)
-        ms  = sum(spreads) / n
-        me  = sum(errors)  / n
-        num = sum((spreads[i] - ms) * (errors[i] - me) for i in range(n))
-        den = math.sqrt(
-            sum((s - ms) ** 2 for s in spreads) *
-            sum((e - me) ** 2 for e in errors)
-        )
-        corr = round(num / den, 4) if den > 1e-10 else None
+    cases = _member_cases_by_cell(cursor, model_name, variable, init_time,
+                                  min_lat, max_lat, min_lon, max_lon,
+                                  hours=set(CORRELATION_LEAD_HOURS))
+    points, scored_hours = [], set()
+    for (lat, lon), by_hour in cases.items():
+        scored_hours.update(by_hour)
+        series = [by_hour[h] for h in sorted(by_hour)]
+        corr   = _pearson([c['spread'] for c in series],
+                          [c['error']  for c in series])
         if corr is not None:
-            points.append({'lat': info['lat'], 'lon': info['lon'], 'value': corr})
-    return points, len(hour_data)
+            points.append({'lat': lat, 'lon': lon, 'value': corr})
+    return points, len(scored_hours)
 
 
 def _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
@@ -903,19 +983,17 @@ def _compute_brier_points_rf(cursor, model_name, variable,
 def _dispatch_ssr(cursor, run_id, variable_id, init_time, args,
                   min_lat, max_lat, min_lon, max_lon, obs_col):
     hour   = int(args.get('hour', 6))
-    points = _compute_ssr_points(cursor, run_id, variable_id, init_time, hour,
-                                  min_lat, max_lat, min_lon, max_lon, obs_col,
-                                  model_name=args.get('model', 'AIFS'))
+    points = _compute_ssr_points(
+        cursor, args.get('model', 'AIFS'), args.get('variable', 'precipitation'),
+        init_time, hour, min_lat, max_lat, min_lon, max_lon)
     return points, {'hour': hour}
 
 
 def _dispatch_correlation(cursor, run_id, variable_id, init_time, args,
                            min_lat, max_lat, min_lon, max_lon, obs_col):
     points, n_hours = _compute_correlation_points(
-        cursor, run_id, variable_id, init_time,
-        min_lat, max_lat, min_lon, max_lon, obs_col,
-        model_name=args.get('model', 'AIFS'),
-    )
+        cursor, args.get('model', 'AIFS'), args.get('variable', 'precipitation'),
+        init_time, min_lat, max_lat, min_lon, max_lon)
     return points, {'n_hours': n_hours}
 
 
@@ -1292,48 +1370,18 @@ def point_timeseries():
         if not run_id:
             return jsonify({'error': f'No data found for model {model_name}'}), 404
 
-        if variable == 'wind':
-            # Wind speed = sqrt(u² + v²) computed per member then aggregated
-            cursor.execute("""
-                SELECT
-                    u.forecast_hour,
-                    AVG(SQRT(POWER(u.value, 2) + POWER(v.value, 2)))            AS mean_val,
-                    STDDEV(SQRT(POWER(u.value, 2) + POWER(v.value, 2)))         AS std_val,
-                    MIN(SQRT(POWER(u.value, 2) + POWER(v.value, 2)))            AS min_val,
-                    MAX(SQRT(POWER(u.value, 2) + POWER(v.value, 2)))            AS max_val,
-                    PERCENTILE_CONT(0.10) WITHIN GROUP (
-                        ORDER BY SQRT(POWER(u.value, 2) + POWER(v.value, 2))
-                    ) AS p10,
-                    PERCENTILE_CONT(0.25) WITHIN GROUP (
-                        ORDER BY SQRT(POWER(u.value, 2) + POWER(v.value, 2))
-                    ) AS p25,
-                    PERCENTILE_CONT(0.75) WITHIN GROUP (
-                        ORDER BY SQRT(POWER(u.value, 2) + POWER(v.value, 2))
-                    ) AS p75,
-                    PERCENTILE_CONT(0.90) WITHIN GROUP (
-                        ORDER BY SQRT(POWER(u.value, 2) + POWER(v.value, 2))
-                    ) AS p90
-                FROM forecast_data u
-                JOIN forecast_data v
-                    ON u.run_id = v.run_id
-                    AND u.forecast_hour = v.forecast_hour
-                    AND u.ensemble_member = v.ensemble_member
-                    AND u.latitude = v.latitude
-                    AND u.longitude = v.longitude
-                WHERE u.run_id = %s
-                  AND u.variable_id = (SELECT variable_id FROM variables WHERE variable_name = 'wind_u_10m')
-                  AND v.variable_id = (SELECT variable_id FROM variables WHERE variable_name = 'wind_v_10m')
-                  AND ABS(u.latitude  - %s) <= %s
-                  AND ABS(u.longitude - %s) <= %s
-                GROUP BY u.forecast_hour
-                ORDER BY u.forecast_hour
-            """, (run_id, lat, radius, lon, radius))
-
-        else:
-            # Precipitation — pull raw members so the distribution can be built
-            # AFTER de-accumulation. Aggregating in SQL first would describe the
-            # running total, not the amount falling in each period, and the
-            # spread of a cumulative field is not the spread of its increments.
+        # One code path for both variables: pull raw members and build the
+        # distribution here.
+        #
+        # Aggregating in SQL cannot work for precipitation — the spread of a
+        # cumulative field is not the spread of its increments, so the members have
+        # to be de-accumulated individually first. And it was wrong for wind for a
+        # second reason: it pooled every cell within `radius` into one GROUP BY, so
+        # the cone was widened by within-radius spatial variance that is not
+        # ensemble spread at all. That is METRICS_AUDIT.md finding 11 again, on the
+        # display side. The wind branch also reported a sample standard deviation
+        # where precipitation reported the population one, and omitted n_members.
+        def _member_rows(var_name):
             cursor.execute("""
                 SELECT fd.forecast_hour, fd.ensemble_member,
                        fd.latitude, fd.longitude, fd.value
@@ -1343,64 +1391,66 @@ def point_timeseries():
                   AND ABS(fd.latitude  - %s) <= %s
                   AND ABS(fd.longitude - %s) <= %s
                   AND fd.ensemble_member IS NOT NULL
-                ORDER BY fd.forecast_hour, fd.ensemble_member
-            """, (run_id, variable, lat, radius, lon, radius))
+            """, (run_id, var_name, lat, radius, lon, radius))
+            return cursor.fetchall()
 
-        rows = cursor.fetchall()
-        result = []
+        def _member_key(row):
+            return (float(row['latitude']), float(row['longitude']),
+                    row['forecast_hour'], row['ensemble_member'])
 
-        if variable != 'precipitation':
-            # Instantaneous — the SQL aggregate is already the answer.
-            for row in rows:
-                result.append({
-                    'hour': row['forecast_hour'],
-                    'mean': round(float(row['mean_val'] or 0), 4),
-                    'std':  round(float(row['std_val']  or 0), 4),
-                    'min':  round(float(row['min_val']  or 0), 4),
-                    'max':  round(float(row['max_val']  or 0), 4),
-                    'p10':  round(float(row['p10'] or 0), 4),
-                    'p25':  round(float(row['p25'] or 0), 4),
-                    'p75':  round(float(row['p75'] or 0), 4),
-                    'p90':  round(float(row['p90'] or 0), 4),
-                })
+        is_wind = (variable == 'wind')
+        if is_wind:
+            # Speed per member, paired in Python rather than self-joined: the join
+            # predicate includes ensemble_member and latitude/longitude, which no
+            # index covers together (see _member_cases_by_cell for the same fix).
+            v_value = {_member_key(r): float(r['value'])
+                       for r in _member_rows('wind_v_10m') if r['value'] is not None}
+            values = [(r, math.sqrt(float(r['value']) ** 2 + v_value[_member_key(r)] ** 2))
+                      for r in _member_rows('wind_u_10m')
+                      if r['value'] is not None and _member_key(r) in v_value]
         else:
-            # Build the distribution from members de-accumulated individually,
-            # which is exact: the spread of the differenced members IS the
-            # spread of the increment. Use the cell nearest the clicked point so
-            # spatial variance doesn't leak into the ensemble spread.
-            from collections import defaultdict
-            cells = {(float(r['latitude']), float(r['longitude'])) for r in rows}
-            if cells:
-                cell = min(cells, key=lambda c: (c[0] - lat) ** 2 + (c[1] - lon) ** 2)
-                by_member = defaultdict(dict)
-                for r in rows:
-                    if (float(r['latitude']), float(r['longitude'])) == cell:
-                        by_member[r['ensemble_member']][r['forecast_hour']] = float(r['value'])
+            values = [(r, float(r['value']))
+                      for r in _member_rows(variable) if r['value'] is not None]
 
-                rates_by_hour = defaultdict(list)
-                for series in by_member.values():
-                    for hour, (rate, _p) in _precip_member_rate_series(model_name, series).items():
-                        rates_by_hour[hour].append(rate)
+        from collections import defaultdict
+        result = []
+        cells  = {(float(r['latitude']), float(r['longitude'])) for r, _v in values}
+        if cells:
+            # The nearest cell only, for both variables.
+            cell = min(cells, key=lambda c: (c[0] - lat) ** 2 + (c[1] - lon) ** 2)
+            by_member = defaultdict(dict)
+            for r, val in values:
+                if (float(r['latitude']), float(r['longitude'])) == cell:
+                    by_member[r['ensemble_member']][r['forecast_hour']] = val
 
-                for hour in sorted(rates_by_hour):
-                    vals = sorted(rates_by_hour[hour])
-                    n    = len(vals)
-                    mean = sum(vals) / n
-                    std  = math.sqrt(sum((v - mean) ** 2 for v in vals) / n)
-                    def pct(q, _v=vals, _n=n):
-                        return _v[min(_n - 1, max(0, int(round(q * (_n - 1)))))]
-                    result.append({
-                        'hour': hour,
-                        'mean': round(mean, 4),
-                        'std':  round(std, 4),
-                        'min':  round(vals[0], 4),
-                        'max':  round(vals[-1], 4),
-                        'p10':  round(pct(0.10), 4),
-                        'p25':  round(pct(0.25), 4),
-                        'p75':  round(pct(0.75), 4),
-                        'p90':  round(pct(0.90), 4),
-                        'n_members': n,
-                    })
+            # Wind is instantaneous and passes through; precipitation is
+            # de-accumulated per member, which is exact.
+            vals_by_hour = defaultdict(list)
+            for series in by_member.values():
+                rates = _precip_member_rate_series(model_name, series, is_wind=is_wind)
+                for hour, (rate, _period) in rates.items():
+                    vals_by_hour[hour].append(rate)
+
+            for hour in sorted(vals_by_hour):
+                vals = sorted(vals_by_hour[hour])
+                n    = len(vals)
+                mean = sum(vals) / n
+                std  = math.sqrt(sum((v - mean) ** 2 for v in vals) / n)   # population
+                def pct(q, _v=vals, _n=n):
+                    return _v[min(_n - 1, max(0, int(round(q * (_n - 1)))))]
+                result.append({
+                    'hour': hour,
+                    'mean': round(mean, 4),
+                    'std':  round(std, 4),
+                    'min':  round(vals[0], 4),
+                    'max':  round(vals[-1], 4),
+                    'p10':  round(pct(0.10), 4),
+                    'p25':  round(pct(0.25), 4),
+                    'p75':  round(pct(0.75), 4),
+                    'p90':  round(pct(0.90), 4),
+                    'n_members': n,
+                    'cell': [cell[0], cell[1]],
+                })
 
         print(f"✅ Timeseries: {len(result)} hours for {model_name} at ({lat}, {lon}) "
               f"[{variable}]")
@@ -1445,10 +1495,7 @@ def get_spread_skill():
 
         cursor.execute("SELECT initialization_time FROM forecast_runs WHERE run_id = %s", (run_id,))
         init_time = cursor.fetchone()['initialization_time']
-
-        is_wind = (variable == 'wind')
-        obs_var = 'wind_speed' if is_wind else 'precipitation'
-        obs_src = 'ERA5_WIND'  if is_wind else 'GPM_IMERG_V07B'
+        is_wind   = (variable == 'wind')
 
         # Verification runs on the shared 0.5 degree grid — the same truth path
         # every other scored endpoint uses, so Analysis and Comparison no longer
@@ -1457,119 +1504,30 @@ def get_spread_skill():
         # describes one cell, and `cell` in the response says which.
         cell = (round(lat * 2) / 2, round(lon * 2) / 2)
 
-        from collections import defaultdict
-        if is_wind:
-            cursor.execute("""
-                SELECT u.forecast_hour, u.ensemble_member,
-                       SQRT(POWER(u.value, 2) + POWER(v.value, 2)) AS member_val
-                FROM regridded_forecast_member u
-                JOIN regridded_forecast_member v
-                  ON v.model_name = u.model_name AND v.forecast_hour = u.forecast_hour
-                 AND v.ensemble_member = u.ensemble_member
-                 AND v.latitude = u.latitude AND v.longitude = u.longitude
-                 AND v.variable_name = 'wind_v_10m'
-                WHERE u.model_name = %s AND u.variable_name = 'wind_u_10m'
-                  AND ABS(u.latitude - %s) < 1e-6 AND ABS(u.longitude - %s) < 1e-6
-            """, (model_name, cell[0], cell[1]))
-        else:
-            cursor.execute("""
-                SELECT forecast_hour, ensemble_member, value AS member_val
-                FROM regridded_forecast_member
-                WHERE model_name = %s AND variable_name = %s
-                  AND ABS(latitude - %s) < 1e-6 AND ABS(longitude - %s) < 1e-6
-            """, (model_name, variable, cell[0], cell[1]))
-        raw_rows = cursor.fetchall()
-        if not raw_rows:
-            return jsonify({'hours': [], 'correlation': None, 'n_cases': 0,
-                            'cell': list(cell), 'grid': '0.5deg'})
+        # One shared implementation with the spatial ssr/correlation maps: a
+        # degenerate bbox around the cell. See _member_cases_by_cell.
+        eps   = 1e-6
+        cases = _member_cases_by_cell(
+            cursor, model_name, variable, init_time,
+            cell[0] - eps, cell[0] + eps, cell[1] - eps, cell[1] + eps)
+        by_hour = cases.get(cell, {})
 
-        by_member = defaultdict(dict)
-        for r in raw_rows:
-            by_member[r['ensemble_member']][r['forecast_hour']] = float(r['member_val'])
-
-        # De-accumulate PER MEMBER — exact for a cumulative model, so the spread
-        # of the differenced members is the true spread of the increment. This is
-        # what the regridded member grid exists for: regridded_forecast.std_dev
-        # is the spread of the pooled (member x native-cell) population, which
-        # carries within-cell spatial variance that is not ensemble spread at all
-        # (typically ~23% high — see METRICS_AUDIT.md finding 11).
-        members_by_hour = defaultdict(list)
-        periods = {}
-        for series in by_member.values():
-            member_rates = _precip_member_rate_series(model_name, series, is_wind=is_wind)
-            if not is_wind:
-                # The correlation below pools across lead times, so overlapping
-                # records would count their shared hours twice. Re-bin each
-                # member before pooling, so the spread is of 6 h means.
-                member_rates = _rebin_member_to_common_window(member_rates)
-            for hour, (rate, period) in member_rates.items():
-                members_by_hour[hour].append(rate)
-                periods[hour] = period
-        if not members_by_hour:
-            return jsonify({'hours': [], 'correlation': None, 'n_cases': 0,
-                            'cell': list(cell), 'grid': '0.5deg'})
-
-        max_period  = max(periods.values())
-        valid_times = [init_time + timedelta(hours=h) for h in members_by_hour]
-        cursor.execute("""
-            SELECT obs_time, AVG(value) AS obs_val
-            FROM regridded_observation
-            WHERE variable_name = %s AND source = %s
-              AND obs_time BETWEEN %s AND %s
-              AND ABS(latitude - %s) < 1e-6 AND ABS(longitude - %s) < 1e-6
-            GROUP BY obs_time
-        """, (obs_var, obs_src,
-              min(valid_times) - timedelta(hours=max_period), max(valid_times),
-              cell[0], cell[1]))
-        obs_by_time = {r['obs_time']: float(r['obs_val'])
-                       for r in cursor.fetchall() if r['obs_val'] is not None}
-
-        results = []
-        for hour in sorted(members_by_hour):
-            members = members_by_hour[hour]
-            period  = periods[hour]
-            # Same window rule as every other scored endpoint: the observation
-            # must cover the whole period the record spans.
-            obs, covered, n_obs = _obs_window_mean(
-                obs_by_time, init_time + timedelta(hours=hour), period)
-            if not members or obs is None or covered < period:
-                continue
-            n         = len(members)
-            ens_mean  = sum(members) / n
-            spread_sq = sum((x - ens_mean) ** 2 for x in members) / n   # population variance
-            spread    = math.sqrt(spread_sq)
-            error     = abs(ens_mean - obs)
-            error_sq  = error ** 2
-            ssr       = _ssr_from_variances(spread_sq, error_sq, n)
-
-            results.append({
-                'hour':      hour,
-                'spread':    round(spread, 4),
-                'error':     round(error, 4),
-                'ssr':       ssr,
-                'ens_mean':  round(ens_mean, 4),
-                'obs':       round(obs, 4),
-                'n_members': n,
-                'period_h':  period,
-                'n_obs_in_window': n_obs,
-            })
+        results = [{
+            'hour':      case['hour'],
+            'spread':    round(case['spread'], 4),
+            'error':     round(case['error'],  4),
+            'ssr':       _ssr_from_variances(case['spread_sq'], case['error'] ** 2,
+                                             case['n_members']),
+            'ens_mean':  round(case['ens_mean'], 4),
+            'obs':       round(case['obs'],      4),
+            'n_members': case['n_members'],
+            'period_h':  case['period_h'],
+            'n_obs_in_window': case['n_obs_in_window'],
+        } for _hour, case in sorted(by_hour.items())]
 
         # Spread-Skill Correlation across available lead times
-        valid = [(r['spread'], r['error']) for r in results
-                 if r['spread'] is not None and r['error'] is not None]
-        correlation = None
-        if len(valid) >= 2:
-            spreads = [v[0] for v in valid]
-            errors  = [v[1] for v in valid]
-            n       = len(spreads)
-            ms = sum(spreads) / n
-            me = sum(errors)  / n
-            num = sum((spreads[i] - ms) * (errors[i] - me) for i in range(n))
-            den = math.sqrt(
-                sum((spreads[i] - ms) ** 2 for i in range(n)) *
-                sum((errors[i]  - me) ** 2 for i in range(n))
-            )
-            correlation = round(num / den, 4) if den > 1e-10 else None
+        correlation = _pearson([r['spread'] for r in results],
+                               [r['error']  for r in results])
 
         print(f"\u2705 Spread-skill: {len(results)} hours matched, corr={correlation} "
               f"for ({lat},{lon}) at 0.5deg cell {cell}")
@@ -2317,7 +2275,13 @@ def compare_skill():
         valid_times = [init_times[m] + timedelta(hours=h)
                        for m, rates in rates_of.items() for h in rates]
         max_period  = max(periods_used, default=1)
-        min_obs_t   = min(valid_times) - timedelta(hours=max_period - 1)
+        # A record covering `period` hours verifies against (vt - period, vt], so
+        # the earliest observation any record can need sits one FULL period back.
+        # `max_period - 1` was enough only for observations on the hour; IMERG is
+        # half-hourly, so it dropped the :30 sample from the earliest window and
+        # that lead time's observed rate was a mean over 11 of 12 samples, weighted
+        # toward the end of the window. Same bound as the spatial path uses.
+        min_obs_t   = min(valid_times) - timedelta(hours=max_period)
         max_obs_t   = max(valid_times)
 
         obs_of = {}
@@ -2420,19 +2384,7 @@ def compare_skill():
                                                   n_members_of.get(m_name))
 
             # Spread-skill correlation (spread vs |error|)
-            corr_val = None
-            if len(paired) >= 2:
-                spreads  = [s for s, _ in paired]
-                abs_errs = [e for _, e in paired]
-                ns = len(paired)
-                ms = sum(spreads) / ns
-                me = sum(abs_errs) / ns
-                num = sum((spreads[i] - ms) * (abs_errs[i] - me) for i in range(ns))
-                den = math.sqrt(
-                    sum((s - ms) ** 2 for s in spreads) *
-                    sum((e - me) ** 2 for e in abs_errs)
-                )
-                corr_val = round(num / den, 4) if den > 1e-10 else None
+            corr_val = _pearson([s for s, _ in paired], [e for _, e in paired])
 
             result_models[m_name] = {
                 'hours':   hours_list,
@@ -2471,7 +2423,9 @@ def compare_skill():
             'model_accum_hours':  {m: MODEL_ACCUM_HOURS.get(m, 1) for m in models},
             # The grid cell each model was actually verified at (finding 3).
             'model_cells':        {m: list(cell_of[m]) for m in result_models if m in cell_of},
-            'units':              'mm/h',  # all metrics are in mm/h after normalisation
+            # Precipitation is normalised to a rate; wind is an instantaneous
+            # speed and was never in mm/h. Same branch /api/spread-skill uses.
+            'units':              'm/s' if is_wind else 'mm/h',
         })
 
     except Exception as e:
@@ -3605,8 +3559,8 @@ def _single_metric_points(cursor, model_name, variable, metric,
                           hour_min, hour_max, threshold_rate):
     """Per-cell points for one metric and one model.
 
-    Handles both families: the pairs-based metrics off the regridded tables and
-    `correlation`, which needs the ensemble path's run/variable/init lookups.
+    Handles both families: the pairs-based metrics off the regridded mean/spread
+    table, and `correlation`, which needs the member grid and the run's init time.
     """
     if metric in COMPARE_REGION_METRIC_FNS:
         return COMPARE_REGION_METRIC_FNS[metric](
@@ -3617,26 +3571,12 @@ def _single_metric_points(cursor, model_name, variable, metric,
     if metric != 'correlation':
         return []
 
-    run_id = get_model_run_id(cursor, model_name)
-    if not run_id:
-        return []
-    cursor.execute(
-        "SELECT initialization_time FROM forecast_runs WHERE run_id = %s", (run_id,))
-    init_row = cursor.fetchone()
-    if not init_row:
-        return []
-    is_wind    = (variable == 'wind')
-    var_lookup = 'wind_u_10m' if is_wind else variable
-    cursor.execute(
-        "SELECT variable_id FROM variables WHERE variable_name = %s", (var_lookup,))
-    var_row = cursor.fetchone()
-    if not var_row:
+    init_time = _latest_init_time(cursor, model_name)
+    if init_time is None:
         return []
     points, _n_hours = _compute_correlation_points(
-        cursor, run_id, var_row['variable_id'], init_row['initialization_time'],
-        min_lat, max_lat, min_lon, max_lon,
-        'wind_speed' if is_wind else 'precipitation',
-        model_name=model_name)
+        cursor, model_name, variable, init_time,
+        min_lat, max_lat, min_lon, max_lon)
     return points
 
 
@@ -3679,9 +3619,14 @@ def compare_region_metrics():
           hour_min, hour_max, metrics?, threshold_mm_6h | threshold_ms }
     Response JSON:
         { models:   { AIFS: {mae: 2.1, bias: -0.3, ...}, .. },
-          n_points: { AIFS: {mae: 812, ...}, .. },   # grid cells behind each mean
+          n_points: { AIFS: {mae: 812, ...}, .. },   # grid cells behind each value
           n_cells:  { AIFS: 812, .. },               # matched fcst↔obs cells
           metrics, threshold_info, bbox, hour_min, hour_max, warnings }
+
+    `n_points` is per metric, because a metric can be None for its own reason (a
+    spread the re-bin could not carry, say) while its neighbours are fine. It is 0
+    only when nothing contributed — a populated value always has a non-zero count,
+    including FSS, which has no per-cell map but is built from the matched cells.
 
     A model whose forecast and observation grids don't overlap yields all-None
     metrics plus an entry in `warnings`, so the UI can say so rather than draw
@@ -3759,6 +3704,14 @@ def compare_region_metrics():
             # Metrics with no pooled form (correlation) fall back to the cell mean.
             for k, v in cell_means.items():
                 values.setdefault(k, v)
+
+            # A metric with no per-cell value (FSS) has no points list, so
+            # `len(points)` was 0 — reported next to a perfectly good score, which
+            # reads as "no data" to any caller using the count to decide whether
+            # the value is populated. FSS is a property of the whole field at each
+            # lead time, so the cells behind it are the matched cells.
+            for k in COMPARE_REGION_NO_CELL_VALUE & set(metrics):
+                counts[k] = matched if values.get(k) is not None else 0
 
             if need_corr:
                 corr_points = _single_metric_points(
