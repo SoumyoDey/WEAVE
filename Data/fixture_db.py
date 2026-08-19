@@ -19,8 +19,22 @@ Run it standalone to get an inspectable copy:
 
 ── The design ────────────────────────────────────────────────────────────────
 
-One 5x5 patch of the 0.5 degree grid, one initialisation (2025-09-08 00Z, the
-real one), three models, two variables.
+One 5x5 patch of the 0.5 degree analysis grid, one initialisation (2025-09-08
+00Z, the real one), three models, two variables.
+
+**Two levels of grid, as in the real database.** The regridded tables — and so
+every score — are on the shared 0.5 degree analysis grid. The pre-regrid tables
+are on each model's own native grid: AIFS 0.25 degrees, GEFS 0.5, UKMO
+0.1875 x 0.28125 and aligned to neither. See NATIVE_GRIDS; the numbers are
+measured from the loaded run, not invented.
+
+That difference is load-bearing. A 0.25 degree snap key can only collapse two
+cells if two cells are closer together than the key, so while every table sat on
+one clean grid the fixture could not see a collapse at all — which is exactly how
+NEXT_STEPS.md defect 6 escaped it, and audit finding 3 and the cross-model join
+bug lived in the same place. It also gives the nearest-cell choice in
+/api/point-timeseries more than one candidate, so that `min()` is finally
+exercised.
 
 **Every model is given the same true field, expressed in its own storage
 convention.** AIFS gets a running total since init, GEFS gets 3 h and 6 h buckets
@@ -34,12 +48,17 @@ The storage conventions are restated here from the documented convention rather
 than imported from `metrics.py`, deliberately: seeding with the code under test
 would let a wrong divisor cancel itself out and the test would still pass.
 
-Precipitation, by latitude row, chosen so the contingency table has all three
+Precipitation, by latitude band, chosen so the contingency table has all three
 outcomes at a threshold of 9 mm/6h (a rate of 1.5 mm/h):
 
-    lat 35.0, 35.5, 37.0   forecast 3.0   observed 2.0   both exceed  -> hit
-    lat 36.0               forecast 3.0   observed 0.5   fcst only    -> false alarm
-    lat 36.5               forecast 0.5   observed 2.0   obs only     -> miss
+    band 35.0, 35.5, 37.0  forecast 3.0   observed 2.0   both exceed  -> hit
+    band 36.0              forecast 3.0   observed 0.5   fcst only    -> false alarm
+    band 36.5              forecast 0.5   observed 2.0   obs only     -> miss
+
+Piecewise constant over those bands, so a native cell takes the value of the
+analysis cell it falls in (`precip_scene`). That is what lets the two grid levels
+above disagree about resolution without introducing a second truth: a constant
+field regrids to itself whatever the grids.
 
 Flat in lead time, and every cell carries the same 0.25 mm/h ensemble spread —
 including the dry ones, so no cell drops out of a spread-dependent metric for a
@@ -111,14 +130,89 @@ MODELS    = ('AIFS', 'GEFS', 'UKMO')
 LATS = (35.0, 35.5, 36.0, 36.5, 37.0)
 LONS = (-76.0, -75.5, -75.0, -74.5, -74.0)
 
-# lat -> (forecast rate mm/h, observed rate mm/h, contingency outcome at 1.5 mm/h)
-PRECIP_SCENE = {
+# ── The grids ─────────────────────────────────────────────────────────────────
+# LATS x LONS above is the shared 0.5 degree ANALYSIS grid. Every regridded table
+# is on it, so every score is on it, which is what makes the three models
+# comparable at all.
+#
+# The pre-regrid tables are NOT. Each model was ingested on its own native grid,
+# measured from the loaded run over 35-37 N / 76-74 W:
+#
+#   AIFS  0.25 x 0.25       from 35.0,       -76.0        aligned (every 2nd cell)
+#   GEFS  0.5  x 0.5        from 35.0,       -76.0        aligned (identical)
+#   UKMO  0.1875 x 0.28125  from 35.15625,   -75.796875   NOT aligned to either
+#
+# The fixture used to put every table on the analysis grid, which made a whole
+# class of bug invisible: there was nothing for two cells to collapse *onto*. On
+# UKMO's real grid a 0.25 degree snap sends 35.15625 and 35.34375 — different
+# cells — to the same key, which is how 110 native cells became 77 keys and one
+# cell's value ended up reported at another's coordinates (NEXT_STEPS.md defect
+# 6). Latitude collapses because 0.1875 < 0.25; longitude does not because
+# 0.28125 > 0.25. Both are reproduced here.
+NATIVE_GRIDS = {
+    'AIFS': {'d_lat': 0.25,   'd_lon': 0.25,    'lat0': 35.0,     'lon0': -76.0},
+    'GEFS': {'d_lat': 0.5,    'd_lon': 0.5,     'lat0': 35.0,     'lon0': -76.0},
+    'UKMO': {'d_lat': 0.1875, 'd_lon': 0.28125, 'lat0': 35.15625, 'lon0': -75.796875},
+}
+
+# (model, variable) pairs whose loader wrote coordinates through a
+# six-significant-digit text conversion. UKMO's wind rows did and its
+# precipitation rows did not, so in `ensemble_statistics` the same physical cell
+# is 35.1562 for wind and 35.15625 for precipitation. Nothing joins across
+# variables today, so nothing is broken — but such a join would match zero rows,
+# silently, and the fixture should be able to show that.
+COORD_6SIG_VARIABLES = {('UKMO', 'wind_u_10m'), ('UKMO', 'wind_v_10m')}
+
+
+def _axis(start, step, limit):
+    """Grid coordinates from `start` in `step`s, up to `limit` inclusive.
+
+    Indexed rather than accumulated, so the 40th cell is not `start + 40` rounding
+    errors — the coordinates have to survive an equality join.
+    """
+    n = int(math.floor((limit - start) / step + 1e-9)) + 1
+    return [round(start + i * step, 8) for i in range(max(0, n))]
+
+
+def native_cells(model, variable='precipitation'):
+    """(lats, lons) of one model's native grid inside the fixture's box."""
+    g = NATIVE_GRIDS[model]
+    lats = _axis(g['lat0'], g['d_lat'], max(LATS))
+    lons = _axis(g['lon0'], g['d_lon'], max(LONS))
+    if (model, variable) in COORD_6SIG_VARIABLES:
+        lats = [float(f'{v:.6g}') for v in lats]
+        lons = [float(f'{v:.6g}') for v in lons]
+    return lats, lons
+
+
+def n_native_cells(model, variable='precipitation'):
+    lats, lons = native_cells(model, variable)
+    return len(lats) * len(lons)
+
+
+def analysis_cell(lat):
+    """The 0.5 degree analysis cell a native latitude belongs to."""
+    return min(LATS, key=lambda c: abs(c - lat))
+
+
+# Analysis cell -> (forecast rate mm/h, observed rate mm/h, outcome at 1.5 mm/h).
+# The field is piecewise constant over these bands, which is what lets the native
+# and regridded tables disagree about RESOLUTION while agreeing about the field: a
+# constant field regrids to itself whatever the grids, so no second truth is
+# introduced. It also makes nearest-cell selection observable, because the value
+# changes across a band boundary.
+PRECIP_BANDS = {
     35.0: (3.0, 2.0, 'hit'),
     35.5: (3.0, 2.0, 'hit'),
     36.0: (3.0, 0.5, 'false_alarm'),
     36.5: (0.5, 2.0, 'miss'),
     37.0: (3.0, 2.0, 'hit'),
 }
+
+
+def precip_scene(lat):
+    """(forecast rate, observed rate, outcome) at any latitude, native or not."""
+    return PRECIP_BANDS[analysis_cell(lat)]
 PRECIP_SPREAD = 0.25          # mm/h, every cell, every model, every lead time
 
 # The native aggregate table (`ensemble_statistics`) is seeded with a spread this
@@ -220,7 +314,7 @@ EXPECT_WIND = {
 
 def outcome(lat):
     """Which contingency outcome the cells at this latitude produce."""
-    return PRECIP_SCENE[lat][2]
+    return precip_scene(lat)[2]
 
 
 def cells_with_outcome(name):
@@ -258,7 +352,7 @@ def stored_precip_std(model, hour, spread=PRECIP_SPREAD):
 def _rows_precip_ens(model):
     for hour in PRECIP_HOURS[model]:
         for lat in LATS:
-            rate = PRECIP_SCENE[lat][0]
+            rate = precip_scene(lat)[0]
             for lon in LONS:
                 yield (model, 'precipitation', hour, lat, lon,
                        stored_precip(model, hour, rate),
@@ -280,7 +374,7 @@ def _rows_wind_ens(model):
 def _rows_precip_member(model):
     for hour in PRECIP_HOURS[model]:
         for lat in LATS:
-            rate = PRECIP_SCENE[lat][0]
+            rate = precip_scene(lat)[0]
             for member, off in enumerate(MEMBER_OFFSETS):
                 value = stored_precip(model, hour, rate + off * PRECIP_SPREAD)
                 for lon in LONS:
@@ -316,7 +410,7 @@ def _obs_times_wind():
 def _rows_regridded_obs():
     for t in _obs_times_precip():
         for lat in LATS:
-            obs = PRECIP_SCENE[lat][1]
+            obs = precip_scene(lat)[1]
             for lon in LONS:
                 yield (PRECIP_OBS_SOURCE, 'precipitation', t, lat, lon, obs, 1, '0.5deg')
     for t in _obs_times_wind():
@@ -336,7 +430,7 @@ def _rows_point_obs():
         t = INIT_TIME + timedelta(hours=hour)
         speed = wind_obs_speed(hour)
         for lat in LATS:
-            obs = PRECIP_SCENE[lat][1]
+            obs = precip_scene(lat)[1]
             for lon in LONS:
                 yield (t, lat, lon, obs, 0.1, 1.0, PRECIP_OBS_SOURCE,
                        WIND_U, WIND_V, speed)
@@ -460,9 +554,16 @@ def seed(conn):
 def _seed_native(cur):
     """The pre-regrid tables: ensemble_statistics and per-member forecast_data.
 
-    Same field, same conventions, on the same cells — the native grid is finer in
-    the real database, but the point of these rows is the SQL (the run_id and
-    variable_id joins), not the resolution.
+    Same field and same storage conventions as the regridded tables, but **each
+    model on its own native grid** (see NATIVE_GRIDS): AIFS at 0.25 degrees, GEFS
+    at 0.5, UKMO at 0.1875 x 0.28125 and aligned to neither. UKMO's wind rows also
+    carry the reduced-precision coordinates its loader wrote.
+
+    No second truth is introduced by the finer grids, because the field is
+    piecewise constant over the analysis bands (see PRECIP_BANDS) and a constant
+    field regrids to itself whatever the grids. What the resolution difference does
+    buy is a fixture that can see a cell collapse, and a nearest-cell choice with
+    more than one candidate.
 
     The aggregate spread here is inflated by NATIVE_SPREAD_INFLATION while the
     per-member values stay exact, so an endpoint's numbers say which table it read.
@@ -479,27 +580,34 @@ def _seed_native(cur):
     stats, members = [], []
     for model in MODELS:
         rid = run_id[model]
+
+        lats, lons = native_cells(model, 'precipitation')
+        vid = var_id['precipitation']
         for hour in NATIVE_PRECIP_HOURS[model]:
-            vid = var_id['precipitation']
-            for lat in LATS:
-                rate = PRECIP_SCENE[lat][0]
+            for lat in lats:
+                rate = precip_scene(lat)[0]
                 mean = stored_precip(model, hour, rate)
                 std  = stored_precip_std(model, hour) * infl
-                for lon in LONS:
+                for lon in lons:
                     stats.append((rid, vid, hour, lat, lon, mean, std,
                                   mean - std, mean + std, mean, mean, mean))
                     for member, off in enumerate(MEMBER_OFFSETS):
                         members.append((rid, vid, hour, member, lat, lon,
                                         stored_precip(model, hour,
                                                       rate + off * PRECIP_SPREAD)))
+
         for hour in NATIVE_WIND_HOURS[model]:
             s = wind_spread(hour)
             for var, mean, std in (('wind_u_10m', WIND_U, 0.6 * s * infl),
                                    ('wind_v_10m', WIND_V, 0.8 * s * infl)):
                 vid = var_id[var]
                 comp = 0.6 if var == 'wind_u_10m' else 0.8
-                for lat in LATS:
-                    for lon in LONS:
+                # Wind may sit on different coordinates from precipitation for the
+                # same model — that is the point of COORD_6SIG_VARIABLES. Both
+                # components share them, so the u/v join still works.
+                w_lats, w_lons = native_cells(model, var)
+                for lat in w_lats:
+                    for lon in w_lons:
                         stats.append((rid, vid, hour, lat, lon, mean, std,
                                       mean - std, mean + std, mean, mean, mean))
                         for member, off in enumerate(MEMBER_OFFSETS):
