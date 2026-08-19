@@ -410,6 +410,43 @@ class TestNativeEnsemblePaths:
         assert cell, 'the map has no value at the cell the panel scored'
         assert cell[0]['value'] == pytest.approx(at_hour[0]['ssr'], **APPROX)
 
+    @pytest.mark.parametrize('model', fx.MODELS)
+    @pytest.mark.parametrize('variable', ['precipitation', 'wind'])
+    def test_both_point_panels_report_the_same_spread_and_ssr(self, db_client,
+                                                             model, variable):
+        """/api/compare/skill was the last scored path still reading the aggregate
+        spread, so the Comparison point panel and the Analysis point panel gave
+        different SSRs for the same cell and lead time — up to 31% apart on the
+        loaded run. Same defect as finding 11, one endpoint behind. Both now go
+        through _member_cases_by_cell, and the fixture's deliberately inflated
+        aggregate spread means a regression could not pass unnoticed."""
+        panel = db_client.get(f'/api/spread-skill?model={model}&variable={variable}'
+                              f'&lat={WET_CELL[0]}&lon={WET_CELL[1]}').get_json()
+        skill = db_client.post('/api/compare/skill', json={
+            'models': [model], 'lat': WET_CELL[0], 'lon': WET_CELL[1],
+            'variable': variable, 'hour_min': 0, 'hour_max': 36}).get_json()
+        by_hour = {h['hour']: h for h in skill['models'][model]['hours']}
+
+        assert panel['hours'], f'{model}/{variable}: nothing scored'
+        for h in panel['hours']:
+            other = by_hour.get(h['hour'])
+            assert other is not None, f"{model}/{variable} +{h['hour']}h missing"
+            assert other['spread'] == pytest.approx(h['spread'], **APPROX)
+            assert other['ssr'] == pytest.approx(h['ssr'], **APPROX)
+            assert other['obs'] == pytest.approx(h['obs'], **APPROX)
+
+    def test_an_hourly_model_can_produce_point_spread_metrics(self, db_client):
+        """UKMO precipitation had no SSR or CRPS in the Comparison point panel at
+        all — the aggregate path re-bins to the common window and the spread does
+        not survive. Re-binning members first does."""
+        d = db_client.post('/api/compare/skill', json={
+            'models': ['UKMO'], 'lat': WET_CELL[0], 'lon': WET_CELL[1],
+            'variable': 'precipitation', 'hour_min': 0, 'hour_max': 36}).get_json()
+        hours = d['models']['UKMO']['hours']
+        assert hours
+        assert all(h['ssr'] is not None and h['crps'] is not None for h in hours)
+        assert d['models']['UKMO']['summary']['ssr_agg'] is not None
+
     def test_an_hourly_model_can_correlate_its_precipitation(self, db_client):
         """Was structurally impossible: the old path read the aggregate table, and
         re-binning a mean/spread pair onto the common window has to discard the

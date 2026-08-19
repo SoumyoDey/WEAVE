@@ -461,6 +461,70 @@ def _observation_record_end(cursor, obs_var, obs_src):
     return row['t'] if row else None
 
 
+def _point_case_record(case):
+    """One scored lead time at one cell, as both point endpoints report it.
+
+    `/api/spread-skill` (the Analysis point panel) and `/api/compare/skill` (the
+    Comparison one) describe the same thing, so they emit the same record. They
+    used to differ in more than shape: compare/skill read the aggregate spread
+    while spread-skill read the members, and the two panels reported SSRs up to
+    31% apart for the same cell and lead time.
+    """
+    err = case['ens_mean'] - case['obs']
+    return {
+        'hour':      case['hour'],
+        'ssr':       _ssr_from_variances(case['spread_sq'], err ** 2,
+                                         case['n_members']),
+        'crps':      round(_gaussian_crps(case['ens_mean'], case['spread'],
+                                          case['obs']), 6),
+        'bias':      round(err, 4),
+        'mae':       round(abs(err), 4),
+        'rmse':      round(abs(err), 4),   # one case: |error|; pooled below
+        'spread':    round(case['spread'], 4),
+        'error':     round(case['error'],  4),
+        'ens_mean':  round(case['ens_mean'], 4),
+        'mean_val':  round(case['ens_mean'], 4),   # compare/skill's name for it
+        'obs':       round(case['obs'],      4),
+        'n_members': case['n_members'],
+        'period_h':  case['period_h'],
+        'n_obs_in_window': case['n_obs_in_window'],
+    }
+
+
+def _point_summary(hours_list):
+    """Aggregate a list of `_point_case_record`s over lead times.
+
+    Shared so the two point panels cannot drift in estimator, which matters most
+    for SSR: it is pooled as mean(sigma^2)/mean(err^2), NOT the mean of the
+    per-case ratios, because E[X/Y] != E[X]/E[Y] and one near-zero error drags the
+    mean to the clamp. Hence `ssr_agg` rather than the `mean_ssr` it was once
+    called — the name claimed the one thing this deliberately is not.
+    """
+    if not hours_list:
+        return {'ssr_agg': None, 'correlation': None, 'crps': None,
+                'bias': None, 'mae': None, 'rmse': None}
+    n      = len(hours_list)
+    crpss  = [h['crps'] for h in hours_list if h['crps'] is not None]
+    paired = [(h['spread'], h['mae']) for h in hours_list if h['spread'] is not None]
+
+    ssr_agg = None
+    if paired:
+        mean_var    = sum(s ** 2 for s, _ in paired) / len(paired)
+        mean_sq_err = sum(e ** 2 for _, e in paired) / len(paired)
+        if mean_sq_err > 1e-10:
+            n_members = max((h.get('n_members') or 0) for h in hours_list)
+            ssr_agg = _ssr_from_variances(mean_var, mean_sq_err, n_members or None)
+
+    return {
+        'ssr_agg':     ssr_agg,
+        'correlation': _pearson([s for s, _ in paired], [e for _, e in paired]),
+        'crps':        round(sum(crpss) / len(crpss), 4) if crpss else None,
+        'bias':        round(sum(h['bias'] for h in hours_list) / n, 4),
+        'mae':         round(sum(h['mae']  for h in hours_list) / n, 4),
+        'rmse':        round(math.sqrt(sum(h['rmse'] ** 2 for h in hours_list) / n), 4),
+    }
+
+
 def _member_cases_by_cell(cursor, model_name, variable, init_time,
                           min_lat, max_lat, min_lon, max_lon, hours=None):
     """Per-cell, per-lead-time ensemble spread and error, from the MEMBER grid.
@@ -1517,26 +1581,18 @@ def get_spread_skill():
             cell[0] - eps, cell[0] + eps, cell[1] - eps, cell[1] + eps)
         by_hour = cases.get(cell, {})
 
-        results = [{
-            'hour':      case['hour'],
-            'spread':    round(case['spread'], 4),
-            'error':     round(case['error'],  4),
-            'ssr':       _ssr_from_variances(case['spread_sq'], case['error'] ** 2,
-                                             case['n_members']),
-            'ens_mean':  round(case['ens_mean'], 4),
-            'obs':       round(case['obs'],      4),
-            'n_members': case['n_members'],
-            'period_h':  case['period_h'],
-            'n_obs_in_window': case['n_obs_in_window'],
-        } for _hour, case in sorted(by_hour.items())]
+        results = [_point_case_record(case) for _hour, case in sorted(by_hour.items())]
+        summary = _point_summary(results)
 
-        # Spread-Skill Correlation across available lead times
-        correlation = _pearson([r['spread'] for r in results],
-                               [r['error']  for r in results])
-
-        print(f"\u2705 Spread-skill: {len(results)} hours matched, corr={correlation} "
-              f"for ({lat},{lon}) at 0.5deg cell {cell}")
-        return jsonify({'hours': results, 'correlation': correlation,
+        print(f"\u2705 Spread-skill: {len(results)} hours matched, "
+              f"corr={summary['correlation']} for ({lat},{lon}) at 0.5deg cell {cell}")
+        return jsonify({'hours': results,
+                        # `correlation` stays at the top level for the callers that
+                        # already read it; `summary` is the same shape
+                        # /api/compare/skill returns, so the two point panels can
+                        # show the same things without a second request.
+                        'correlation': summary['correlation'],
+                        'summary':     summary,
                         'n_cases': len(results),
                         'units': 'm/s' if is_wind else 'mm/h',
                         'grid': '0.5deg',
@@ -2311,123 +2367,42 @@ def compare_skill():
                             'obs_warning': 'No forecast data found for selected parameters.'})
 
         # ------------------------------------------------------------------
-        # 2. Per-model hour series at that cell, converted to mm/h rates
+        # 2-3. Per-model, per-lead-time cases at that cell
         # ------------------------------------------------------------------
-        # Cumulative models need one record below hour_min to difference against.
-        _sel, _frm, _varw, _vnn = _fcst_speed_sql(is_wind, "u.forecast_hour")
-        rates_of, periods_used = {}, set()
+        # From the MEMBER grid, through the one helper the spatial maps and
+        # /api/spread-skill use. This endpoint was the last reader of the
+        # aggregate `regridded_forecast_ens` spread on a scored path, which meant
+        # the Comparison point panel and the Analysis point panel reported
+        # different SSRs for the same cell and lead time — up to 31% apart on the
+        # loaded run. Same defect as METRICS_AUDIT.md finding 11, one endpoint
+        # behind; see NEXT_STEPS.md.
+        eps = 1e-6
+        cases_of = {}
         for m, (m_lat, m_lon) in cell_of.items():
-            lookback = 0 if is_wind else _precip_lookback_hours(m)
-            cursor.execute(f"""
-                SELECT {_sel}
-                FROM {_frm}
-                WHERE u.model_name = %s AND {_varw}
-                  AND u.forecast_hour BETWEEN %s AND %s
-                  AND u.latitude = %s AND u.longitude = %s
-                  AND u.mean_value IS NOT NULL
-                  AND u.std_dev    IS NOT NULL {_vnn}
-                ORDER BY u.forecast_hour
-            """, (m, *(() if is_wind else (fcst_var,)),
-                  max(0, hour_min - lookback), hour_max, m_lat, m_lon))
-            series = {r['forecast_hour']: (float(r['mean_value']), float(r['std_dev']))
-                      for r in cursor.fetchall()}
-            if not series:
-                continue
-            _r = _precip_rate_series(m, series, is_wind)
-            if not is_wind:
-                _r = _rebin_to_common_window(_r)   # one window for every model
-            rates = {h: v for h, v in _r.items() if hour_min <= h <= hour_max}
-            if rates:
-                rates_of[m] = rates
-                periods_used.update(p for _, _, p in rates.values())
+            cases = _member_cases_by_cell(
+                cursor, m, variable, init_times[m],
+                m_lat - eps, m_lat + eps, m_lon - eps, m_lon + eps)
+            by_hour = {h: c for h, c in (cases.get((round(m_lat, 2), round(m_lon, 2)))
+                                         or {}).items()
+                       if hour_min <= h <= hour_max}
+            if by_hour:
+                cases_of[m] = by_hour
 
-        if not rates_of:
+        if not cases_of:
             return jsonify({'models': {}, 'obs_hours': [],
                             'obs_warning': 'No forecast data found for selected parameters.'})
 
-        # Member counts for the finite-ensemble spread correction (cached).
-        n_members_of = {m: _ensemble_size(cursor, m) for m in rates_of}
-
         # ------------------------------------------------------------------
-        # 3. Observations at the same cell, averaged over each record's period
-        # ------------------------------------------------------------------
-        valid_times = [init_times[m] + timedelta(hours=h)
-                       for m, rates in rates_of.items() for h in rates]
-        max_period  = max(periods_used, default=1)
-        # A record covering `period` hours verifies against (vt - period, vt], so
-        # the earliest observation any record can need sits one FULL period back.
-        # `max_period - 1` was enough only for observations on the hour; IMERG is
-        # half-hourly, so it dropped the :30 sample from the earliest window and
-        # that lead time's observed rate was a mean over 11 of 12 samples, weighted
-        # toward the end of the window. Same bound as the spatial path uses.
-        min_obs_t   = min(valid_times) - timedelta(hours=max_period)
-        max_obs_t   = max(valid_times)
-
-        obs_of = {}
-        for m, (m_lat, m_lon) in cell_of.items():
-            if m not in rates_of:
-                continue
-            cursor.execute("""
-                SELECT obs_time, AVG(value) AS obs_val
-                FROM regridded_observation
-                WHERE variable_name = %s AND source = %s
-                  AND obs_time BETWEEN %s AND %s
-                  AND latitude = %s AND longitude = %s
-                GROUP BY obs_time
-            """, (obs_var, obs_src, min_obs_t, max_obs_t, m_lat, m_lon))
-            obs_of[m] = {r['obs_time']: float(r['obs_val']) for r in cursor.fetchall()}
-
-        if not any(obs_of.values()):
-            return jsonify({'models': {}, 'obs_hours': [],
-                            'obs_warning': 'No observations found for this location/variable.'})
-
-        # ------------------------------------------------------------------
-        # 3b. Match and compute per-lead-time metrics
+        # 3b. Per-lead-time metrics
         # ------------------------------------------------------------------
         # All metrics are in mm/h so cross-model comparisons are fair. SSR is
         # scale-invariant; CRPS/bias/MAE/RMSE scale with the unit, so the shared
         # rate normalisation is what makes them comparable.
         model_data = {}
 
-        for m_name, rates in rates_of.items():
-            obs_by_time = obs_of.get(m_name) or {}
-            for hour in sorted(rates):
-                mean_rate, std_rate, period = rates[hour]
-                vt = init_times[m_name] + timedelta(hours=hour)
-
-                # Obs over the same period the forecast record covers; a
-                # partially observed window is rejected (see _obs_window_mean).
-                obs_rate, covered, n_obs_window = _obs_window_mean(obs_by_time, vt, period)
-                if obs_rate is None or covered < period:
-                    continue
-
-                err      = mean_rate - obs_rate
-                abs_err  = abs(err)
-                err_sq   = err ** 2
-
-                # SSR and CRPS need the spread, which isn't recoverable for
-                # every record of a cumulative model (see _precip_rate_series).
-                if std_rate is None:
-                    ssr = crps = None
-                else:
-                    ssr  = _ssr_from_variances(std_rate ** 2, err_sq,
-                                               n_members_of.get(m_name))
-                    crps = _gaussian_crps(mean_rate, std_rate, obs_rate)
-
-                model_data.setdefault(m_name, []).append({
-                    'hour':      hour,
-                    'ssr':       round(ssr,  4) if ssr  is not None else None,
-                    'crps':      round(crps, 6) if crps is not None else None,
-                    'bias':      round(err,  4),
-                    'mae':       round(abs_err, 4),
-                    'rmse':      round(math.sqrt(err_sq), 4),
-                    # spread and obs in mm/h for display
-                    'spread':    round(std_rate, 4) if std_rate is not None else None,
-                    'mean_val':  round(mean_rate, 4),
-                    'obs':       round(obs_rate,  4),
-                    'period_h':  period,
-                    'n_obs_in_window': n_obs_window,
-                })
+        for m_name, by_hour in cases_of.items():
+            model_data[m_name] = [_point_case_record(by_hour[h])
+                                  for h in sorted(by_hour)]
 
         # ------------------------------------------------------------------
         # 4. Compute per-model summaries
@@ -2436,47 +2411,9 @@ def compare_skill():
         obs_hours_all = set()
 
         for m_name, hours_list in model_data.items():
-            n        = len(hours_list)
-            crpss    = [h['crps'] for h in hours_list if h['crps'] is not None]
-            biases   = [h['bias'] for h in hours_list]
-            maes     = [h['mae']  for h in hours_list]
-            rmses    = [h['rmse'] for h in hours_list]
-            # Spread and |error| paired, keeping only records that have a spread.
-            paired   = [(h['spread'], h['mae']) for h in hours_list
-                        if h['spread'] is not None]
-
-            mean_crps = round(sum(crpss) / len(crpss), 4) if crpss else None
-            bias_val  = round(sum(biases) / n,         4) if biases else None
-            mae_val   = round(sum(maes)  / n,          4) if maes  else None
-            rmse_val  = round(math.sqrt(sum(r ** 2 for r in rmses) / n), 4) if rmses else None
-
-            # Aggregate SSR as mean(sigma^2)/mean(err^2), NOT the mean of the
-            # per-case ratios: E[X/Y] != E[X]/E[Y], and a single near-zero error
-            # sends its ratio to the clamp, which then drags the mean up. This
-            # matches the estimator the spatial ssr_agg metric already uses —
-            # hence the name. It was `mean_ssr`, which claimed to be the one thing
-            # this deliberately is not.
-            ssr_agg = None
-            if paired:
-                mean_var    = sum(s ** 2 for s, _ in paired) / len(paired)
-                mean_sq_err = sum(e ** 2 for _, e in paired) / len(paired)
-                if mean_sq_err > 1e-10:
-                    ssr_agg = _ssr_from_variances(mean_var, mean_sq_err,
-                                                 n_members_of.get(m_name))
-
-            # Spread-skill correlation (spread vs |error|)
-            corr_val = _pearson([s for s, _ in paired], [e for _, e in paired])
-
             result_models[m_name] = {
                 'hours':   hours_list,
-                'summary': {
-                    'ssr_agg':      ssr_agg,
-                    'correlation':  corr_val,
-                    'crps':         mean_crps,
-                    'bias':         bias_val,
-                    'mae':          mae_val,
-                    'rmse':         rmse_val,
-                },
+                'summary': _point_summary(hours_list),
             }
             obs_hours_all.update(h['hour'] for h in hours_list)
 

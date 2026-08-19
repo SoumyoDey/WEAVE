@@ -186,13 +186,20 @@ class TestValidationReturns400:
 
 # ── Response contract ─────────────────────────────────────────────────────────
 class TestCompareSkillContract:
+    # Reads the regridded MEMBER grid, like /api/spread-skill and the spatial
+    # maps — it was the last scored path on the aggregate spread, which had the
+    # two point panels reporting different SSRs for the same cell.
     ROUTES = {
         "FROM forecast_runs fr": [{"initialization_time": INIT}],
         "ORDER BY POWER": [{"latitude": 36.0, "longitude": -75.5}],
         # Verification runs on a common 6 h window, so an hourly model needs a
         # full window present before anything is scored — hours 1-12, not 0-2.
-        "FROM regridded_forecast_ens u": [_fcst_row(h) for h in range(1, 13)],
-        "FROM regridded_observation": _obs_rows(list(range(1, 13))),
+        "FROM regridded_forecast_member u": [
+            {"latitude": 36.0, "longitude": -75.5, "forecast_hour": h,
+             "ensemble_member": m, "value": 1.0 + 0.1 * m}
+            for h in range(1, 13) for m in range(4)
+        ],
+        "FROM regridded_observation": _obs_rows(list(range(1, 13)), per_cell=True),
     }
 
     def test_emits_the_keys_the_frontend_reads(self, client, fake_db):
