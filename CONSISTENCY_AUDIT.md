@@ -36,16 +36,38 @@ field exists, not just a number.
 | `fbi` | ✓ | ✓ | **—** | **—** |
 | `composite_confidence` | ✓ | ✓ | **—** | **—** |
 
-### 1a. Analysis point has no accuracy metrics — **accidental**
+### 1a. Analysis point has no accuracy metrics — **accidental · FIXED**
 
 The biggest finding of the survey, and not one the plan anticipated. At a point,
 Analysis offers spread-skill (`ssr`, `correlation`) and the categorical suite —
 but **no `bias`, `mae`, `rmse` or `crps`**. Comparison point has all four.
 
 So "how wrong is this forecast, here?" is answerable in one tab and not the other,
-for the same click on the same map. The backend already computes all four at a
-point: `/api/compare/skill` returns them per lead time and as a summary. This is a
-frontend gap, not a missing capability.
+for the same click on the same map.
+
+**Fixed**, but not the way this entry first proposed. Wiring in
+`/api/compare/skill` would have made the panel self-contradictory, because that
+endpoint turned out to be **the last scored path still reading the aggregate
+spread** — the member-grid migration missed it. On the loaded run the two point
+panels reported SSRs up to 31% apart for the same cell and lead time (1.3712
+against 1.7959 at +12 h). So:
+
+1. `/api/compare/skill` moved onto `_member_cases_by_cell` like everything else,
+   which also gives UKMO precipitation an SSR and CRPS at a point for the first
+   time — the aggregate path had none to give.
+2. Both point endpoints now share `_point_case_record` and `_point_summary`, so
+   they cannot drift in shape or in estimator.
+3. `/api/spread-skill` gained the `summary` block, and the Analysis panel reads
+   bias, MAE, RMSE and CRPS straight from it — same request, same cases as the
+   spread numbers beside them, so there is no way for the two rows to disagree.
+
+Verified at 34.50/−75.50: both panels report ssr_agg 3.28, correlation 0.1084,
+bias 0.3099, MAE 0.3789, RMSE 0.445, CRPS 0.3738.
+
+One more thing fell out of it: the Analysis panel computed its own "Mean SSR" as
+the **mean of the per-hour ratios**, which is precisely the estimator the backend
+avoids (E[X/Y] ≠ E[X]/E[Y], and one near-zero error drags the mean to the clamp).
+It now shows the backend's pooled `ssr_agg` under the same label Comparison uses.
 
 ### 1b. The `fss` gap is real but narrower than the plan states — **deliberate, needs saying**
 
@@ -222,8 +244,11 @@ The plan says to budget by risk, and the findings sort cleanly:
    the fixed 0–1 axis.~~ **Done 2026-08-19.**
 2. **Safe and worth it** — 1d and 1b: write down why `fbi`/`composite_confidence`
    are Analysis-only and why FSS is never a map. Documentation only.
-3. **A real feature, small** — 1a, accuracy metrics at an Analysis point. The
-   backend already returns them; this is wiring plus a panel.
+3. ~~**A real feature, small** — 1a, accuracy metrics at an Analysis point.~~
+   **Done 2026-08-19**, and it was not small: it surfaced one endpoint left behind
+   by the member-grid migration and a client-side estimator that disagreed with
+   the backend's. "The backend already returns them; this is wiring plus a panel"
+   was wrong, and worth remembering as a caution about sizing work from a survey.
 4. **Do deliberately or not at all** — 3a the duplicate toggles and 3c the state
    treatments. These are the changes most likely to annoy someone who knows the
    current layout, which is exactly what the plan warns about.

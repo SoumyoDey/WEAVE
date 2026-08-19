@@ -522,10 +522,12 @@ export function AnalysisTab({
                     // Mean over hours that actually have an SSR. If none do, SSR is
                     // undefined (no matched obs / zero error everywhere) — must not
                     // collapse to 0 and read as "severely overconfident".
-                    const validSSR = ssrData.hours.filter(h => h.ssr !== null);
-                    const meanSSR = validSSR.length
-                      ? validSSR.reduce((a, h) => a + h.ssr, 0) / validSSR.length
-                      : null;
+                    // The backend's pooled SSR, not a mean of the per-hour
+                    // ratios: E[X/Y] != E[X]/E[Y], and one near-zero error drags a
+                    // mean to the clamp. Comparison shows the same estimator, so
+                    // computing a different one here made the panels disagree.
+                    const summary = ssrData.summary || {};
+                    const meanSSR = summary.ssr_agg ?? null;
                     // Mirrors the 5-tier SSR scale used by the backend's map legend
                     // (flask_api.py PLOT_STYLE_REGISTRY['ssr']) for colors/thresholds,
                     // but uses plain confidence language (matching the readout sentence
@@ -546,11 +548,37 @@ export function AnalysisTab({
                         <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', flexWrap: 'wrap' }}>
                           {[
                             { label: 'Spread-Skill Correlation', value: corrVal !== null ? corrVal.toFixed(3) : 'N/A', color: corrColor, hint: 'corr(σ, |ε|) across lead times' },
-                            { label: 'Mean SSR',         value: meanSSR !== null ? meanSSR.toFixed(3) : 'N/A', color: meanSSRColor, hint: ssrInterpret },
+                            { label: 'SSR (aggregated)', value: meanSSR !== null ? meanSSR.toFixed(3) : 'N/A', color: meanSSRColor, hint: ssrInterpret },
                             { label: 'Verified Hours',   value: ssrData.n_cases,    color: '#3498db',    hint: 'Lead times with matching observations' },
                           ].map(({ label, value, color, hint }) => (
                             <div key={label} style={{ background: 'rgba(255,255,255,0.06)', borderRadius: '10px', padding: '12px 18px', minWidth: '140px', borderLeft: `3px solid ${color}` }}>
                               <div style={{ color, fontSize: t.fontSize.stat, fontWeight: '700', lineHeight: 1 }}>{value}</div>
+                              <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: t.fontSize.sm, marginTop: '4px', fontWeight: '500' }}>{label}</div>
+                              <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.xs, marginTop: '2px' }}>{hint}</div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Accuracy against observations.
+
+                            CONSISTENCY_AUDIT.md finding 1a: these four were
+                            available at a point in Comparison and nowhere in
+                            Analysis, so "how wrong is this forecast, here?" was
+                            answerable in one tab and not the other for the same
+                            click. They come from the same /api/spread-skill cases
+                            as the spread numbers above — no second request, and no
+                            way for the two to disagree. */}
+                        <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', flexWrap: 'wrap' }}>
+                          {[
+                            { label: 'Bias', value: summary.bias, hint: `mean error · 0 is unbiased · ${yAxisUnit}` },
+                            { label: 'MAE',  value: summary.mae,  hint: `mean absolute error · ${yAxisUnit}` },
+                            { label: 'RMSE', value: summary.rmse, hint: `root mean square error · ${yAxisUnit}` },
+                            { label: 'CRPS', value: summary.crps, hint: `probabilistic error · ${yAxisUnit}` },
+                          ].map(({ label, value, hint }) => (
+                            <div key={label} style={{ background: 'rgba(255,255,255,0.04)', borderRadius: '10px', padding: '10px 16px', minWidth: '120px', borderLeft: '3px solid rgba(255,255,255,0.18)' }}>
+                              <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: t.fontSize.stat, fontWeight: '700', lineHeight: 1 }}>
+                                {value != null ? value.toFixed(3) : 'N/A'}
+                              </div>
                               <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: t.fontSize.sm, marginTop: '4px', fontWeight: '500' }}>{label}</div>
                               <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.xs, marginTop: '2px' }}>{hint}</div>
                             </div>
