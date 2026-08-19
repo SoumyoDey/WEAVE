@@ -862,6 +862,37 @@ class TestFormerDefects:
         # Still no per-cell value, which is the thing that made the count 0.
         assert d['cell_means']['AIFS']['fss'] is None
 
+    @pytest.mark.parametrize('metric', ['ssr_agg', 'bias', 'mae', 'rmse', 'crps',
+                                        'csi', 'pod', 'far', 'brier', 'fss'])
+    def test_every_pairs_metric_works_when_asked_for_alone(self, db_client, metric):
+        """Found while fact-checking the reviewer's guide, and the general form of
+        the gap: `fss` alone returned no value, zero cells, and a warning that the
+        grids did not overlap — none of it true, since `mae` over the same box
+        returned every cell. The fcst-obs fetch was skipped because FSS has no
+        per-cell function of its own, being a property of the whole field.
+
+        A caller should never have to co-request a second metric to get a first one,
+        so each is asked for on its own. Nine of these ten always passed; only the
+        combination was broken, which is the kind of gap a per-metric loop catches
+        and a hand-picked pair does not."""
+        d = region_metrics(db_client, 'AIFS', [metric])
+        assert d['models']['AIFS'][metric] is not None, metric
+        assert d['n_cells']['AIFS'] == fx.N_CELLS, metric
+        assert d['n_points']['AIFS'][metric] > 0, metric
+        assert not d['warnings'], f'{metric}: spurious warning {d["warnings"]}'
+
+    def test_correlation_alone_does_not_claim_the_grids_do_not_overlap(self, db_client):
+        """`correlation` comes from the member path and needs no fcst-obs pairs, so
+        requesting it alone legitimately matches no pairs — but it was then told the
+        grids did not overlap while returning a perfectly good correlation. Uses
+        wind, where the fixture makes spread track error so the value is exactly
+        +1; precipitation spread is flat by design and has nothing to correlate."""
+        d = region_metrics(db_client, 'AIFS', ['correlation'],
+                           variable='wind', hour_max=18)
+        assert d['models']['AIFS']['correlation'] == pytest.approx(
+            fx.EXPECT_WIND['correlation'], **APPROX)
+        assert not d['warnings'], d['warnings']
+
     def test_a_metric_with_no_value_still_counts_zero(self, db_client):
         """The count has to stay honest in the other direction: UKMO precipitation
         has no CRPS, so its count must be 0 rather than the cell total."""

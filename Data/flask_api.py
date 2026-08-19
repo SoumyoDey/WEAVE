@@ -3660,7 +3660,12 @@ def _region_metric_points(cursor, model_name, variable, metrics,
     too so the caller can pool over samples rather than average per-cell scores.
     """
     wanted = [m for m in metrics if m in COMPARE_REGION_METRIC_FNS]
-    if not wanted:
+    # FSS is derived from the same pairs but has no per-cell function of its own
+    # (it is a property of the whole field at a lead time), so asking whether any
+    # per-cell metric was requested is the wrong question: requesting `fss` alone
+    # skipped the fetch entirely and reported no value, zero cells, and a warning
+    # that the grids did not overlap — none of which was true.
+    if not wanted and not (COMPARE_REGION_NO_CELL_VALUE & set(metrics)):
         return {}, {}, 0
     pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
                                           min_lat, max_lat, min_lon, max_lon,
@@ -3754,6 +3759,9 @@ def compare_region_metrics():
         per_cell_mean = {}
         n_cells       = {}
         warnings      = {}
+        # Whether any requested metric comes from the fcst↔obs pairs at all.
+        pairs_needed  = bool((set(COMPARE_REGION_METRIC_FNS) |
+                             COMPARE_REGION_NO_CELL_VALUE) & set(metrics))
 
         for m in models:
             points_by_metric, pairs, matched = _region_metric_points(
@@ -3797,7 +3805,12 @@ def compare_region_metrics():
             # so a misaligned grid — or a lead time running past the end of the
             # observation record — gives zero matches and every metric silently
             # comes back None.
-            if matched == 0:
+            #
+            # Only when the pairs were actually needed, though. `correlation` comes
+            # from the member path and needs none, so a request for it alone used to
+            # be told the grids did not overlap while returning a perfectly good
+            # correlation.
+            if matched == 0 and pairs_needed:
                 warnings[m] = ('No forecast/observation grid cells matched in this '
                                'region and lead-time range. Either the grids do not '
                                'overlap, or these lead times fall past the end of the '

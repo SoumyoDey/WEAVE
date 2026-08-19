@@ -2,15 +2,16 @@
 
 State as of 2026-08-19. Branch `p0-reliability`, PR #2 on `SoumyoDey/WEAVE`.
 
-**Item 3 below is done**, and so are all six defects it found — see "What it
+**Item 3 below is done**, and so are all seven defects it found — see "What it
 found" and the member-grid migration in 3b.
 
 ## Where things stand
 
-PR #2 is **open, MERGEABLE, CLEAN, and deliberately not merged** — 51 commits,
-30 files, +9219/−1332. `main` has not moved, so it is a clean fast-forward.
+PR #2 is **open and deliberately not merged** — 57 commits, 38 files,
++12111/−1479. `main` has not moved, so it is a clean fast-forward.
 
-- 174 backend + 22 frontend tests pass. `metrics.py` at 100% statement coverage.
+- 283 backend + 22 frontend tests pass. `metrics.py` at 100% statement coverage,
+  `flask_api.py` at 83%.
 - No reviews, and no CI on the repo (`checks: 0`) — nothing runs on merge.
 - `METRICS_AUDIT.md` is the record for everything below. Read it before
   re-deriving anything; several conclusions in it were reached, withdrawn and
@@ -20,16 +21,21 @@ PR #2 is **open, MERGEABLE, CLEAN, and deliberately not merged** — 51 commits,
 
 ## 1. Merge PR #2
 
-Blocked only on review. It changes every precipitation number in the app, so it
-is worth a second pair of eyes — particularly `Data/metrics.py`, where the unit
-and window conventions live.
+**Blocked only on review, and this is now the only item on this page that needs
+someone other than whoever is reading it.**
+
+`REVIEW_GUIDE.md` exists to make that review tractable: 52% of the diff is tests
+and docs, and the guide lists every change that moves a number the app already
+published, each with its before/after value on the loaded run, the line to read,
+and the test that pins it. Start there, not with the diff.
 
 ```bash
 gh pr merge 2 --repo SoumyoDey/WEAVE --squash --delete-branch
 ```
 
-`--squash` given 51 commits, many iterating on one finding. Use `--merge` instead
-if the individual messages are worth keeping — they carry most of the reasoning.
+`--squash` given 57 commits, many iterating on one finding. Use `--merge` instead
+if the individual messages are worth keeping — they carry most of the reasoning,
+and several record why an approach was abandoned.
 
 ## 2. Drop the superseded table
 
@@ -49,8 +55,8 @@ Grep for the name first, in case something new started reading it.
 
 `flask_api.py` went from **41% to 83%** statement coverage; the real figure is a
 little higher, because Cartopy drops coverage's tracer partway through both
-render functions (the PNG assertions prove those bodies run). 256 backend tests
-pass in ~9 s, with no xfails left.
+render functions (the PNG assertions prove those bodies run). 283 backend tests
+pass in ~11 s, with no xfails left.
 
 - `Data/fixture_db.py` builds `weave_fixture_test` from the real schema
   (`schema.sql` + the DDL in `regrid_members.py`, read from source so a new
@@ -58,7 +64,7 @@ pass in ~9 s, with no xfails left.
 - `Data/test_db_endpoints.py` drives every endpoint against it, including the
   three Cartopy renders and the connection pool.
 - Both skip themselves without PostgreSQL (`WEAVE_SKIP_DB_TESTS=1` to force it),
-  so `python -m pytest -q` still runs anywhere: 174 pass, 67 skip.
+  so `python -m pytest -q` still runs anywhere: 176 pass, 107 skip.
 
 **The load-bearing idea.** All three models get the *same true field*, each
 expressed in its own storage convention — AIFS cumulative, GEFS pre-divided by a
@@ -76,7 +82,7 @@ divisor cancel itself out.
 
 ### What it found
 
-Six defects, none of which the 174-test suite could see. **All six are now fixed.**
+Seven defects, none of which the 174-test suite could see. **All seven are now fixed.**
 Each was first written as a strict `xfail`, so the suite stayed red until the
 marker came off — the fix and its test landed together. They are regression tests
 now, in `TestFormerDefects` and alongside the behaviour they cover.
@@ -147,6 +153,20 @@ now, in `TestFormerDefects` and alongside the behaviour they cover.
    rows at exact ones (`35.15625`), because two different loaders wrote them.
    Nothing joins across variables today, so nothing is broken — but any such join
    would match zero rows, silently.
+
+7. ~~**Requesting `fss` alone returned nothing.**~~ **Fixed.** No value,
+   `n_cells: 0`, and a warning that the grids did not overlap — none of it true,
+   since `mae` over the same box returned 35 cells. `_region_metric_points` skipped
+   the fcst↔obs fetch unless a metric with a *per-cell function* was requested, and
+   FSS has none, being a property of the whole field. `correlation` alone drew the
+   same false warning, since it comes from the member path and needs no pairs
+   (fixed with `pairs_needed` at the warning).
+
+   Found while fact-checking `REVIEW_GUIDE.md` — a good argument for writing the
+   numbers down and then re-measuring them. The existing FSS test co-requested
+   `mae`, so it passed; the replacement asks for **each metric on its own**. Nine of
+   the ten always worked and only the combination was broken, which is the kind of
+   gap a per-metric loop catches and a hand-picked pair does not.
 
 Two non-defects worth not re-deriving, now pinned by tests:
 
