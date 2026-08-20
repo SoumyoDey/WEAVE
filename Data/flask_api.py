@@ -538,18 +538,28 @@ def _member_cases_by_cell(cursor, model_name, variable, init_time,
     question two different ways — which they did until this replaced a second
     implementation reading `ensemble_statistics` + `observation_data`.
 
-    Why the member grid (METRICS_AUDIT.md finding 11): the aggregate `std_dev` is
-    the spread of the pooled (member x native-cell) population, so it carries
-    within-cell spatial variance that is not ensemble spread at all — about 23%
-    high on the loaded run. Differencing each member's own series instead is
-    EXACT for a cumulative model, and the spread of the differenced members is
-    the true spread of the increment.
+    Why the member grid, precisely — the earlier version of this note said the
+    aggregate `std_dev` carries within-cell spatial variance and runs ~23% high.
+    That is true of `regridded_forecast` (METRICS_AUDIT.md finding 11) and NOT of
+    `regridded_forecast_ens`, whose `std_dev` is `nanstd(members, ddof=1)` over the
+    regridded members and equals their sample spread exactly. Two real reasons
+    remain, and they are bigger than the retracted one:
 
-    It also makes an hourly model scorable at all. Re-binning a mean/spread pair
-    onto the common window has to discard the spread (the spread of a mean is not
-    the mean of spreads), so UKMO precipitation had no spread on the common window
-    and every spread metric came back empty. Re-binning each MEMBER first and
-    pooling afterwards gives the exact spread of the 6 h means.
+    1. **A cumulative model's increment spread is not recoverable from the stored
+       totals.** The aggregate path has to approximate it as
+       sqrt(sigma(h)^2 - sigma(h-p)^2), which assumes independent increments and
+       comes out negative for ~13% of AIFS records. At 36.0/-75.5, +12 h it gives
+       sqrt(0.2128^2 - 0.1511^2) = 0.1499 against an exact 0.1144 from
+       differencing each member — 31% high. Differencing per member is EXACT.
+    2. **Re-binning destroys the spread outright.** Combining records onto the
+       common window cannot carry it (the spread of a mean is not the mean of
+       spreads), so an hourly model had no spread there at all and every spread
+       metric came back empty. Re-binning each MEMBER first and pooling afterwards
+       gives the exact spread of the 6 h means.
+
+    A third, minor: the stored value is a sample spread (ddof=1) and this computes
+    the population one, a factor sqrt(n/(n-1)) — 1.010 for AIFS's 50 members,
+    1.017 for GEFS's 30.
 
     Truth comes from `regridded_observation` over the window each record spans,
     the same rule every other scored endpoint uses — not the instantaneous match
@@ -1187,6 +1197,18 @@ def _dispatch_ssr_agg(cursor, run_id, variable_id, init_time, args,
     ), {}
 
 
+# Metrics /api/spatial-metric can draw as a per-cell field. Every one of these has
+# a value at a single grid cell, which is what makes a map of it meaningful.
+#
+# `fss` is deliberately absent, and this is the reason (CONSISTENCY_AUDIT.md 1b):
+# the Fractions Skill Score compares the *fraction* of exceedances in a
+# neighbourhood around each point against the observed fraction, so its value
+# belongs to a whole field at a lead time, not to a cell. Attributing it to the
+# centre cell would draw a map of a number that is not a property of that cell.
+# It is therefore reported as a region number in both tabs and mapped in neither —
+# see COMPARE_REGION_NO_CELL_VALUE, which encodes the same rule for the region
+# metric suite. In Analysis it arrives through the categorical panel rather than
+# the metric explorer, which is why it looks absent there at first glance.
 SPATIAL_METRIC_REGISTRY = {
     'ssr':         _dispatch_ssr,
     'ssr_agg':     _dispatch_ssr_agg,
@@ -2727,6 +2749,20 @@ def categorical_metrics_endpoint():
       BS   = mean((P_event – I_obs)²)               — Brier Score, 0 = perfect
       Composite Confidence (no FSS, weights re-normalised to sum 1):
            = (0.40·CSI + 0.20·POD + 0.10·(1-FAR)) / 0.70
+
+    **FBI and Composite Confidence are Analysis-only** — the Comparison tab's
+    endpoints return neither (CONSISTENCY_AUDIT.md 1d). No reason for that was
+    ever recorded, and this note is not inventing one: on the evidence it looks
+    incidental rather than decided. Both are ordinary per-model scores and either
+    would compare across models perfectly well.
+
+    Two things to weigh before adding them there, which is why this is written
+    down rather than just fixed:
+      - Composite Confidence is a weighted blend, and the weights above are a
+        judgement call. Comparing models on a composite ranks them by that
+        judgement rather than by a measurement, which is a different kind of
+        claim from comparing them on CSI.
+      - FBI has no such problem and is the cheaper of the two to add.
 
     Request JSON:
         { model, variable, lat, lon, threshold_mm_6h, hour_min, hour_max }

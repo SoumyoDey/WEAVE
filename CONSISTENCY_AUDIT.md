@@ -47,8 +47,12 @@ for the same click on the same map.
 
 **Fixed**, but not the way this entry first proposed. Wiring in
 `/api/compare/skill` would have made the panel self-contradictory, because that
-endpoint turned out to be **the last scored path still reading the aggregate
-spread** — the member-grid migration missed it. On the loaded run the two point
+endpoint turned out to be **the last scored path still reading an aggregate
+spread** — the member-grid migration missed it. (Not because that spread is
+inflated: `regridded_forecast_ens.std_dev` equals the members' sample spread
+exactly. It is because a cumulative model's increment spread has to be
+approximated from stored totals, and because re-binning discards the spread
+altogether — see NEXT_STEPS.md §3b, corrected 2026-08-20.) On the loaded run the two point
 panels reported SSRs up to 31% apart for the same cell and lead time (1.3712
 against 1.7959 at +12 h). So:
 
@@ -69,7 +73,7 @@ the **mean of the per-hour ratios**, which is precisely the estimator the backen
 avoids (E[X/Y] ≠ E[X]/E[Y], and one near-zero error drags the mean to the clamp).
 It now shows the backend's pooled `ssr_agg` under the same label Comparison uses.
 
-### 1b. The `fss` gap is real but narrower than the plan states — **deliberate, needs saying**
+### 1b. The `fss` gap is real but narrower than the plan states — **deliberate · DOCUMENTED**
 
 The plan said `fss` is "in the Comparison region registry, not the Analysis one".
 Analysis region *does* report FSS, through `/api/region-categorical-metrics`; what
@@ -81,6 +85,12 @@ whole field at a lead time and has no per-cell value. `COMPARE_REGION_NO_CELL_VA
 already encodes that. So the honest statement is: FSS is available in all four
 surfaces, is never a map, and is reached through a different panel in Analysis
 than in Comparison. Worth documenting rather than fixing.
+
+**Documented** at `SPATIAL_METRIC_REGISTRY` (which says why `fss` is absent from
+it, alongside the existing note on `COMPARE_REGION_NO_CELL_VALUE`) and in the
+README's metrics table, which now has a "Map?" column and states the rule: FSS
+compares the *fraction* of exceedances in a neighbourhood against the observed
+fraction, so its value belongs to a field at a lead time, not to a cell.
 
 ### 1c. One metric, three key names — **accidental · FIXED**
 
@@ -100,11 +110,19 @@ one thing it is not. It now carries the registry name for the estimator it
 actually uses, and the point summary and the region bars finally agree on both
 the key and the label ("SSR (aggregated)").
 
-### 1d. `fbi` and `composite_confidence` are Analysis-only — **deliberate, undocumented**
+### 1d. `fbi` and `composite_confidence` are Analysis-only — **undecided · DOCUMENTED**
 
-Frequency Bias Index and the weighted composite are summary devices for a single
-model; Comparison has no equivalent and arguably needs none. Defensible, but the
-reason is written nowhere.
+This entry first guessed "deliberate: summary devices for a single model, and
+Comparison arguably needs none". Looking for the reason in the code found **none**,
+and the guess does not hold up — both are ordinary per-model scores and either
+would compare across models perfectly well. On the evidence the gap is incidental,
+not decided.
+
+**Documented as such**, in `categorical_metrics_endpoint`'s docstring and the
+README, rather than dressed up as a decision. The one substantive consideration
+recorded there: Composite Confidence is a weighted blend, and the weights are a
+judgement call, so ranking models by it is a different kind of claim from ranking
+them by CSI. FBI carries no such caveat and is the cheaper of the two to add.
 
 ### 1e. `ssr` at a single lead time is Analysis-only — **deliberate**
 
@@ -242,8 +260,11 @@ The plan says to budget by risk, and the findings sort cleanly:
 
 1. ~~**Safe and mechanical** — 1c key names, 3b one name for the scored area, 4a
    the fixed 0–1 axis.~~ **Done 2026-08-19.**
-2. **Safe and worth it** — 1d and 1b: write down why `fbi`/`composite_confidence`
-   are Analysis-only and why FSS is never a map. Documentation only.
+2. ~~**Safe and worth it** — 1d and 1b.~~ **Done 2026-08-20.** 1b's rule is now at
+   the registry and in the README; 1d is recorded as *undecided* rather than
+   justified, because no reason for it exists. The same pass corrected a claim
+   this audit had repeated — that the aggregate spread is inflated — which is true
+   of `regridded_forecast` and false of `regridded_forecast_ens`.
 3. ~~**A real feature, small** — 1a, accuracy metrics at an Analysis point.~~
    **Done 2026-08-19**, and it was not small: it surfaced one endpoint left behind
    by the member-grid migration and a client-side estimator that disagreed with

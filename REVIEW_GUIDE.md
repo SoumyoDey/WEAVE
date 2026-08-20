@@ -99,13 +99,22 @@ keep native cadence on purpose.
 
 ### 3. Spread now comes from the members, not the aggregate table
 
-`regridded_forecast_ens.std_dev` is the spread of the pooled (member × native-cell)
-population, so it carries within-cell **spatial** variance that is not ensemble
-spread at all — about 23% high on this run (audit finding 11).
-`/api/spread-skill` was moved onto the member grid for that reason; the spatial
-maps never were, so **the Analysis map and the Analysis point panel answered the
-same question from two different tables**. `_member_cases_by_cell`
-(`flask_api.py:464`) is now the single implementation behind both.
+`/api/spread-skill` read the member grid; the spatial maps and
+`/api/compare/skill` read aggregate tables, so **the same cell was scored from a
+different source depending on which panel you opened**. `_member_cases_by_cell`
+is now the single implementation behind all three.
+
+Two reasons make the member grid the right source — and note a third, given in an
+earlier draft of this guide, is **retracted**:
+`regridded_forecast_ens.std_dev` is *not* an inflated pooled spread (that is the
+superseded `regridded_forecast`, audit finding 11); it equals the members' sample
+spread exactly, verified cell by cell. What remains:
+
+- a cumulative model's increment spread must be approximated from stored totals as
+  √(σ(h)² − σ(h−p)²), which was **31% high** at 36.0/−75.5 +12 h (0.1499 against
+  an exact 0.1144) and goes negative for ~13% of AIFS records;
+- re-binning onto the common window discards the spread entirely, so an hourly
+  model had no spread-dependent scores at all.
 
 At 36.0/−75.5, +6 h, map and panel now agree exactly:
 
