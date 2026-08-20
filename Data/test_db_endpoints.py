@@ -578,6 +578,39 @@ class TestPointCategoricalMetrics:
         assert boxed['summary']['csi'] == pytest.approx(point['summary']['csi'])
         assert boxed['summary']['false_alarms'] == point['summary']['false_alarms']
 
+    def test_the_fss_window_cannot_be_wider_than_the_field_it_slides_over(self, db_client):
+        """A window wider than the field gives every cell the same neighbourhood
+        — the whole field — so every fraction equals the field mean and FSS stops
+        being a neighbourhood score at all, collapsing into the domain-frequency
+        comparison finding 5 rebuilt it to stop being. The field is widened to fit
+        instead, and the response reports the size actually used rather than the
+        size asked for.
+
+        `box_cells` = 1 is exempt: that is the contract for a true point, where
+        FSS is undefined, and honouring a window there would silently turn the
+        point into a neighbourhood.
+        """
+        args = {'model': 'AIFS', 'variable': 'precipitation',
+                'lat': 36.0, 'lon': -75.0, 'hour_min': 0, 'hour_max': 36,
+                'threshold_mm_6h': fx.EXPECT_PRECIP['threshold_mm_6h']}
+
+        widened = db_client.post('/api/categorical-metrics',
+                                 json={**args, 'box_cells': 3, 'fss_window': 9}).get_json()
+        assert widened['scored_area']['box_cells'] == 9
+        assert widened['scored_area']['fss_window'] == 9
+
+        # A window that already fits is left alone.
+        kept = db_client.post('/api/categorical-metrics',
+                              json={**args, 'box_cells': 9, 'fss_window': 3}).get_json()
+        assert kept['scored_area']['box_cells'] == 9
+
+        # The point contract survives: still one cell, FSS still undefined.
+        point = db_client.post('/api/categorical-metrics',
+                               json={**args, 'box_cells': 1, 'fss_window': 9}).get_json()
+        assert point['scored_area']['box_cells'] == 1
+        assert point['scored_area']['n_cells'] == 1
+        assert point['summary']['fss'] is None
+
     def test_wind_uses_a_metres_per_second_threshold(self, db_client):
         d = db_client.post('/api/categorical-metrics', json={
             'model': 'AIFS', 'variable': 'wind', 'lat': 35.0, 'lon': -76.0,

@@ -143,9 +143,11 @@ const SECTIONS = [
         <h3 style={S.h3}>What "a point" means</h3>
         <p style={S.p}>
           A click lands inside a grid cell, and scores are computed over that cell — not an
-          infinitesimal point. The <strong>Scored area</strong> control widens the box when you want
-          FSS, which needs neighbours to measure placement. Widening it does <em>not</em> move the
-          other metrics: the contingency table keeps reading the centre cell alone. A badge always
+          infinitesimal point. FSS is the exception, because measuring placement needs neighbours:
+          the <strong>FSS area</strong> control sets the field it is evaluated over, and the
+          <strong>FSS window</strong> the neighbourhood it slides across that field. Neither moves
+          any other metric — the contingency table reads the centre cell whatever they are set to,
+          which is why the control is named for FSS rather than called a scored area. A badge always
           states the area a number came from.
         </p>
 

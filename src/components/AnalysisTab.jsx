@@ -105,10 +105,14 @@ export function AnalysisTab({
   // FSS neighbourhood width in grid cells. FSS only means something relative to
   // a spatial scale — "skilful at 2.5 degrees" — so this is a parameter of the
   // score, not a display option. Odd values centre cleanly on a cell.
-  const [fssWindow,      setFssWindow]      = useState(3);
-  // Cells scored around the clicked point. 1 = a true point (FSS undefined);
-  // above 1 gives FSS a field while CSI/POD/FAR stay on the centre cell.
-  const [catBoxCells,    setCatBoxCells]    = useState(1);
+  // Defaults match the Comparison tab so the same score is asked the same
+  // question in both places.
+  const [fssWindow,      setFssWindow]      = useState(5);
+  // The field FSS is evaluated over, in cells. It affects FSS and nothing else:
+  // the contingency table reads the centre cell at every width (verified — hits,
+  // misses and false alarms are identical at 1, 3, 5 and 9). It was 1, which made
+  // FSS structurally undefined and therefore invisible in this tab.
+  const [catBoxCells,    setCatBoxCells]    = useState(9);
   const [regCatLoading,  setRegCatLoading]  = useState(false);
   const [regCatData,     setRegCatData]     = useState(null);
   const [regCatError,    setRegCatError]    = useState(null);
@@ -766,31 +770,45 @@ export function AnalysisTab({
                       </span>
                     </div>
 
-                    {/* Scored area — point mode. FSS needs more than one cell,
-                        so this is what makes it available at a point. */}
+                    {/* The field FSS is evaluated over — point mode only, since
+                        region mode uses the drawn bbox instead.
+
+                        Called "FSS area", NOT "Scored area", which is what it
+                        said while it defaulted to 1. This control moves FSS and
+                        nothing else: CSI, POD, FAR, FBI and Brier read the centre
+                        cell at every width. At the old default of 1 the
+                        distinction did not matter because the box WAS the cell;
+                        at 9 a label saying "Scored area: 9 cells (≈4.5°)" would
+                        claim the contingency table covered 4.5°, which is false.
+                        Comparison's "Scored area" is a true scored area — it
+                        pools every metric over the box — so the two tabs use
+                        different words because they mean different things. */}
                     {catMode === 'point' && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <span
                           style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }}
-                          title="Cells scored around the clicked point. 1 is a true point and FSS is undefined; above 1 gives FSS a neighbourhood while CSI/POD/FAR stay on the centre cell."
+                          title="The field FSS compares over, centred on the clicked cell. FSS needs neighbours, so at 1 cell it is undefined. Every other metric here reads the clicked cell alone, whatever this is set to."
                         >
-                          Scored area
+                          FSS area
                         </span>
                         <input
                           type="number" min="1" max="41" step="2" value={catBoxCells}
-                          aria-label="Scored area width (grid cells)"
+                          aria-label="FSS field width (grid cells)"
                           onChange={e => setCatBoxCells(Math.max(1, Math.min(41, parseInt(e.target.value, 10) || 1)))}
                           style={{ width: '56px', padding: '4px 6px', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'center', outline: 'none' }}
                         />
                         <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }}>
-                          {catBoxCells === 1 ? 'cell (point)' : `cells (≈${(catBoxCells * 0.5).toFixed(1)}°)`}
+                          {catBoxCells === 1 ? 'cell — FSS undefined' : `cells (≈${(catBoxCells * 0.5).toFixed(1)}°)`}
                         </span>
                       </div>
                     )}
 
-                    {/* FSS neighbourhood — needs a field, so point mode only
-                        once the scored area is bigger than one cell */}
-                    {(catMode === 'region' || catBoxCells > 1) && (
+                    {/* FSS sliding window, inside that field. Always shown rather
+                        than appearing once the field is wide enough: a control
+                        that materialises is harder to find than one that is
+                        simply inert, and this is the parameter that gives FSS its
+                        meaning ("skilful at 2.5 degrees"). */}
+                    {(catMode === 'region' || catMode === 'point') && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <span
                           style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }}
@@ -913,7 +931,9 @@ export function AnalysisTab({
                     if (!activeData || !activeData.summary || !activeData.hours?.length) return null;
                     const s   = activeData.summary;
                     const cc  = s.composite_confidence;
-                    const fss = s.fss;   // only non-null for region mode
+                    // Non-null in both modes now. It was region-only in practice,
+                    // because point mode defaulted the FSS field to a single cell.
+                    const fss = s.fss;
 
                     const metricColor = (key, val) => {
                       if (val == null) return '#666';
@@ -934,12 +954,21 @@ export function AnalysisTab({
                       { key: 'fbi', label: 'FBI',   hint: 'Frequency Bias (1=unbiased)',         val: s.fbi   },
                       { key: 'bs',  label: 'Brier', hint: 'Brier Score (0=perfect)',             val: s.brier },
                     ];
-                    if (fss != null) {
+                    // Always a badge, even when undefined. It used to be pushed
+                    // only when non-null, so an unavailable FSS did not render at
+                    // all — five badges and no gap to ask about. Every other
+                    // metric here shows N/A rather than vanishing.
+                    {
                       const w = (catMode === 'region' ? regCatData?.fss_window
                                                      : catData?.scored_area?.fss_window) ?? fssWindow;
+                      const box = catData?.scored_area?.box_cells ?? catBoxCells;
                       badges.push({
                         key: 'fss', label: 'FSS', val: fss,
-                        hint: `Fractions Skill Score over a ${w}×${w}-cell neighbourhood (0→1, higher=better)`,
+                        hint: fss != null
+                          ? `Fractions Skill Score over a ${w}×${w}-cell neighbourhood (0→1, higher=better)`
+                          : catMode === 'point' && box <= 1
+                            ? 'Undefined at one cell — raise the FSS area above'
+                            : 'Undefined here: no cell in the field crosses the threshold, in the forecast or the observation',
                       });
                     }
 
@@ -975,9 +1004,16 @@ export function AnalysisTab({
                                 ? '0.40×CSI + 0.30×FSS + 0.20×POD + 0.10×(1–FAR)'
                                 : '0.40×CSI + 0.20×POD + 0.10×(1–FAR) ÷ 0.70'}
                             </div>
+                            {/* Which of the two formulas produced the number
+                                above. The composite silently changes definition
+                                when FSS drops out — same label, same colour
+                                bands, 30% of the blend gone — so it has to say
+                                so. textFaint, not 0.2: theme.js raised the faint
+                                tier to 0.5 precisely because anything below it
+                                fails WCAG AA at this size. */}
                             {fss == null && (
-                              <div style={{ color: 'rgba(255,255,255,0.2)', fontSize: t.fontSize.micro, marginTop: '1px' }}>
-                                FSS needs more than one cell — raise the scored area
+                              <div style={{ color: t.textFaint, fontSize: t.fontSize.micro, marginTop: '1px' }}>
+                                Re-weighted without FSS — not comparable with a value that includes it
                               </div>
                             )}
                           </div>

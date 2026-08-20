@@ -2808,6 +2808,18 @@ def categorical_metrics_endpoint():
         # stay on the centre cell so their meaning never silently changes.
         box_cells         = max(1, min(int(body.get('box_cells',  1)), 41))
         fss_window        = max(1, min(int(body.get('fss_window', 3)), 21))
+        # The window slides across the field, so it cannot be wider than it. If
+        # it is, every cell's neighbourhood covers the whole field, every
+        # fraction equals the field mean, and FSS collapses into a comparison of
+        # two domain frequencies — precisely what METRICS_AUDIT.md finding 5
+        # rebuilt it to stop being. Widen the field instead, as
+        # compare_categorical already does (its `effective_box`).
+        #
+        # box_cells == 1 is exempt: it is the contract for "a true point", where
+        # FSS is undefined by definition, and honouring a window there would
+        # quietly turn a point into a neighbourhood.
+        if box_cells > 1:
+            box_cells = max(box_cells, fss_window)
     except (TypeError, ValueError):
         return jsonify({'error': 'lat, lon, hour_min, hour_max, box_cells, '
                                  'fss_window must be numeric'}), 400
