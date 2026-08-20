@@ -9,12 +9,11 @@ import { fetchCategoricalMetrics, fetchRegionCategoricalMetrics } from '../api/a
 import { fetchSpatialMetric, fetchSpatialMetricPlot } from '../api/spatialApi';
 import { METRIC_CONFIG } from '../constants';
 import { t } from '../theme';
+import { fmtLat, fmtLon } from '../utils/geoUtils';
 import { LoadingState, EmptyState, NoDataNote } from './ui/PanelState';
 
 // Format signed lat/lon with hemisphere suffixes (so -75.5 reads "75.5°W", not
 // "-75.5°E"). Accepts numbers or numeric strings.
-const fmtLat = (v, p = 3) => { const n = parseFloat(v); return `${Math.abs(n).toFixed(p)}°${n >= 0 ? 'N' : 'S'}`; };
-const fmtLon = (v, p = 3) => { const n = parseFloat(v); return `${Math.abs(n).toFixed(p)}°${n >= 0 ? 'E' : 'W'}`; };
 
 // ── Region metric definitions (defined outside component to avoid recreation) ──
 const REGION_METRICS = [
@@ -240,13 +239,26 @@ export function AnalysisTab({
           hourMax:   regionHourMax,
           bounds,
         });
+        // Nothing to draw is not an error, and asking the renderer to draw it
+        // produced one: the plot endpoint rejects an empty list with 400 "No
+        // points provided", which was surfaced verbatim. A metric with no
+        // exceedances over the region — routine for CSI/POD/FAR at a high
+        // threshold — read as a failure in the app's own words rather than the
+        // user's. Fall through to the card's "No data for this region" state.
+        if (!pts.points?.length) {
+          setSpatialMaps(prev => ({
+            ...prev,
+            [m.key]: { loading: false, url: null, error: null },
+          }));
+          return;
+        }
         const plot = await fetchSpatialMetricPlot({
           metric:         m.key,
           model:          currentModel.name,
           variable:       selectedVariable,
           hour:           undefined,
           threshold_mm_6h: m.requiresThreshold ? regionThreshold : undefined,
-          points:         pts.points || [],
+          points:         pts.points,
           n_hours:        pts.n_hours,
         });
         setSpatialMaps(prev => ({
@@ -254,7 +266,7 @@ export function AnalysisTab({
           [m.key]: {
             loading: false,
             url:   plot.image ? 'data:image/png;base64,' + plot.image : null,
-            error: plot.error || (pts.points?.length === 0 ? 'No data returned' : null),
+            error: plot.error || null,
           },
         }));
       } catch (err) {

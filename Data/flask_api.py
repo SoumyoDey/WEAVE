@@ -258,6 +258,32 @@ def _parse_bbox(args):
             'min_lon': min_lon, 'max_lon': max_lon}, None
 
 
+def _parse_latlon(src, lat_default=None, lon_default=None):
+    """Parse + range-check a single lat/lon pair, the point-endpoint counterpart
+    of _parse_bbox.
+
+    The bbox path has range-checked since the P1 input-validation work; the point
+    path never did, so `lat=999` returned 200 with `cell: [999.0, -75.0]` — a
+    coordinate that is not a place, echoed back as though it were a grid cell.
+    Same contract as _parse_bbox: `(lat, lon), err = _parse_latlon(...)`.
+    """
+    lat_raw = src.get('lat', lat_default)
+    lon_raw = src.get('lon', lon_default)
+    if lat_raw is None or lon_raw is None:
+        return None, (jsonify({'error': 'lat and lon are required'}), 400)
+    try:
+        lat, lon = float(lat_raw), float(lon_raw)
+    except (TypeError, ValueError):
+        return None, (jsonify({'error': 'lat and lon must be numeric'}), 400)
+    if not math.isfinite(lat) or not math.isfinite(lon):
+        return None, (jsonify({'error': 'lat and lon must be finite'}), 400)
+    if not -90 <= lat <= 90:
+        return None, (jsonify({'error': 'latitude must be in [-90, 90]'}), 400)
+    if not -180 <= lon <= 180:
+        return None, (jsonify({'error': 'longitude must be in [-180, 180]'}), 400)
+    return (lat, lon), None
+
+
 
 
 
@@ -1165,7 +1191,8 @@ def _compute_ssr_agg_points_rf(cursor, model_name, variable,
                                 hour_min=0, hour_max=168, pairs=None, **_kw):
     """
     Time-aggregated SSR using regridded tables.
-    SSR = mean(σ²) / mean(ε²) across all matched lead times per grid point.
+    SSR = √(mean(σ²) / mean(ε²)) across all matched lead times per grid point —
+    RMS spread over RMSE, not the variance ratio (METRICS_AUDIT.md finding 7).
     Requires ≥2 matched pairs to be meaningful.
     """
     if pairs is None:
@@ -1441,9 +1468,11 @@ def point_timeseries():
     variable   = request.args.get('variable', 'precipitation')
     if _bad_token(model_name, variable):
         return jsonify({'error': 'Invalid model or variable'}), 400
+    point, err = _parse_latlon(request.args)
+    if err:
+        return err
+    lat, lon = point
     try:
-        lat    = float(request.args.get('lat'))
-        lon    = float(request.args.get('lon'))
         radius = float(request.args.get('radius', 0.5))  # degrees search radius
     except (TypeError, ValueError):
         return jsonify({'error': 'lat and lon are required and must be numeric'}), 400
@@ -1562,16 +1591,19 @@ def get_spread_skill():
     A lead time is scored only where an observation covers its whole window, which
     is why the list stops before the forecast does.
 
-    SSR = spread² / error²  (1 = well-calibrated, <1 = overconfident, >1 = underconfident)
+    SSR = spread / |error|  (1 = well-calibrated, <1 = overconfident, >1 = underconfident).
+    The ratio of the values, not of their squares — see metrics._ssr_from_variances.
     Correlation = corr(spread_per_hour, |error|_per_hour) across scored lead times.
     """
     model_name = request.args.get('model', 'AIFS')
     variable   = request.args.get('variable', 'precipitation')
     if _bad_token(model_name, variable):
         return jsonify({'error': 'Invalid model or variable'}), 400
+    point, err = _parse_latlon(request.args)
+    if err:
+        return err
+    lat, lon = point
     try:
-        lat    = float(request.args.get('lat'))
-        lon    = float(request.args.get('lon'))
         radius = float(request.args.get('radius', 0.5))
     except (TypeError, ValueError):
         return jsonify({'error': 'lat and lon are required and must be numeric'}), 400
@@ -2261,13 +2293,15 @@ def compare_timeseries():
     variable = body.get('variable', 'precipitation')
     if _bad_token(*models, variable):
         return jsonify({'error': 'Invalid model or variable'}), 400
+    point, err = _parse_latlon(body, 35.0, -75.0)
+    if err:
+        return err
+    lat, lon = point
     try:
-        lat      = float(body.get('lat', 35.0))
-        lon      = float(body.get('lon', -75.0))
         hour_min = int(body.get('hour_min', 0))
         hour_max = int(body.get('hour_max', 168))
     except (TypeError, ValueError):
-        return jsonify({'error': 'lat, lon, hour_min, hour_max must be numeric'}), 400
+        return jsonify({'error': 'hour_min and hour_max must be numeric'}), 400
 
     # Wind → forecast SPEED via u/v self-join (see _fcst_speed_sql); precip → the
     # variable itself. (Was: raw u-component, which isn't a speed.)
@@ -2355,13 +2389,15 @@ def compare_skill():
     variable = body.get('variable', 'precipitation')
     if _bad_token(*models, variable):
         return jsonify({'error': 'Invalid model or variable'}), 400
+    point, err = _parse_latlon(body, 35.0, -75.0)
+    if err:
+        return err
+    lat, lon = point
     try:
-        lat      = float(body.get('lat', 35.0))
-        lon      = float(body.get('lon', -75.0))
         hour_min = int(body.get('hour_min', 0))
         hour_max = int(body.get('hour_max', 168))
     except (TypeError, ValueError):
-        return jsonify({'error': 'lat, lon, hour_min, hour_max must be numeric'}), 400
+        return jsonify({'error': 'hour_min and hour_max must be numeric'}), 400
 
     if variable == 'wind':
         fcst_var = 'wind_u_10m'
@@ -2797,9 +2833,11 @@ def categorical_metrics_endpoint():
     variable          = body.get('variable',         'precipitation')
     if _bad_token(model_name, variable):
         return jsonify({'error': 'Invalid model or variable'}), 400
+    point, err = _parse_latlon(body, 35.0, -75.0)
+    if err:
+        return err
+    lat, lon = point
     try:
-        lat               = float(body.get('lat',         35.0))
-        lon               = float(body.get('lon',        -75.0))
         hour_min          = int(body.get('hour_min',     0))
         hour_max          = int(body.get('hour_max',     168))
         # FSS needs a neighbourhood. `box_cells` = 1 keeps this a true point —
@@ -3533,9 +3571,11 @@ def compare_categorical():
         return jsonify({'error': 'models must be a list of strings'}), 400
     if _bad_token(*models, variable):
         return jsonify({'error': 'Invalid model or variable'}), 400
+    point, err = _parse_latlon(body, 35.0, -75.0)
+    if err:
+        return err
+    lat, lon = point
     try:
-        lat        = float(body.get('lat',       35.0))
-        lon        = float(body.get('lon',      -75.0))
         hour_min   = int(body.get('hour_min',    0))
         hour_max   = int(body.get('hour_max',    168))
         fss_window = int(body.get('fss_window',  3))
