@@ -40,8 +40,12 @@ export const t = {
   transition:    'all 0.2s ease',
   space:         (n) => `${n * 4}px`,   // 4-pt spacing scale: space(2) => 8px
   // type scale — one source of truth in place of the ad-hoc literal sizes
-  // (10/10.5/11/12/13/14/15/16/18/22/24/28px) scattered across components.
+  // (9/10/10.5/11/12/13/14/15/16/18/22/24/28px) scattered across components.
   fontSize: {
+    nano:   '9px',    // the floor: axis ticks, footer, legend end-labels. Only
+                      // for text that is furniture rather than content — it sits
+                      // below a comfortable reading size, so nothing a user has
+                      // to read to use the app belongs here.
     micro:  '10px',   // chart tick labels, tiny captions
     xs:     '11px',   // hints, secondary captions
     sm:     '12px',   // default secondary label size

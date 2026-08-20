@@ -1,12 +1,13 @@
 import React, { useRef, useEffect } from 'react';
 import { COLORMAPS } from '../../constants';
+import { t } from '../../theme';
 
 /** Interpolate hex colour from a colormap at position t ∈ [0,1] */
-const cmapHex = (colors, t, flip = false) => {
+const cmapHex = (colors, pos, flip = false) => {
   const cs  = flip ? [...colors].reverse() : colors;
   const seg = cs.length - 1;
-  const si  = Math.min(Math.floor(Math.min(t, 0.9999) * seg), seg - 1);
-  const lt  = t * seg - si;
+  const si  = Math.min(Math.floor(Math.min(pos, 0.9999) * seg), seg - 1);
+  const lt  = pos * seg - si;
   const lerp = (h1, h2) =>
     Math.round(parseInt(h1, 16) + (parseInt(h2, 16) - parseInt(h1, 16)) * lt)
       .toString(16).padStart(2, '0');
@@ -91,7 +92,7 @@ export function TextureLegend({
   };
 
   const rowLabelStyle = {
-    fontSize: '10px', fontWeight: 600, color: 'rgba(255,255,255,0.5)',
+    fontSize: t.fontSize.micro, fontWeight: 600, color: 'rgba(255,255,255,0.5)',
     textTransform: 'uppercase', letterSpacing: '0.06em',
     marginBottom: '4px',
   };
@@ -100,10 +101,10 @@ export function TextureLegend({
 
   return (
     <div style={cardStyle}>
-      <div style={{ color: 'white', fontSize: '12px', fontWeight: 600, marginBottom: '10px' }}>
+      <div style={{ color: 'white', fontSize: t.fontSize.sm, fontWeight: 600, marginBottom: '10px' }}>
         Texture
         {numBuckets > 0 && (
-          <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.4)', marginLeft: '6px' }}>
+          <span style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.4)', marginLeft: '6px' }}>
             {N} bins
           </span>
         )}
@@ -113,13 +114,13 @@ export function TextureLegend({
       <div style={{ marginBottom: '10px' }}>
         <div style={rowLabelStyle}>Value</div>
         <div style={{ display: 'flex', gap: '2px', marginBottom: '3px' }}>
-          {bins.map((t, i) => (
+          {bins.map((frac, i) => (
             <div
               key={i}
-              title={`${(t * maxVal).toFixed(1)} ${unit}`}
+              title={`${(frac * maxVal).toFixed(1)} ${unit}`}
               style={{
                 width: swatchW, height: swatchW,
-                background: cmapHex(colors, t, flipColormap),
+                background: cmapHex(colors, frac, flipColormap),
                 borderRadius: i === 0 ? '3px 0 0 3px' : i === N - 1 ? '0 3px 3px 0' : 0,
                 flexShrink: 0,
               }}
@@ -127,10 +128,10 @@ export function TextureLegend({
           ))}
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.5)' }}>
+          <span style={{ fontSize: t.fontSize.nano, color: 'rgba(255,255,255,0.5)' }}>
             {flipColormap ? maxVal.toFixed(1) : '0'}
           </span>
-          <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.5)' }}>
+          <span style={{ fontSize: t.fontSize.nano, color: 'rgba(255,255,255,0.5)' }}>
             {flipColormap ? '0' : maxVal.toFixed(1)} {unit}
           </span>
         </div>
@@ -140,8 +141,8 @@ export function TextureLegend({
       <div>
         <div style={rowLabelStyle}>Uncertainty</div>
         <div style={{ display: 'flex', gap: '2px', marginBottom: '3px' }}>
-          {bins.map((t, i) => {
-            const normStd = invertUncertainty ? (1 - t) : t;
+          {bins.map((frac, i) => {
+            const normStd = invertUncertainty ? (1 - frac) : frac;
             return (
               <div key={i} style={{ flexShrink: 0 }}>
                 <TextureSwatch normStd={normStd} textureStyle={textureStyle} size={swatchW} />
@@ -150,15 +151,15 @@ export function TextureLegend({
           })}
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.5)' }}>
+          <span style={{ fontSize: t.fontSize.nano, color: 'rgba(255,255,255,0.5)' }}>
             {invertUncertainty ? maxStd.toFixed(1) : '0'}
           </span>
-          <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.5)' }}>
+          <span style={{ fontSize: t.fontSize.nano, color: 'rgba(255,255,255,0.5)' }}>
             {invertUncertainty ? '0' : maxStd.toFixed(1)} {unit}
           </span>
         </div>
       </div>
-      <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '10px', marginTop: '8px' }}>
+      <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.micro, marginTop: '8px' }}>
         Colour = value · denser hatching = less certain.
       </div>
     </div>

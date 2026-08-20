@@ -1,6 +1,7 @@
 import React from 'react';
 import { Square, Hexagon, X } from 'lucide-react';
 import { METRIC_CONFIG, withUnit } from '../constants';
+import { t } from '../theme';
 
 /**
  * Draggable/minimizable floating panel for spatial metric computation.
@@ -81,10 +82,10 @@ export function MetricPanel({
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
           <span style={{ display: 'inline-flex' }}>{selectedRegion.type === 'rectangle' ? <Square size={14} /> : <Hexagon size={14} />}</span>
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: '12px', fontWeight: '700', color: 'rgba(255,255,255,0.9)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            <div style={{ fontSize: t.fontSize.sm, fontWeight: '700', color: 'rgba(255,255,255,0.9)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {selectedRegion.type === 'rectangle' ? 'Rectangle Region' : 'Polygon Region'}
             </div>
-            <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.4)', whiteSpace: 'nowrap' }}>
+            <div style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.4)', whiteSpace: 'nowrap' }}>
               {selectedRegion.bounds.min_lat.toFixed(1)}°–{selectedRegion.bounds.max_lat.toFixed(1)}°N &nbsp;
               {selectedRegion.bounds.min_lon.toFixed(1)}°–{selectedRegion.bounds.max_lon.toFixed(1)}°E
             </div>
@@ -95,7 +96,7 @@ export function MetricPanel({
             onMouseDown={e => e.stopPropagation()}
             onClick={() => setPanelMinimized(v => !v)}
             title={panelMinimized ? 'Expand' : 'Minimize'}
-            style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.7)', cursor: 'pointer', borderRadius: '4px', width: '22px', height: '22px', fontSize: '12px', lineHeight: '20px', textAlign: 'center', padding: 0 }}>
+            style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.7)', cursor: 'pointer', borderRadius: '4px', width: '22px', height: '22px', fontSize: t.fontSize.sm, lineHeight: '20px', textAlign: 'center', padding: 0 }}>
             {panelMinimized ? '＋' : '－'}
           </button>
           <button
@@ -113,17 +114,17 @@ export function MetricPanel({
         <div style={{ padding: '14px 14px 12px' }}>
           {/* Metric selector */}
           <div style={{ marginBottom: '11px' }}>
-            <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.45)', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Metric</div>
+            <div style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.45)', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Metric</div>
             <select
               value={metricType}
               onChange={e => setMetricType(e.target.value)}
-              style={{ width: '100%', padding: '6px 8px', fontSize: '12px', fontWeight: '600', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'rgba(255,255,255,0.85)', cursor: 'pointer', outline: 'none' }}>
+              style={{ width: '100%', padding: '6px 8px', fontSize: t.fontSize.sm, fontWeight: '600', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'rgba(255,255,255,0.85)', cursor: 'pointer', outline: 'none' }}>
               {METRIC_CONFIG.map(m => (
                 <option key={m.key} value={m.key} style={{ background: '#1a2535', color: 'white' }}>{m.label}</option>
               ))}
             </select>
             {metricCfg && (
-              <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)', marginTop: '4px', lineHeight: '1.4' }}>
+              <div style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.3)', marginTop: '4px', lineHeight: '1.4' }}>
                 {withUnit(metricCfg.description, selectedVariable)}
               </div>
             )}
@@ -132,11 +133,11 @@ export function MetricPanel({
           {/* Hour selector (SSR only) */}
           {metricCfg?.requiresHour && (
             <div style={{ marginBottom: '11px' }}>
-              <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.45)', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Forecast Hour</div>
+              <div style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.45)', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Forecast Hour</div>
               <div style={{ display: 'flex', gap: '5px' }}>
                 {hourOptions.map(h => (
                   <button key={h} onClick={() => setMetricHour(h)}
-                    style={{ flex: 1, padding: '5px 0', fontSize: '11px', fontWeight: '600',
+                    style={{ flex: 1, padding: '5px 0', fontSize: t.fontSize.xs, fontWeight: '600',
                       border: metricHour === h ? '2px solid #e67e22' : '2px solid rgba(255,255,255,0.12)',
                       borderRadius: '6px',
                       background: metricHour === h ? 'rgba(230,126,34,0.2)' : 'rgba(255,255,255,0.04)',
@@ -153,18 +154,18 @@ export function MetricPanel({
           {/* Threshold input — categorical metrics only */}
           {metricCfg?.requiresThreshold && (
             <div style={{ marginBottom: '11px' }}>
-              <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.45)', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Threshold</div>
+              <div style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.45)', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Threshold</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <input
                   type="number" min="0" step="1"
                   value={metricThreshold}
                   onChange={e => setMetricThreshold(Number(e.target.value))}
-                  style={{ flex: 1, padding: '5px 8px', fontSize: '12px', fontWeight: '600', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'white', textAlign: 'right', outline: 'none' }}
+                  style={{ flex: 1, padding: '5px 8px', fontSize: t.fontSize.sm, fontWeight: '600', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'white', textAlign: 'right', outline: 'none' }}
                 />
-                <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', whiteSpace: 'nowrap' }}>{thresholdUnit}</span>
+                <span style={{ fontSize: t.fontSize.xs, color: 'rgba(255,255,255,0.4)', whiteSpace: 'nowrap' }}>{thresholdUnit}</span>
               </div>
               {thresholdRate != null && Number.isFinite(thresholdRate) && (
-                <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.35)', marginTop: '4px' }}>
+                <div style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.35)', marginTop: '4px' }}>
                   ≡ {thresholdRate.toFixed(2)} mm/h — the rate compared against the map
                 </div>
               )}
@@ -173,14 +174,14 @@ export function MetricPanel({
 
           {/* Compute */}
           <button onClick={computeSpatialMetric} disabled={spatialLoading}
-            style={{ width: '100%', padding: '9px', fontSize: '12px', fontWeight: '700', background: spatialLoading ? 'rgba(52,152,219,0.25)' : 'rgba(52,152,219,0.82)', border: 'none', borderRadius: '7px', color: 'white', cursor: spatialLoading ? 'default' : 'pointer', marginBottom: '11px', transition: 'all 0.2s' }}>
+            style={{ width: '100%', padding: '9px', fontSize: t.fontSize.sm, fontWeight: '700', background: spatialLoading ? 'rgba(52,152,219,0.25)' : 'rgba(52,152,219,0.82)', border: 'none', borderRadius: '7px', color: 'white', cursor: spatialLoading ? 'default' : 'pointer', marginBottom: '11px', transition: 'all 0.2s' }}>
             {spatialLoading ? '⏳ Computing…' : '▶ Compute Spatial Map'}
           </button>
 
           {/* Results legend */}
           {spatialData && !spatialLoading && (
             <div style={{ borderTop: '1px solid rgba(255,255,255,0.07)', paddingTop: '10px' }}>
-              <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.45)', marginBottom: '8px' }}>
+              <div style={{ fontSize: t.fontSize.xs, color: 'rgba(255,255,255,0.45)', marginBottom: '8px' }}>
                 {spatialData.points.length} grid points mapped
                 {spatialData.metric === 'correlation' && spatialData.n_hours != null && ` · ${spatialData.n_hours} lead times`}
               </div>
@@ -194,7 +195,7 @@ export function MetricPanel({
                   return (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       {cfg.legend.map(({ color, label }) => (
-                        <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: 'rgba(255,255,255,0.65)' }}>
+                        <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.65)' }}>
                           <div style={{ width: '12px', height: '12px', background: color, borderRadius: '2px', flexShrink: 0 }} />
                           {withUnit(label, selectedVariable)}
                         </div>
@@ -203,7 +204,7 @@ export function MetricPanel({
                           map still colours wind by them, so say whose scale it
                           is rather than let "Poor" read as a wind judgement. */}
                       {unitful && isWind && (
-                        <div style={{ fontSize: '9px', color: 'rgba(243,156,18,0.55)', marginTop: '2px', lineHeight: 1.35 }}>
+                        <div style={{ fontSize: t.fontSize.nano, color: 'rgba(243,156,18,0.55)', marginTop: '2px', lineHeight: 1.35 }}>
                           Band edges and verdicts are calibrated for precipitation, not for wind.
                         </div>
                       )}
@@ -215,11 +216,11 @@ export function MetricPanel({
                   return (
                     <div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
-                        <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.45)' }}>{lg.minLabel}</span>
+                        <span style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.45)' }}>{lg.minLabel}</span>
                         <div style={{ flex: 1, height: '12px', borderRadius: '3px', background: lg.css, border: '1px solid rgba(255,255,255,0.08)' }} />
-                        <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.45)' }}>{lg.maxLabel}</span>
+                        <span style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.45)' }}>{lg.maxLabel}</span>
                       </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', color: 'rgba(255,255,255,0.3)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: t.fontSize.nano, color: 'rgba(255,255,255,0.3)' }}>
                         {lg.midLabels.map(l => <span key={l}>{l}</span>)}
                       </div>
                     </div>

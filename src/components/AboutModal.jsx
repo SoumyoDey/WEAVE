@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { CloudRain, X } from 'lucide-react';
+import { t } from '../theme';
 
 /**
  * Full-screen guide to the application.
@@ -23,24 +24,31 @@ const C = {
   line:  '#e1e5e8',
 };
 
+// This modal is the app's one light surface and its one long-form reading
+// surface, so it keeps its own colours (C, above). Its SIZES are not special
+// though, and were the last holdouts outside the type scale. Two moved onto it
+// rather than earning a token of their own, both by a rounding:
+//   h2   20px -> xl   (18px), the heading tier the rest of the app uses
+//   p/ul 13.5 -> base (13px), which merges body prose with the note and row
+//                text it sits beside — they were always the same tier
 const S = {
-  h2:   { fontSize: '20px', color: C.head, margin: '0 0 6px 0', fontWeight: 700 },
-  lede: { fontSize: '14px', color: C.soft, margin: '0 0 20px 0', lineHeight: 1.6 },
-  h3:   { fontSize: '14px', color: C.head, margin: '22px 0 8px 0', fontWeight: 700 },
-  p:    { fontSize: '13.5px', color: C.body, lineHeight: 1.75, margin: '0 0 12px 0' },
-  ul:   { fontSize: '13.5px', color: C.body, lineHeight: 1.75, paddingLeft: '18px', margin: '0 0 12px 0' },
-  note: { background: C.panel, border: `1px solid ${C.line}`, borderRadius: '8px',
-          padding: '14px 16px', fontSize: '13px', color: C.body, lineHeight: 1.7, margin: '14px 0 0 0' },
+  h2:   { fontSize: t.fontSize.xl, color: C.head, margin: '0 0 6px 0', fontWeight: 700 },
+  lede: { fontSize: t.fontSize.md, color: C.soft, margin: '0 0 20px 0', lineHeight: 1.6 },
+  h3:   { fontSize: t.fontSize.md, color: C.head, margin: '22px 0 8px 0', fontWeight: 700 },
+  p:    { fontSize: t.fontSize.base, color: C.body, lineHeight: 1.75, margin: '0 0 12px 0' },
+  ul:   { fontSize: t.fontSize.base, color: C.body, lineHeight: 1.75, paddingLeft: '18px', margin: '0 0 12px 0' },
+  note: { background: C.panel, border: `1px solid ${C.line}`, borderRadius: t.radius,
+          padding: '14px 16px', fontSize: t.fontSize.base, color: C.body, lineHeight: 1.7, margin: '14px 0 0 0' },
   kbd:  { background: '#eef2f5', border: `1px solid ${C.line}`, borderRadius: '4px',
-          padding: '1px 6px', fontSize: '12px', fontFamily: 'ui-monospace, monospace', color: C.head },
+          padding: '1px 6px', fontSize: t.fontSize.sm, fontFamily: 'ui-monospace, monospace', color: C.head },
 };
 
 /** Small labelled row used by the tab and metric listings. */
 function Row({ label, children, width = 150 }) {
   return (
     <div style={{ display: 'flex', gap: '14px', padding: '9px 0', borderBottom: `1px solid ${C.line}`, alignItems: 'baseline' }}>
-      <div style={{ fontSize: '13px', fontWeight: 700, color: C.head, minWidth: `${width}px`, flexShrink: 0 }}>{label}</div>
-      <div style={{ fontSize: '13px', lineHeight: 1.65, color: C.soft }}>{children}</div>
+      <div style={{ fontSize: t.fontSize.base, fontWeight: 700, color: C.head, minWidth: `${width}px`, flexShrink: 0 }}>{label}</div>
+      <div style={{ fontSize: t.fontSize.base, lineHeight: 1.65, color: C.soft }}>{children}</div>
     </div>
   );
 }
@@ -309,9 +317,9 @@ export function AboutModal({ onClose, onReplayTour }) {
       >
         {/* Header */}
         <div style={{ padding: '22px 28px 16px', borderBottom: `1px solid ${C.line}`, flexShrink: 0 }}>
-          <h1 style={{ fontSize: '24px', margin: 0, color: C.head, display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <h1 style={{ fontSize: t.fontSize.statLg, margin: 0, color: C.head, display: 'flex', alignItems: 'center', gap: '10px' }}>
             <CloudRain size={24} style={{ color: C.blue }} />WEAVE
-            <span style={{ fontSize: '13px', fontWeight: 400, color: C.soft, marginLeft: '2px' }}>· guide</span>
+            <span style={{ fontSize: t.fontSize.base, fontWeight: 400, color: C.soft, marginLeft: '2px' }}>· guide</span>
           </h1>
           <button
             ref={closeBtnRef}
@@ -337,14 +345,14 @@ export function AboutModal({ onClose, onReplayTour }) {
                   key={s.id}
                   onClick={() => setActive(s.id)}
                   aria-current={on ? 'true' : undefined}
-                  style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 12px', marginBottom: '3px', fontSize: '13px', fontWeight: on ? 700 : 500, color: on ? '#1b6aa5' : C.soft, background: on ? 'rgba(52,152,219,0.12)' : 'transparent', border: 'none', borderRadius: '7px', cursor: 'pointer', lineHeight: 1.4 }}
+                  style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 12px', marginBottom: '3px', fontSize: t.fontSize.base, fontWeight: on ? 700 : 500, color: on ? '#1b6aa5' : C.soft, background: on ? 'rgba(52,152,219,0.12)' : 'transparent', border: 'none', borderRadius: '7px', cursor: 'pointer', lineHeight: 1.4 }}
                 >{s.nav}</button>
               );
             })}
             {onReplayTour && (
               <button
                 onClick={onReplayTour}
-                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 12px', marginTop: '10px', fontSize: '13px', fontWeight: 600, color: '#2980b9', background: 'rgba(52,152,219,0.08)', border: `1px solid rgba(52,152,219,0.35)`, borderRadius: '7px', cursor: 'pointer' }}
+                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 12px', marginTop: '10px', fontSize: t.fontSize.base, fontWeight: 600, color: '#2980b9', background: 'rgba(52,152,219,0.08)', border: `1px solid rgba(52,152,219,0.35)`, borderRadius: '7px', cursor: 'pointer' }}
               >▸ Take the tour</button>
             )}
           </nav>
@@ -357,7 +365,7 @@ export function AboutModal({ onClose, onReplayTour }) {
           </div>
         </div>
 
-        <div style={{ padding: '12px 28px', borderTop: `1px solid ${C.line}`, fontSize: '12px', color: '#95a5a6', display: 'flex', justifyContent: 'space-between', flexShrink: 0, flexWrap: 'wrap', gap: '6px' }}>
+        <div style={{ padding: '12px 28px', borderTop: `1px solid ${C.line}`, fontSize: t.fontSize.sm, color: '#95a5a6', display: 'flex', justifyContent: 'space-between', flexShrink: 0, flexWrap: 'wrap', gap: '6px' }}>
           <span>React · Leaflet · Flask · PostgreSQL</span>
           <span>© 2026 WEAVE Team — Northeastern University</span>
         </div>

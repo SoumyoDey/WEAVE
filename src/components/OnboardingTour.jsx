@@ -24,13 +24,13 @@ export function OnboardingTour({ open, onClose }) {
       <div role="dialog" aria-modal="true" aria-label="Welcome to WEAVE"
         style={{ width: '380px', maxWidth: '100%', background: t.panelRaised, border: `1px solid ${t.border}`, borderRadius: '14px', boxShadow: t.shadowPanel, color: t.text, overflow: 'hidden' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px 0' }}>
-          <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)' }}>Step {step + 1} of {STEPS.length}</span>
+          <span style={{ fontSize: t.fontSize.xs, color: 'rgba(255,255,255,0.4)' }}>Step {step + 1} of {STEPS.length}</span>
           <IconButton onClick={onClose} title="Skip" label="Skip tour" size={28} style={{ background: 'transparent', border: 'none', boxShadow: 'none', color: t.textMuted }}><X size={16} /></IconButton>
         </div>
         <div style={{ padding: '6px 24px 22px', textAlign: 'center' }}>
           <div style={{ width: '56px', height: '56px', borderRadius: '14px', background: t.accentSoft, color: t.accentText, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '8px auto 16px' }}><Icon size={28} /></div>
-          <h2 style={{ margin: '0 0 8px', fontSize: '18px', fontWeight: 600, color: 'white' }}>{title}</h2>
-          <p style={{ margin: 0, fontSize: '13px', lineHeight: 1.6, color: 'rgba(255,255,255,0.7)' }}>{body}</p>
+          <h2 style={{ margin: '0 0 8px', fontSize: t.fontSize.xl, fontWeight: 600, color: 'white' }}>{title}</h2>
+          <p style={{ margin: 0, fontSize: t.fontSize.base, lineHeight: 1.6, color: 'rgba(255,255,255,0.7)' }}>{body}</p>
 
           <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', margin: '18px 0' }}>
             {STEPS.map((_, i) => (
