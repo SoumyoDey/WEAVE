@@ -32,9 +32,9 @@ const C = {
 //   p/ul 13.5 -> base (13px), which merges body prose with the note and row
 //                text it sits beside — they were always the same tier
 const S = {
-  h2:   { fontSize: t.fontSize.xl, color: C.head, margin: '0 0 6px 0', fontWeight: 700 },
+  h2:   { fontSize: t.fontSize.xl, color: C.head, margin: '0 0 6px 0', fontWeight: t.fontWeight.bold },
   lede: { fontSize: t.fontSize.md, color: C.soft, margin: '0 0 20px 0', lineHeight: 1.6 },
-  h3:   { fontSize: t.fontSize.md, color: C.head, margin: '22px 0 8px 0', fontWeight: 700 },
+  h3:   { fontSize: t.fontSize.md, color: C.head, margin: '22px 0 8px 0', fontWeight: t.fontWeight.bold },
   p:    { fontSize: t.fontSize.base, color: C.body, lineHeight: 1.75, margin: '0 0 12px 0' },
   ul:   { fontSize: t.fontSize.base, color: C.body, lineHeight: 1.75, paddingLeft: '18px', margin: '0 0 12px 0' },
   note: { background: C.panel, border: `1px solid ${C.line}`, borderRadius: t.radius,
@@ -47,7 +47,7 @@ const S = {
 function Row({ label, children, width = 150 }) {
   return (
     <div style={{ display: 'flex', gap: '14px', padding: '9px 0', borderBottom: `1px solid ${C.line}`, alignItems: 'baseline' }}>
-      <div style={{ fontSize: t.fontSize.base, fontWeight: 700, color: C.head, minWidth: `${width}px`, flexShrink: 0 }}>{label}</div>
+      <div style={{ fontSize: t.fontSize.base, fontWeight: t.fontWeight.bold, color: C.head, minWidth: `${width}px`, flexShrink: 0 }}>{label}</div>
       <div style={{ fontSize: t.fontSize.base, lineHeight: 1.65, color: C.soft }}>{children}</div>
     </div>
   );
@@ -319,7 +319,7 @@ export function AboutModal({ onClose, onReplayTour }) {
         <div style={{ padding: '22px 28px 16px', borderBottom: `1px solid ${C.line}`, flexShrink: 0 }}>
           <h1 style={{ fontSize: t.fontSize.statLg, margin: 0, color: C.head, display: 'flex', alignItems: 'center', gap: '10px' }}>
             <CloudRain size={24} style={{ color: C.blue }} />WEAVE
-            <span style={{ fontSize: t.fontSize.base, fontWeight: 400, color: C.soft, marginLeft: '2px' }}>· guide</span>
+            <span style={{ fontSize: t.fontSize.base, fontWeight: t.fontWeight.normal, color: C.soft, marginLeft: '2px' }}>· guide</span>
           </h1>
           <button
             ref={closeBtnRef}
@@ -352,7 +352,7 @@ export function AboutModal({ onClose, onReplayTour }) {
             {onReplayTour && (
               <button
                 onClick={onReplayTour}
-                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 12px', marginTop: '10px', fontSize: t.fontSize.base, fontWeight: 600, color: '#2980b9', background: 'rgba(52,152,219,0.08)', border: `1px solid rgba(52,152,219,0.35)`, borderRadius: '7px', cursor: 'pointer' }}
+                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 12px', marginTop: '10px', fontSize: t.fontSize.base, fontWeight: t.fontWeight.semibold, color: '#2980b9', background: 'rgba(52,152,219,0.08)', border: `1px solid rgba(52,152,219,0.35)`, borderRadius: '7px', cursor: 'pointer' }}
               >▸ Take the tour</button>
             )}
           </nav>

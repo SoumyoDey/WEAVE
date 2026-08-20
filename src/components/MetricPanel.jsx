@@ -82,7 +82,7 @@ export function MetricPanel({
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
           <span style={{ display: 'inline-flex' }}>{selectedRegion.type === 'rectangle' ? <Square size={14} /> : <Hexagon size={14} />}</span>
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: t.fontSize.sm, fontWeight: '700', color: 'rgba(255,255,255,0.9)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            <div style={{ fontSize: t.fontSize.sm, fontWeight: t.fontWeight.bold, color: 'rgba(255,255,255,0.9)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {selectedRegion.type === 'rectangle' ? 'Rectangle Region' : 'Polygon Region'}
             </div>
             <div style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.4)', whiteSpace: 'nowrap' }}>
@@ -118,7 +118,7 @@ export function MetricPanel({
             <select
               value={metricType}
               onChange={e => setMetricType(e.target.value)}
-              style={{ width: '100%', padding: '6px 8px', fontSize: t.fontSize.sm, fontWeight: '600', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'rgba(255,255,255,0.85)', cursor: 'pointer', outline: 'none' }}>
+              style={{ width: '100%', padding: '6px 8px', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'rgba(255,255,255,0.85)', cursor: 'pointer', outline: 'none' }}>
               {METRIC_CONFIG.map(m => (
                 <option key={m.key} value={m.key} style={{ background: '#1a2535', color: 'white' }}>{m.label}</option>
               ))}
@@ -137,7 +137,7 @@ export function MetricPanel({
               <div style={{ display: 'flex', gap: '5px' }}>
                 {hourOptions.map(h => (
                   <button key={h} onClick={() => setMetricHour(h)}
-                    style={{ flex: 1, padding: '5px 0', fontSize: t.fontSize.xs, fontWeight: '600',
+                    style={{ flex: 1, padding: '5px 0', fontSize: t.fontSize.xs, fontWeight: t.fontWeight.semibold,
                       border: metricHour === h ? '2px solid #e67e22' : '2px solid rgba(255,255,255,0.12)',
                       borderRadius: '6px',
                       background: metricHour === h ? 'rgba(230,126,34,0.2)' : 'rgba(255,255,255,0.04)',
@@ -160,7 +160,7 @@ export function MetricPanel({
                   type="number" min="0" step="1"
                   value={metricThreshold}
                   onChange={e => setMetricThreshold(Number(e.target.value))}
-                  style={{ flex: 1, padding: '5px 8px', fontSize: t.fontSize.sm, fontWeight: '600', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'white', textAlign: 'right', outline: 'none' }}
+                  style={{ flex: 1, padding: '5px 8px', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'white', textAlign: 'right', outline: 'none' }}
                 />
                 <span style={{ fontSize: t.fontSize.xs, color: 'rgba(255,255,255,0.4)', whiteSpace: 'nowrap' }}>{thresholdUnit}</span>
               </div>
@@ -174,7 +174,7 @@ export function MetricPanel({
 
           {/* Compute */}
           <button onClick={computeSpatialMetric} disabled={spatialLoading}
-            style={{ width: '100%', padding: '9px', fontSize: t.fontSize.sm, fontWeight: '700', background: spatialLoading ? 'rgba(52,152,219,0.25)' : 'rgba(52,152,219,0.82)', border: 'none', borderRadius: '7px', color: 'white', cursor: spatialLoading ? 'default' : 'pointer', marginBottom: '11px', transition: 'all 0.2s' }}>
+            style={{ width: '100%', padding: '9px', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.bold, background: spatialLoading ? 'rgba(52,152,219,0.25)' : 'rgba(52,152,219,0.82)', border: 'none', borderRadius: '7px', color: 'white', cursor: spatialLoading ? 'default' : 'pointer', marginBottom: '11px', transition: 'all 0.2s' }}>
             {spatialLoading ? '⏳ Computing…' : '▶ Compute Spatial Map'}
           </button>
 

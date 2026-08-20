@@ -25,8 +25,8 @@ export function IDWLegend({ selectedColormap, stats, selectedVariable, selectedM
 
   return (
     <div style={cardStyle}>
-      <div style={{ color: 'white', fontSize: t.fontSize.sm, fontWeight: 600, marginBottom: '8px' }}>
-        {varLabel} <span style={{ fontWeight: 400, opacity: 0.7 }}>({unit})</span>
+      <div style={{ color: 'white', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, marginBottom: '8px' }}>
+        {varLabel} <span style={{ fontWeight: t.fontWeight.normal, opacity: 0.7 }}>({unit})</span>
       </div>
 
       {/* Gradient bar */}

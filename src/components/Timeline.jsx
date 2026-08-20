@@ -175,7 +175,7 @@ export function Timeline({ currentModel, selectedHour, setSelectedHour, obsCover
           marginLeft: isNarrow ? 'auto' : 0,
         }}>
           <div>
-            <span style={{ fontSize: isNarrow ? t.fontSize.md : t.fontSize.lg, fontWeight: '800', color: 'white', letterSpacing: '-0.5px' }}>+{selectedHour}h</span>
+            <span style={{ fontSize: isNarrow ? t.fontSize.md : t.fontSize.lg, fontWeight: t.fontWeight.heavy, color: 'white', letterSpacing: '-0.5px' }}>+{selectedHour}h</span>
             <span style={{ fontSize: t.fontSize.xs, color: 'rgba(255,255,255,0.38)', marginLeft: '5px' }}>({(selectedHour / 24).toFixed(1)}d)</span>
           </div>
           {!isNarrow && (
@@ -199,7 +199,7 @@ export function Timeline({ currentModel, selectedHour, setSelectedHour, obsCover
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', marginLeft: '-20px', marginRight: '-20px', padding: '3px 20px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', marginTop: '6px' }}>
           <span style={{ fontSize: t.fontSize.nano, color: 'rgba(255,255,255,0.2)', letterSpacing: '0.03em' }}>© {new Date().getFullYear()} Northeastern University</span>
           <span style={{ fontSize: t.fontSize.nano, color: 'rgba(255,255,255,0.1)' }}>·</span>
-          <span style={{ fontSize: t.fontSize.nano, color: 'rgba(255,255,255,0.15)', letterSpacing: '0.05em', fontWeight: 600 }}>WEAVE</span>
+          <span style={{ fontSize: t.fontSize.nano, color: 'rgba(255,255,255,0.15)', letterSpacing: '0.05em', fontWeight: t.fontWeight.semibold }}>WEAVE</span>
         </div>
       )}
     </div>

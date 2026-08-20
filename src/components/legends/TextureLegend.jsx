@@ -92,7 +92,7 @@ export function TextureLegend({
   };
 
   const rowLabelStyle = {
-    fontSize: t.fontSize.micro, fontWeight: 600, color: 'rgba(255,255,255,0.5)',
+    fontSize: t.fontSize.micro, fontWeight: t.fontWeight.semibold, color: 'rgba(255,255,255,0.5)',
     textTransform: 'uppercase', letterSpacing: '0.06em',
     marginBottom: '4px',
   };
@@ -101,7 +101,7 @@ export function TextureLegend({
 
   return (
     <div style={cardStyle}>
-      <div style={{ color: 'white', fontSize: t.fontSize.sm, fontWeight: 600, marginBottom: '10px' }}>
+      <div style={{ color: 'white', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, marginBottom: '10px' }}>
         Texture
         {numBuckets > 0 && (
           <span style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.4)', marginLeft: '6px' }}>

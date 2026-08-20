@@ -201,8 +201,8 @@ function App() {
   // 300 ms debounce so rapid timeline scrubbing fires only one request.
   useEffect(() => {
     if (!mapInstanceRef.current) return;
-    const t = setTimeout(loadDataForHour, 300);
-    return () => clearTimeout(t);
+    const id = setTimeout(loadDataForHour, 300);
+    return () => clearTimeout(id);
   }, [selectedHour, selectedModel, selectedMember, selectedVariable]); // eslint-disable-line
 
   // ── Redraw IDW / VSup when colormap or invert changes ────────────────────────
@@ -599,10 +599,10 @@ function App() {
 
       {/* Tab bar */}
       <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: TAB_BAR_H, background: 'rgba(22,33,44,0.98)', display: 'flex', alignItems: 'center', zIndex: 1100, boxShadow: '0 2px 8px rgba(0,0,0,0.35)', paddingLeft: '16px', gap: '4px' }}>
-        <span style={{ color: 'white', fontWeight: '700', fontSize: t.fontSize.lg, marginRight: isNarrow ? '8px' : '16px', letterSpacing: '1px', display: 'inline-flex', alignItems: 'center', gap: '7px' }}><CloudRain size={18} style={{ color: '#3aa0ff' }} />{!isNarrow && 'WEAVE'}</span>
+        <span style={{ color: 'white', fontWeight: t.fontWeight.bold, fontSize: t.fontSize.lg, marginRight: isNarrow ? '8px' : '16px', letterSpacing: '1px', display: 'inline-flex', alignItems: 'center', gap: '7px' }}><CloudRain size={18} style={{ color: '#3aa0ff' }} />{!isNarrow && 'WEAVE'}</span>
         {[['visualization', MapIcon, 'Visualization'], ['analysis', BarChart3, 'Analysis'], ['comparison', Scale, 'Comparison']].map(([id, Icon, label]) => (
           <button key={id} onClick={() => setActiveTab(id)} title={label} aria-label={label}
-            style={{ padding: isNarrow ? '6px 12px' : '6px 20px', fontSize: t.fontSize.base, fontWeight: '600', border: 'none', borderRadius: '6px', cursor: 'pointer', transition: 'all 0.2s', background: activeTab === id ? 'rgba(255,255,255,0.15)' : 'transparent', color: activeTab === id ? 'white' : t.textMuted, borderBottom: activeTab === id ? '2px solid #3498db' : '2px solid transparent', display: 'inline-flex', alignItems: 'center', gap: '7px' }}>
+            style={{ padding: isNarrow ? '6px 12px' : '6px 20px', fontSize: t.fontSize.base, fontWeight: t.fontWeight.semibold, border: 'none', borderRadius: '6px', cursor: 'pointer', transition: 'all 0.2s', background: activeTab === id ? 'rgba(255,255,255,0.15)' : 'transparent', color: activeTab === id ? 'white' : t.textMuted, borderBottom: activeTab === id ? '2px solid #3498db' : '2px solid transparent', display: 'inline-flex', alignItems: 'center', gap: '7px' }}>
             <Icon size={15} />{!isNarrow && label}
           </button>
         ))}
