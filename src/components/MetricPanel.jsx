@@ -99,6 +99,11 @@ export function MetricPanel({
             onMouseDown={e => e.stopPropagation()}
             onClick={() => setPanelMinimized(v => !v)}
             title={panelMinimized ? 'Expand' : 'Minimize'}
+            /* Without this the accessible name falls back to the button's text,
+               which is a fullwidth ＋/－ glyph — announced as punctuation. The
+               Close button beside it only reads correctly because its content
+               is an icon with no text at all. */
+            aria-label={panelMinimized ? 'Expand panel' : 'Minimize panel'}
             style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.7)', cursor: 'pointer', borderRadius: '4px', width: '22px', height: '22px', fontSize: t.fontSize.sm, lineHeight: '20px', textAlign: 'center', padding: 0 }}>
             {panelMinimized ? '＋' : '－'}
           </button>

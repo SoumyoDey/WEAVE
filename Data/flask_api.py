@@ -1617,7 +1617,13 @@ def get_spread_skill():
             return jsonify({'error': f'No data found for model {model_name}'}), 404
 
         cursor.execute("SELECT initialization_time FROM forecast_runs WHERE run_id = %s", (run_id,))
-        init_time = cursor.fetchone()['initialization_time']
+        run_row = cursor.fetchone()
+        if not run_row:
+            # get_model_run_id caches per request and the ingest deletes and
+            # reloads runs, so the row can be gone between the two queries.
+            # Unguarded this indexed None and turned a missing run into a 500.
+            return jsonify({'error': f'No data found for model {model_name}'}), 404
+        init_time = run_row['initialization_time']
         is_wind   = (variable == 'wind')
 
         # Verification runs on the shared 0.5 degree grid — the same truth path
@@ -1700,7 +1706,10 @@ def get_spatial_metric():
         cursor.execute(
             "SELECT initialization_time FROM forecast_runs WHERE run_id = %s", (run_id,)
         )
-        init_time = cursor.fetchone()['initialization_time']
+        run_row = cursor.fetchone()
+        if not run_row:
+            return jsonify({'error': f'No data found for model {model_name}'}), 404
+        init_time = run_row['initialization_time']
 
         cursor.execute(
             "SELECT variable_id FROM variables WHERE variable_name = %s", (var_lookup,)

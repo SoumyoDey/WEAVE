@@ -17,72 +17,14 @@ from datetime import datetime, timedelta
 import pytest
 
 import flask_api as api
+from conftest import RoutedCursor          # noqa: F401  (re-exported for tests below)
 
 
 INIT = datetime(2025, 9, 8, 0, 0, 0)
 
 
-# ── Fake database ─────────────────────────────────────────────────────────────
-class RoutedCursor:
-    """Stands in for a psycopg2 RealDictCursor.
-
-    `routes` maps a substring of the SQL to either a list of row dicts or a
-    callable taking the bound params and returning one. The first matching
-    route wins; an unmatched query yields no rows, which is what an endpoint
-    would see for a region with no data.
-    """
-
-    def __init__(self, routes=None):
-        self.routes = routes or {}
-        self.executed = []
-        self._rows = []
-
-    def execute(self, sql, params=None):
-        self.executed.append((" ".join(sql.split()), params))
-        for fragment, rows in self.routes.items():
-            if fragment in " ".join(sql.split()):
-                self._rows = rows(params) if callable(rows) else list(rows)
-                return
-        self._rows = []
-
-    def fetchone(self):
-        return self._rows[0] if self._rows else None
-
-    def fetchall(self):
-        return list(self._rows)
-
-    def close(self):
-        pass
-
-
-class _FakeConn:
-    def __init__(self, cursor):
-        self._cursor = cursor
-
-    def cursor(self, *a, **kw):
-        return self._cursor
-
-    def close(self):
-        pass
-
-
-@pytest.fixture
-def client():
-    api.app.config.update(TESTING=True)
-    return api.app.test_client()
-
-
-@pytest.fixture
-def fake_db(monkeypatch):
-    """Point the endpoints at a RoutedCursor instead of the connection pool."""
-    def _install(routes=None):
-        cur = RoutedCursor(routes)
-        monkeypatch.setattr(api, "get_db_connection", lambda: _FakeConn(cur))
-        monkeypatch.setattr(api, "return_db_connection", lambda conn: None)
-        # Member counts hit a very large table; keep them out of these tests.
-        monkeypatch.setattr(api, "_ensemble_size", lambda cursor, model: 50)
-        return cur
-    return _install
+# The fake database, RoutedCursor and _FakeConn now live in conftest.py, so
+# test_error_paths.py can drive the same endpoints through the same stand-in.
 
 
 def _fcst_row(hour, lat=36.0, lon=-75.5, mean=1.0, std=0.5):
@@ -102,6 +44,8 @@ def _obs_rows(hours, lat=36.0, lon=-75.5, value=1.0, per_cell=False):
 
 # ── Request validation ────────────────────────────────────────────────────────
 # These run before any DB access, so they need no fake database at all.
+
+
 class TestValidationReturns400:
     @pytest.mark.parametrize("path", [
         "/api/compare/skill", "/api/compare/timeseries", "/api/compare/categorical",

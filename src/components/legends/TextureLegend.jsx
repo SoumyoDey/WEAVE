@@ -20,7 +20,12 @@ function TextureSwatch({ normStd, textureStyle, size = 28 }) {
   useEffect(() => {
     const canvas = ref.current;
     if (!canvas) return;
+    // getContext returns null when 2D is unavailable — a headless renderer, a
+    // canvas past the size limit, or a browser with it disabled. The legend is
+    // decoration over a map that still works, so skip the drawing rather than
+    // throwing inside an effect and unmounting the tree above it.
     const ctx = canvas.getContext('2d');
+    if (!ctx) return;
     ctx.clearRect(0, 0, size, size);
     // Background — neutral grey to show texture clearly
     ctx.fillStyle = '#6aaa80';
