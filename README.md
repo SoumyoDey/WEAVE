@@ -15,7 +15,7 @@ The main map view for real-time forecast exploration. Controls live in a single 
 - **IDW interpolation** — Smooth spatial field rendering via inverse-distance weighting
 - **Wind overlays** — Arrow glyphs and animated streamlines
 - **Timeline** — Transport controls (step/play/pause), a scrubber from +0 h to +360 h (15 days), and a persistent valid-time + lead-time readout
-- **Spatial Metric overlay (MetricPanel)** — Live per-grid-point dot overlay for any of 10 verification metrics with configurable threshold and legend
+- **Spatial Metric overlay (MetricPanel)** — Live per-grid-point dot overlay for any of 11 verification metrics with configurable threshold and legend
 - **Onboarding tour** — First-run 3-step walkthrough (pick data → read the map → explore uncertainty), replayable any time from the About modal
 - **Accessibility** — Viridis (colorblind-safe, perceptually uniform) is the default colormap; keyboard-operable controls, visible focus rings, and `prefers-reduced-motion` support throughout
 - **Responsive** — Sidebar and tab bar reflow to a mobile-friendly layout below ~760px wide
@@ -42,7 +42,8 @@ Deep-dive analysis for a clicked point or a drawn region, with plain-language re
 | Section | Description |
 |---------|-------------|
 | **Cone of Uncertainty** | Ensemble mean ± 1σ / ± 2σ (or empirical P10–P90) shaded area chart across the full lead-time range |
-| **Spread-Skill Analysis** | Per-lead-time SSR bar chart, spread vs. \|error\| comparison chart, mean SSR and Pearson correlation badges, and a plain-language calibration readout (severely overconfident → overconfident → well calibrated → underconfident → severely underconfident) |
+| **Spread-Skill Analysis** | Per-lead-time SSR bar chart, spread vs. \|error\| comparison chart, aggregated-SSR and Pearson-correlation badges, and a plain-language calibration readout (severely overconfident → overconfident → well calibrated → underconfident → severely underconfident) |
+| **Accuracy vs observations** | Bias, MAE, RMSE and CRPS at the clicked cell, pooled over the verified lead times. Same request and the same matched cases as the spread numbers above, so the two rows cannot disagree — and the same values the Comparison point panel reports for that cell |
 | **Verification Metrics** | Run CSI, POD, FAR, FBI, Brier Score, FSS and Composite Confidence at a configurable threshold and hour range; point or region sub-mode with charts. A **Scored area** control widens the box so FSS has a neighbourhood to work with, while the contingency table keeps reading the centre cell only — so the point metrics do not move |
 
 #### 🗺 Region Mode
@@ -88,22 +89,35 @@ These matter for reading any cross-model number, and are the subject of `METRICS
 
 ## Spatial Verification Metrics
 
-All metrics are computed from `regridded_forecast_ens` + `regridded_observation` and returned as `{lat, lon, value}` point lists, then rendered server-side by Cartopy. `regridded_forecast_ens` carries the ensemble mean and a **true ensemble spread**, derived from `regridded_forecast_member` — each member bilinearly regridded onto the shared 0.5° grid — rather than the pooled member × cell spread the older `regridded_forecast` table stored.
+Metrics are returned as `{lat, lon, value}` point lists on the shared 0.5° grid and rendered server-side by Cartopy. Truth is always `regridded_observation`, averaged over the window each forecast record spans.
 
-| Key | Full name | Direction |
-|-----|-----------|-----------|
-| `ssr_agg` | Spread-Skill Ratio (time-aggregated) | Ideal ≈ 1 |
-| `correlation` | Spread-Skill Correlation | Higher = better |
-| `bias` | Bias / Mean Error | Ideal = 0 |
-| `mae` | Mean Absolute Error | Lower = better |
-| `rmse` | Root Mean Square Error | Lower = better |
-| `crps` | Continuous Ranked Probability Score | Lower = better |
-| `csi` | Critical Success Index | Higher = better |
-| `pod` | Probability of Detection | Higher = better |
-| `far` | False Alarm Ratio | Lower = better |
-| `brier` | Brier Score | Lower = better |
+Two forecast sources, by whether the metric needs the ensemble spread:
 
-> **Note:** `ssr` (single lead-time SSR) is also registered for use in the MetricPanel live overlay. Region mode uses `ssr_agg`, which aggregates across all verified lead times using the regridded tables.
+- **Spread-dependent** (`ssr`, `ssr_agg`, `correlation`, and the point panels) read `regridded_forecast_member` and pool the members in Python. A cumulative model's increment spread cannot be recovered from stored totals — the approximation √(σ(h)² − σ(h−p)²) assumes independent increments and goes negative for ~13% of AIFS records — and re-binning onto the common verification window discards the spread outright, which left hourly models with no spread-dependent scores at all. Differencing each member first is exact and fixes both.
+- **Everything else** reads `regridded_forecast_ens` (ensemble mean and spread over the regridded members, sample `ddof=1`), which is enough when only the mean is needed.
+
+| Key | Full name | Direction | Map? |
+|-----|-----------|-----------|------|
+| `ssr` | Spread-Skill Ratio (single lead time) | Ideal ≈ 1 | ✓ |
+| `ssr_agg` | Spread-Skill Ratio (time-aggregated) | Ideal ≈ 1 | ✓ |
+| `correlation` | Spread-Skill Correlation | Higher = better | ✓ |
+| `bias` | Bias / Mean Error | Ideal = 0 | ✓ |
+| `mae` | Mean Absolute Error | Lower = better | ✓ |
+| `rmse` | Root Mean Square Error | Lower = better | ✓ |
+| `crps` | Continuous Ranked Probability Score | Lower = better | ✓ |
+| `csi` | Critical Success Index | Higher = better | ✓ |
+| `pod` | Probability of Detection | Higher = better | ✓ |
+| `far` | False Alarm Ratio | Lower = better | ✓ |
+| `brier` | Brier Score | Lower = better | ✓ |
+| `fss` | Fractions Skill Score | Higher = better | **no** |
+| `fbi` | Frequency Bias Index | Ideal = 1 | no |
+| `composite_confidence` | Weighted CSI/POD/FAR blend | Higher = better | no |
+
+> **`fss` has no map, on purpose.** It compares the *fraction* of exceedances in a neighbourhood against the observed fraction, so its value belongs to a whole field at a lead time rather than to a cell; drawing it per cell would map a number that is not a property of that cell. It is reported as a region number in both tabs and mapped in neither. In Analysis it arrives through the categorical panel rather than the region metric explorer, which is why it can look absent there.
+
+> **`fbi` and `composite_confidence` are Analysis-only.** No reason for that was recorded and it looks incidental; both are ordinary per-model scores. Worth noting before adding them to Comparison: a composite's weights are a judgement call, so ranking models by it is a different kind of claim from ranking them by CSI. See `CONSISTENCY_AUDIT.md` 1d.
+
+> **`ssr` vs `ssr_agg`:** `ssr` scores one lead time and drives the MetricPanel live overlay; region and point summaries use `ssr_agg`, which pools as mean(σ²)/mean(ε²) across verified lead times — deliberately *not* the mean of the per-case ratios, since E[X/Y] ≠ E[X]/E[Y] and one near-zero error drags a mean to the clamp.
 
 ---
 

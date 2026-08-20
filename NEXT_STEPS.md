@@ -184,12 +184,28 @@ Two non-defects worth not re-deriving, now pinned by tests:
 
 ## 3b. The member-grid migration — DONE (2026-08-19)
 
-Finding 11 established that the stored aggregate `std_dev` is the spread of the
-pooled (member × native-cell) population, so it carries within-cell spatial
-variance that is not ensemble spread at all — about 23% high on the loaded run.
-`/api/spread-skill` was moved onto `regridded_forecast_member` for that reason.
-**The spatial maps never were**, so the Analysis map and the Analysis point panel
-answered the same question from two different tables. This finishes it.
+`/api/spread-skill` reads `regridded_forecast_member`; **the spatial maps never
+did**, so the Analysis map and the Analysis point panel answered the same question
+from two different tables. This finishes it.
+
+**Correction, made 2026-08-20.** This section originally justified the migration
+with finding 11 — that the aggregate `std_dev` is a pooled (member × native-cell)
+spread carrying within-cell spatial variance, ~23% high. That is true of
+`regridded_forecast` and **false of `regridded_forecast_ens`**, whose `std_dev` is
+`nanstd(members, ddof=1)` over the regridded members and equals their sample
+spread exactly (verified: ratio 1.0000 at every cell checked). The migration was
+still right, for two reasons that are larger than the retracted one:
+
+- **A cumulative model's increment spread is not recoverable from stored totals.**
+  The aggregate path approximates it as √(σ(h)² − σ(h−p)²), which assumes
+  independent increments and goes negative for ~13% of AIFS records. At
+  36.0/−75.5, +12 h that is √(0.2128² − 0.1511²) = 0.1499 against an exact 0.1144
+  — 31% high, and it matches the old endpoint's output to four decimals.
+- **Re-binning destroys the spread outright**, so an hourly model had none on the
+  common window and every spread metric came back empty.
+
+Plus a minor third: the stored spread is a sample one (ddof=1), the member path
+computes the population one — √(n/(n−1)), so 1.010 for AIFS and 1.017 for GEFS.
 
 `_member_cases_by_cell` is now the single implementation behind `/api/spread-skill`
 and both spread-dependent maps (`metric=ssr`, `metric=correlation`). `_compute_
