@@ -9,6 +9,7 @@ import { fetchCategoricalMetrics, fetchRegionCategoricalMetrics } from '../api/a
 import { fetchSpatialMetric, fetchSpatialMetricPlot } from '../api/spatialApi';
 import { METRIC_CONFIG } from '../constants';
 import { t } from '../theme';
+import { LoadingState, EmptyState, NoDataNote } from './ui/PanelState';
 
 // Format signed lat/lon with hemisphere suffixes (so -75.5 reads "75.5°W", not
 // "-75.5°E"). Accepts numbers or numeric strings.
@@ -340,13 +341,11 @@ export function AnalysisTab({
           <>
             {/* Empty state */}
             {!clickedPoint && (
-              <div style={{ height: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', color: 'rgba(255,255,255,0.25)' }}>
-                <div>
-                  <div style={{ marginBottom: '16px', color: 'rgba(255,255,255,0.3)' }}><MapPin size={48} /></div>
-                  <p style={{ fontSize: t.fontSize.lg, margin: 0 }}>Click a point on the map</p>
-                  <p style={{ fontSize: t.fontSize.base, margin: '8px 0 0 0' }}>Switch to Visualization tab, click anywhere, then come back here</p>
-                </div>
-              </div>
+              <EmptyState
+                icon={<MapPin size={48} />}
+                title="Click a point on the map"
+                detail="Switch to Visualization tab, click anywhere, then come back here"
+              />
             )}
 
             {clickedPoint && (
@@ -379,7 +378,7 @@ export function AnalysisTab({
                   </div>
 
                   {timeseriesLoading && (
-                    <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.md, padding: '40px 0' }}>⏳ Loading forecast data…</div>
+                    <LoadingState label="Loading forecast data…" />
                   )}
 
                   {!timeseriesLoading && timeseriesData && (
@@ -459,7 +458,7 @@ export function AnalysisTab({
                   )}
 
                   {!timeseriesLoading && !timeseriesData && (
-                    <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.base, padding: '20px 0' }}>No forecast data available for this location</div>
+                    <NoDataNote>No forecast data available for this location</NoDataNote>
                   )}
                 </div>
 
@@ -498,22 +497,20 @@ export function AnalysisTab({
                   </div>
 
                   {ssrLoading && (
-                    <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.md, padding: '40px 0' }}>⏳ Loading spread-skill data…</div>
+                    <LoadingState label="Loading spread-skill data…" />
                   )}
 
                   {!ssrLoading && ssrData && ssrData.n_cases === 0 && (
-                    <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.base, padding: '20px 0' }}>
+                    <NoDataNote
+                      /* Name the extent rather than leaving the user to guess whether
+                         this is missing data, the wrong place, or a broken app. */
+                      detail={obsCoverage?.last_verifiable_hour != null
+                        ? `${obsCoverage.source} observations for this run end `
+                          + `${obsCoverage.record_end_lead_hours}h after initialisation, `
+                          + `so verification is available to +${obsCoverage.last_verifiable_hour}h.`
+                        : null}>
                       No overlapping observations found for this location and time window
-                      {/* Name the extent rather than leaving the user to guess whether
-                          this is missing data, the wrong place, or a broken app. */}
-                      {obsCoverage?.last_verifiable_hour != null && (
-                        <div style={{ fontSize: t.fontSize.sm, color: 'rgba(243,156,18,0.75)', marginTop: '6px' }}>
-                          {obsCoverage.source} observations for this run end{' '}
-                          {obsCoverage.record_end_lead_hours}h after initialisation,
-                          so verification is available to +{obsCoverage.last_verifiable_hour}h.
-                        </div>
-                      )}
-                    </div>
+                    </NoDataNote>
                   )}
 
                   {!ssrLoading && ssrData && ssrData.n_cases > 0 && (() => {
@@ -668,7 +665,7 @@ export function AnalysisTab({
                   })()}
 
                   {!ssrLoading && !ssrData && (
-                    <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.base, padding: '20px 0' }}>Spread-skill data unavailable</div>
+                    <NoDataNote>Spread-skill data unavailable</NoDataNote>
                   )}
                 </div>
 
@@ -698,22 +695,38 @@ export function AnalysisTab({
                   {/* Controls row */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
 
-                    {/* Point / Region mode toggle */}
-                    <div style={{ display: 'flex', borderRadius: t.radius, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.15)' }}>
-                      {['point', 'region'].map(mode => (
-                        <button
-                          key={mode}
-                          onClick={() => setCatMode(mode)}
-                          style={{
-                            padding: '5px 14px', fontSize: t.fontSize.sm, fontWeight: '600', cursor: 'pointer',
-                            background: catMode === mode ? 'rgba(52,152,219,0.25)' : 'rgba(255,255,255,0.04)',
-                            color:  catMode === mode ? 'rgba(52,152,219,0.95)' : 'rgba(255,255,255,0.4)',
-                            border: 'none', outline: 'none',
-                          }}
-                        >
-                          {mode === 'point' ? 'Point' : 'Region'}
-                        </button>
-                      ))}
+                    {/* What this panel scores over.
+
+                        NOT a second copy of the tab's Point|Region switch, though
+                        it used to read exactly like one — same two words, in the
+                        same tab, scoping different things
+                        (CONSISTENCY_AUDIT.md 3a). The tab switch chooses what the
+                        whole tab is about; this chooses the area the contingency
+                        table is built from, and it is the only route to the
+                        region-scored categorical numbers, so it stays. It now
+                        names the areas instead of repeating the mode. */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: t.fontSize.xs, whiteSpace: 'nowrap' }}>
+                        Score over
+                      </span>
+                      <div style={{ display: 'flex', borderRadius: t.radius, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.15)' }}>
+                        {[{ id: 'point', label: 'This cell' },
+                          { id: 'region', label: 'Drawn region' }].map(({ id, label }) => (
+                          <button
+                            key={id}
+                            onClick={() => setCatMode(id)}
+                            aria-pressed={catMode === id}
+                            style={{
+                              padding: '5px 14px', fontSize: t.fontSize.sm, fontWeight: '600', cursor: 'pointer',
+                              background: catMode === id ? 'rgba(52,152,219,0.25)' : 'rgba(255,255,255,0.04)',
+                              color:  catMode === id ? 'rgba(52,152,219,0.95)' : 'rgba(255,255,255,0.4)',
+                              border: 'none', outline: 'none',
+                            }}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
                     </div>
 
                     {/* Region badge — shown in region mode */}
@@ -1154,13 +1167,11 @@ export function AnalysisTab({
           <>
             {/* Empty state — no region drawn */}
             {!selectedRegion?.bounds && (
-              <div style={{ height: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', color: 'rgba(255,255,255,0.25)' }}>
-                <div>
-                  <div style={{ marginBottom: '16px', color: 'rgba(255,255,255,0.3)' }}><MapIcon size={48} /></div>
-                  <p style={{ fontSize: t.fontSize.lg, margin: 0 }}>Draw a region on the map</p>
-                  <p style={{ fontSize: t.fontSize.base, margin: '8px 0 0 0' }}>Use the rectangle or polygon selection tool in the Visualization tab</p>
-                </div>
-              </div>
+              <EmptyState
+                icon={<MapIcon size={48} />}
+                title="Draw a region on the map"
+                detail="Use the rectangle or polygon selection tool in the Visualization tab"
+              />
             )}
 
             {selectedRegion?.bounds && (

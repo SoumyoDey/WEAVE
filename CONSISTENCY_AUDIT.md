@@ -167,7 +167,7 @@ explicit `unit` for both variables on every endpoint that takes a threshold.
 
 ## Phase 3 — Page flow
 
-### 3a. Analysis has two "Point | Region" toggles — **accidental**
+### 3a. Analysis has two "Point | Region" toggles — **accidental · FIXED**
 
 | | control | scope | treatment |
 |---|---|---|---|
@@ -179,6 +179,16 @@ Two controls with the same two words in one tab, scoping different things and
 styled differently. A user who learns Comparison's single toggle meets two in
 Analysis, one of which looks like the one they know and does something narrower.
 
+**Fixed by removing the ambiguity, not the control.** Checking first showed the
+nested toggle is *not* a duplicate: tab-Region mode is only the spatial metric
+maps, so `catMode = 'region'` is the sole route to the region-scored categorical
+numbers — FSS, FBI, the composite and the contingency counts over a box. Deleting
+it would have cost capability.
+
+So it now names the areas instead of repeating the mode: **"Score over: This cell |
+Drawn region"**, with an `aria-pressed` state. Nothing moved, nothing was lost, and
+the two words no longer appear twice in one tab meaning two things.
+
 ### 3b. The scored area has two names — **accidental · FIXED**
 
 Analysis calls it **"Scored area"** (`AnalysisTab.jsx:724`), Comparison calls it
@@ -186,13 +196,25 @@ Analysis calls it **"Scored area"** (`AnalysisTab.jsx:724`), Comparison calls it
 only one should survive. **Fixed:** Comparison now says "Scored area" too, which
 also matches the backend's `scored_area` key.
 
-### 3c. Loading and empty states are per-panel in Analysis, shared in Comparison
+### 3c. Loading and empty states are per-panel in Analysis, shared in Comparison — **FIXED**
 
 Comparison routes its panels through one `⏳ Loading…` treatment
 (`ComparisonTab.jsx:176`) and one "No results yet" empty state. Analysis writes a
 bespoke string per panel ("⏳ Loading spread-skill data…", "No forecast data
 available for this location", "Spread-skill data unavailable"). Cosmetic, but it is
 why the two tabs feel different before any data arrives.
+
+**Fixed.** `ui/PanelState.jsx` now holds the three states a panel can be in before
+it has a result — `LoadingState`, `EmptyState`, `NoDataNote` — and both tabs use
+them: eight sites in Analysis, and Comparison's local `Spinner` and two
+"No results yet" blocks. Comparison's `Spinner` is kept as a one-line alias so its
+six call sites read unchanged.
+
+What is shared is the **treatment, not the wording**. Every message that carries
+information still carries it — including the observation-coverage line, which
+moved into `NoDataNote`'s `detail` slot rather than being flattened away. "No
+score here" and "no observations reach this lead time" have to stay
+distinguishable.
 
 ### 3d. Observation-coverage states now agree — **resolved**
 
@@ -270,9 +292,15 @@ The plan says to budget by risk, and the findings sort cleanly:
    by the member-grid migration and a client-side estimator that disagreed with
    the backend's. "The backend already returns them; this is wiring plus a panel"
    was wrong, and worth remembering as a caution about sizing work from a survey.
-4. **Do deliberately or not at all** — 3a the duplicate toggles and 3c the state
-   treatments. These are the changes most likely to annoy someone who knows the
-   current layout, which is exactly what the plan warns about.
+4. ~~**Do deliberately or not at all** — 3a the duplicate toggles and 3c the state
+   treatments.~~ **Done 2026-08-20**, and deliberately: 3a relabels rather than
+   removes, because the "duplicate" turned out to be the only route to the
+   region-scored categorical numbers; 3c unifies the treatment while leaving every
+   informative message intact. No control moved and no capability changed, which
+   is what the plan's warning was about.
+
+**All of phases 1–4 are now closed.** Phases 5 (typography) and 6 (text
+correctness) remain unrun — 6 is the one with the track record.
 
 The guardrail in the plan still applies: `ComparisonTab.jsx` is 2,300 lines and
 `AnalysisTab.jsx` is 1,264. Land these as fixes with tests, and decide about

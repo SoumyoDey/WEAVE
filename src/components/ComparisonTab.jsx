@@ -12,6 +12,7 @@ import {
 } from '../api/comparisonApi';
 import { fetchSpatialMetric, fetchSpatialMetricPlot } from '../api/spatialApi';
 import { t } from '../theme';
+import { LoadingState, EmptyState } from './ui/PanelState';
 
 const MODEL_COLORS = { AIFS: '#3498db', GEFS: '#e74c3c', UKMO: '#2ecc71' };
 
@@ -173,13 +174,9 @@ const SUBHEAD = {
 };
 
 // ── Small helpers ────────────────────────────────────────────────────────────
-function Spinner() {
-  return (
-    <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.md, padding: '40px 0', textAlign: 'center' }}>
-      ⏳ Loading…
-    </div>
-  );
-}
+// Kept as a thin alias so the ~6 call sites read the same as before; the
+// treatment itself is now shared with AnalysisTab (ui/PanelState).
+const Spinner = LoadingState;
 
 // Shown wherever region mode needs a bbox that hasn't been drawn yet.
 function RegionNudge() {
@@ -1200,19 +1197,7 @@ export function ComparisonTab({
 
         {/* ── Empty state (before first run) ── */}
         {!isRegionMode && !hasRun && (
-          <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            textAlign: 'center', color: 'rgba(255,255,255,0.25)',
-            padding: '60px 20px',
-          }}>
-            <div>
-              <div style={{ marginBottom: '16px', lineHeight: 1, color: 'rgba(255,255,255,0.3)' }}><Scale size={52} /></div>
-              <p style={{ fontSize: t.fontSize.lg, margin: '0 0 8px 0', color: 'rgba(255,255,255,0.4)' }}>
-                Configure the comparison above and click Run
-              </p>
-              <p style={{ fontSize: t.fontSize.base, margin: 0 }}>No results yet</p>
-            </div>
-          </div>
+          <EmptyState icon={<Scale size={52} />} title="Configure the comparison above and click Run" detail="No results yet" />
         )}
 
         {/* ── Region mode: needs a bbox before anything can run ── */}
@@ -1220,19 +1205,7 @@ export function ComparisonTab({
 
         {/* ── Region mode empty state (region drawn, nothing run yet) ── */}
         {isRegionMode && hasRegion && !hasRunRegion && (
-          <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            textAlign: 'center', color: 'rgba(255,255,255,0.25)',
-            padding: '60px 20px',
-          }}>
-            <div>
-              <div style={{ marginBottom: '16px', lineHeight: 1, color: 'rgba(255,255,255,0.3)' }}><MapPin size={52} /></div>
-              <p style={{ fontSize: t.fontSize.lg, margin: '0 0 8px 0', color: 'rgba(255,255,255,0.4)' }}>
-                Click Run Region Comparison to compare models over this region
-              </p>
-              <p style={{ fontSize: t.fontSize.base, margin: 0 }}>No results yet</p>
-            </div>
-          </div>
+          <EmptyState icon={<MapPin size={52} />} title="Click Run Region Comparison to compare models over this region" detail="No results yet" />
         )}
 
         {/* ── Region metric comparison (region mode) ── */}
