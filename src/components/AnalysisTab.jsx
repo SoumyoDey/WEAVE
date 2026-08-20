@@ -289,7 +289,9 @@ export function AnalysisTab({
     return '#3498db';
   };
 
-  const yAxisUnit = selectedVariable === 'wind' ? 'm/s' : 'mm/hr';
+  // 'mm/h', not 'mm/hr' — the same spelling the API returns in `units`, so a
+  // label and the response it describes cannot look like two different things.
+  const yAxisUnit = selectedVariable === 'wind' ? 'm/s' : 'mm/h';
 
   const verifiedAgainst = selectedVariable === 'precipitation'
     ? 'Verified against GPM IMERG V07B observations'
@@ -425,7 +427,7 @@ export function AnalysisTab({
                             label={{ value: 'Forecast Hour', position: 'insideBottom', offset: -15, fill: 'rgba(255,255,255,0.4)', fontSize: 12 }} />
                           <YAxis stroke="rgba(255,255,255,0.3)"
                             tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }}
-                            label={{ value: selectedVariable === 'wind' ? 'Wind Speed (m/s)' : 'Precipitation (mm/hr)', angle: -90, position: 'insideLeft', fill: 'rgba(255,255,255,0.4)', fontSize: 12 }} />
+                            label={{ value: selectedVariable === 'wind' ? 'Wind Speed (m/s)' : 'Precipitation (mm/h)', angle: -90, position: 'insideLeft', fill: 'rgba(255,255,255,0.4)', fontSize: 12 }} />
                           <Tooltip
                             contentStyle={{ background: '#1a2535', border: '1px solid rgba(255,255,255,0.15)', borderRadius: t.radius, color: 'white', fontSize: t.fontSize.sm }}
                             formatter={(value, name) => {
@@ -471,11 +473,13 @@ export function AnalysisTab({
                     <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.sm }}>
                       {verifiedAgainst}{' · Lead times with obs shown'}
                     </span>
-                    {/* Which sample these numbers came from. The Analysis tab reads
-                        native ensemble members while the Comparison tab reads the
-                        regridded aggregates, so the same metric can legitimately
-                        differ between the two — say so rather than let it look
-                        like a bug (METRICS_AUDIT.md finding 11). */}
+                    {/* Which sample these numbers came from. This used to warn that
+                        Analysis and Comparison could legitimately disagree, because
+                        Analysis read the members and Comparison the regridded
+                        aggregates. Both point paths now run `_member_cases_by_cell`
+                        and share `_point_summary`, so they agree exactly — the old
+                        wording would send a user looking for a difference that the
+                        member-grid migration removed. */}
                     {ssrData?.cell && (
                       <span
                         style={{
@@ -483,7 +487,7 @@ export function AnalysisTab({
                           background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.12)',
                           borderRadius: '10px', padding: '2px 9px',
                         }}
-                        title="Analysis verifies individual ensemble members at the nearest native grid cell. The Comparison tab uses the regridded ensemble mean and spread, so its values for the same metric can differ."
+                        title="Scored from the individual ensemble members in the nearest cell of the shared 0.5° grid. The Comparison tab scores this point from the same members by the same method, so the two tabs agree at any lead time they both cover."
                       >
                         ensemble members @ {fmtLat(ssrData.cell[0], 2)}, {fmtLon(ssrData.cell[1], 2)}
                         {ssrData.hours?.[0]?.n_members != null && ` · ${ssrData.hours[0].n_members} members`}

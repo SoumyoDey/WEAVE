@@ -6,7 +6,7 @@ export function VSUPBoxesLegend({ stats, selectedVariable, invertUncertainty = f
   const fracs = numBuckets > 1
     ? Array.from({ length: numBuckets }, (_, i) => (numBuckets - i - 0.5) / numBuckets)
     : [1.0, 0.75, 0.5, 0.25, 0.05];
-  const unit = selectedVariable === 'wind' ? 'm/s' : 'mm/hr';
+  const unit = selectedVariable === 'wind' ? 'm/s' : 'mm/h';
   // Labels are std-dev values → use the true stdMax from the layer, not the value-max stat.
   const maxStd = Number.isFinite(stdMax) ? stdMax : parseFloat(stats.max);
 

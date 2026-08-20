@@ -30,6 +30,20 @@ export function Timeline({ currentModel, selectedHour, setSelectedHour, obsCover
     ? Math.min(100, (verifiedTo / maxHour) * 100) : null;
   const pastVerified = verifiedTo != null && selectedHour > verifiedTo;
 
+  // Observations can outlast the last hour that can be *scored*: precipitation
+  // needs its whole 6 h window observed, so a record ending at +19.5h verifies
+  // only to +18h. Wind is instantaneous and the two coincide. Saying "no
+  // observations beyond +18h" was the wrong statement in the first case and the
+  // window clause is meaningless in the second, so the two are worded apart.
+  const recordEnd    = obsCoverage?.record_end_lead_hours ?? null;
+  const verifiedNote =
+    recordEnd == null
+      ? `Nothing to verify against beyond +${verifiedTo}h`
+      : recordEnd > verifiedTo
+        ? `Nothing to verify against beyond +${verifiedTo}h — observations run to `
+          + `+${recordEnd}h, and a score needs its whole window observed`
+        : `Nothing to verify against beyond +${verifiedTo}h — the observation record ends there`;
+
   // The initialisation time comes from the run, not a hard-coded date — the
   // latter silently lied the moment a different run was loaded.
   const baseDate  = obsCoverage?.init_time
@@ -121,7 +135,7 @@ export function Timeline({ currentModel, selectedHour, setSelectedHour, obsCover
               position: 'absolute', top: 0, left: `${verifiedPct}%`, right: 0,
               height: '4px', borderRadius: '0 2px 2px 0', pointerEvents: 'none',
               background: 'repeating-linear-gradient(45deg, rgba(243,156,18,0.30) 0 3px, rgba(243,156,18,0.08) 3px 6px)',
-            }} title={`No observations beyond +${verifiedTo}h — nothing to verify against`} />
+            }} title={verifiedNote} />
           )}
           <div style={{ position: 'absolute', top: '10px', left: 0, right: 0, pointerEvents: 'none' }}>
             {verifiedPct != null && verifiedPct < 100 && (

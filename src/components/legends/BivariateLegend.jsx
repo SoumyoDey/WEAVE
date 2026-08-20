@@ -18,7 +18,7 @@ export function BivariateLegend({ bivariateRanges, selectedColormap, selectedVar
   );
 
   const xLabel = selectedVariable === 'wind' ? 'Wind Speed' : 'Precipitation';
-  const unit   = selectedVariable === 'wind' ? 'm/s' : 'mm/hr';
+  const unit   = selectedVariable === 'wind' ? 'm/s' : 'mm/h';
 
   const colorMatrix = buildColorMatrix(selectedColormap, false, invertUncertainty, size, flipColormap);
 

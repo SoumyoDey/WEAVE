@@ -68,7 +68,7 @@ const SECTIONS = [
         <h3 style={S.h3}>What is loaded</h3>
         <Row label="AIFS" width={90}>ECMWF's AI model — 50 members, 0.25°</Row>
         <Row label="GEFS" width={90}>NCEP's global ensemble — 30 members, 0.5°</Row>
-        <Row label="UKMO" width={90}>Met Office ensemble — 18 members, 0.1875°</Row>
+        <Row label="UKMO" width={90}>Met Office ensemble — 18 members, 0.1875° × 0.28125°</Row>
         <Row label="Variables" width={90}>Precipitation and 10 m wind speed, verified against GPM IMERG and ERA5</Row>
 
         <div style={S.note}>
@@ -202,13 +202,17 @@ const SECTIONS = [
           Wind thresholds are plain <strong>m/s</strong>, since wind is already a rate.
         </p>
 
-        <h3 style={S.h3}>Every model is scored over the same six hours</h3>
+        <h3 style={S.h3}>Every precipitation model is scored over the same six hours</h3>
         <p style={S.p}>
           This one is easy to miss and changes conclusions. A one-hour average keeps peaks that a
           six-hour average smooths away, so a model reporting hourly would cross a high threshold
           more often than a model reporting six-hourly — for no reason but its cadence. Every model
           is re-expressed on a common six-hour window first, so a threshold asks one question of all
           of them.
+        </p>
+        <p style={S.p}>
+          <strong>Wind is exempt.</strong> It is an instantaneous value rather than an accumulation,
+          so there is no window to reconcile and its records are scored as they stand.
         </p>
 
         <h3 style={S.h3}>No observation, no score</h3>

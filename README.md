@@ -117,7 +117,7 @@ Two forecast sources, by whether the metric needs the ensemble spread:
 
 > **`fbi` and `composite_confidence` are Analysis-only.** No reason for that was recorded and it looks incidental; both are ordinary per-model scores. Worth noting before adding them to Comparison: a composite's weights are a judgement call, so ranking models by it is a different kind of claim from ranking them by CSI. See `CONSISTENCY_AUDIT.md` 1d.
 
-> **`ssr` vs `ssr_agg`:** `ssr` scores one lead time and drives the MetricPanel live overlay; region and point summaries use `ssr_agg`, which pools as mean(σ²)/mean(ε²) across verified lead times — deliberately *not* the mean of the per-case ratios, since E[X/Y] ≠ E[X]/E[Y] and one near-zero error drags a mean to the clamp.
+> **`ssr` vs `ssr_agg`:** `ssr` scores one lead time and drives the MetricPanel live overlay; region and point summaries use `ssr_agg`, which pools as **√(mean(σ²) / mean(ε²))** across verified lead times — deliberately *not* the mean of the per-case ratios, since E[X/Y] ≠ E[X]/E[Y] and one near-zero error drags a mean to the clamp. Note the square root: both are reported as spread over error (σ/RMSE), not as a variance ratio, because the calibration bands the colourbar and the UI use are the σ/RMSE ones (`METRICS_AUDIT.md` finding 7).
 
 ---
 

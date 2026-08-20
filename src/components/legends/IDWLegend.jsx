@@ -5,7 +5,7 @@ export function IDWLegend({ selectedColormap, stats, selectedVariable, selectedM
   const isStd = selectedMember === 'std';
 
   const varLabel = isWind ? 'Wind Speed' : isStd ? 'Uncertainty' : 'Precipitation';
-  const unit = isWind ? 'm/s' : 'mm/hr';
+  const unit = isWind ? 'm/s' : 'mm/h';
 
   const maxVal = stats ? parseFloat(stats.max) : 5;
   const fracs = [0, 0.25, 0.5, 0.75, 1];
