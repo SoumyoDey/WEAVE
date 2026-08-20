@@ -9,8 +9,10 @@ other than whoever is reading this is the review — item 1.**
 
 ## Where things stand
 
-PR #2 is **open and deliberately not merged** — 64 commits, 40 files,
-+12777/-1569 as pushed. `main` has not moved, so it is a clean fast-forward.
+PR #2 is **open and deliberately not merged** — 67 commits, 46 files,
++13207/-1598. `main` has not moved, so it is a clean fast-forward. A count
+written down here goes stale on the next push, so re-derive rather than trust
+it: `git diff --shortstat main...p0-reliability`.
 
 - **302 backend + 49 frontend tests pass**, no xfails. `metrics.py` 100%,
   `flask_api.py` 83%. `python -m pytest -q` in `Data/` runs anywhere: without
