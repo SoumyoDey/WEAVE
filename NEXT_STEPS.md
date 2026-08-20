@@ -3,8 +3,8 @@
 State as of 2026-08-20. Branch `p0-reliability`, PR #2 on `SoumyoDey/WEAVE`.
 
 **Read this, then `REVIEW_GUIDE.md`.** Items 3, 3b and 4 below are done, all seven
-defects the fixture layer found are fixed, and consistency-audit phases 1-4 **and
-6** are closed (`CONSISTENCY_AUDIT.md`). **The only thing left that needs someone
+defects the fixture layer found are fixed, and **the consistency audit is closed —
+all six phases** (`CONSISTENCY_AUDIT.md`). **The only thing left that needs someone
 other than whoever is reading this is the review — item 1.**
 
 ## Where things stand
@@ -23,7 +23,7 @@ it: `git diff --shortstat main...p0-reliability`.
     **Its header counts are stale** (57 commits, +12,111): the branch has moved
     since. The body is still accurate; only the summary numbers drifted.
   - `METRICS_AUDIT.md` — the metric audit. Read before re-deriving anything.
-  - `CONSISTENCY_AUDIT.md` — phases 1-4 and 6, findings classified.
+  - `CONSISTENCY_AUDIT.md` — all six phases, findings classified.
   - `Data/fixture_db.py` docstring — every expected test number, derived.
 
 ### Done on 2026-08-19/20
@@ -43,6 +43,10 @@ it: `git diff --shortstat main...p0-reliability`.
    headline one: four spatial metrics labelled wind maps in `mm/h`, including on
    the Cartopy PNG itself. Every finding was a string that a later fix had
    falsified — see the pattern note at the end of `CONSISTENCY_AUDIT.md`.
+7. **Consistency audit phase 5, typography.** Every font size and weight in
+   `src/` now comes from `theme.js` — 72 size sites and 95 weight sites. Two
+   rendered changes in total, both in `AboutModal`, both roundings onto the
+   scale. **This closes the consistency audit: all six phases are run.**
 
 ---
 
@@ -53,19 +57,13 @@ In priority order. Everything here is unstarted; nothing is half-done.
 1. **Item 1, the review.** Blocked on a person, not on work. `REVIEW_GUIDE.md`
    exists to make it tractable and lists every change that moves a published
    number, with before/after values and the test that pins each one.
-2. **Consistency audit phase 5, typography.** Now the only unrun phase, and the
-   mechanical one. `theme.js` already has the scale; the holdouts are listed in
-   `CONSISTENCY_AUDIT_PLAN.md`. Two corrections to that list before you start:
-   `ui/PanelState.jsx` was written to the scale, and `MetricPanel.jsx` — named
-   there as the worst offender at four inline sizes — should be re-checked rather
-   than assumed, since phase 6 has been through it since.
-3. **Item 2, drop `regridded_forecast`** (245 MB, nothing reads it). Repoint
+2. **Item 2, drop `regridded_forecast`** (245 MB, nothing reads it). Repoint
    `regrid_members.py`'s grid lookup at `regridded_forecast_ens` in the same
    change. `observation_data` is *also* unread now, but it is raw ingested data no
    script in this repo can regenerate — leave it.
-4. **Item 6, the lower-priority list.** Vite (CRA is EOL), caching the
+3. **Item 6, the lower-priority list.** Vite (CRA is EOL), caching the
    deterministic metric endpoints, row caps on point-list queries.
-5. **`DATA_EXPANSION_DESIGN.md`.** Still blocked on the missing `init_time`
+4. **`DATA_EXPANSION_DESIGN.md`.** Still blocked on the missing `init_time`
    column. One trap was removed: `Timeline.jsx` no longer hard-codes the
    initialisation date.
 
@@ -114,6 +112,14 @@ The first two are old; the last two came out of phase 6.
   you change behaviour, grep for the strings that described the old behaviour, and
   prefer a test on the *invariant* over a test on the wording: a test that asserts
   a sentence gets rewritten by the same change that breaks it.
+- **Grep the rendered result, not the source, to ask "is any of this left?"**
+  Phase 5's exit grep (`fontSize: '`) came back clean while a 17px literal was on
+  screen, because it was inside a ternary; four more hid in SVG attributes. A
+  computed-style sweep of the running app found all of them in one call. The
+  source grep answers a narrower question than it looks like it does.
+- **`t` is the design token, imported in 16 files.** Do not shadow it. Two legends
+  and `App.js` used it as a local (`const t = setTimeout(…)`, map callbacks); those
+  are renamed. A shadowed `t` compiles, passes the suite, and fails at render.
 
 ---
 
@@ -455,13 +461,17 @@ fallback. That is one less thing for DATA_EXPANSION_DESIGN.md to trip over.
 
 ## 5. Two planned pieces of work, with their own documents
 
-- **`CONSISTENCY_AUDIT_PLAN.md`** — **phases 1-4 and 6 are run and closed**;
-  results and every finding are in `CONSISTENCY_AUDIT.md`. Phase 2 found no
+- **`CONSISTENCY_AUDIT_PLAN.md`** — **done; all six phases are run and closed**,
+  and results and every finding are in `CONSISTENCY_AUDIT.md`. Phase 2 found no
   wind/precipitation gap at all, which the plan did not expect; the real gap was
   in phase 1 (no accuracy metrics at an Analysis point) and is fixed. Phase 6 then
   found the wind gap the plan had been looking for, but in the *text* rather than
-  the capability — four metrics labelled wind in `mm/h`. **Only phase 5
-  (typography) is unrun** — see "If you are picking this up cold".
+  the capability — four metrics labelled wind in `mm/h`. Phase 5 put every font
+  size and weight on `theme.js`'s scale. **Treat the plan as history now**: two of
+  its instructions were obsolete by the time they were run (it says to add a type
+  scale that already existed, and its holdout list predates several components),
+  and its phase-5 exit grep passes while a literal is still on screen. The audit
+  document is the live record; the plan is what was believed beforehand.
 - **`DATA_EXPANSION_DESIGN.md`** — selecting date and initialisation. Blocked on
   one thing: the regridded tables have **no `init_time` column**, and the API
   resolves valid time from "the latest run". Loading a second run before that is
