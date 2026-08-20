@@ -268,13 +268,86 @@ off by default and unrelated to bounded scores.
 
 ---
 
+# Phase 5 — Typography
+
+Run 2026-08-20. **Done.** Every font size and weight in `src/` now comes from
+`theme.js`, verified against the running app rather than against a grep.
+
+The plan is out of date here in a useful way: it says to *add* a type scale, and
+one already exists — it was added after the plan was written. So the work was the
+second half only, moving the 13 components still writing literals onto it. 72
+size sites and 95 weight sites.
+
+### What needed a decision rather than a swap
+
+Most of it was mechanical. Three things were not:
+
+- **9px is a real tier**, not an accident: 12 uses across the timeline day ticks
+  and verified-to marker, the copyright footer, and the legend end-labels.
+  Consolidating it into `micro` (10px) would have flattened a distinction the
+  design actually makes — the timeline uses 9, 10 and 11 within one component. It
+  is now `nano`, documented as being for furniture rather than content, since it
+  sits below a comfortable reading size.
+- **`AboutModal` had the only two sizes with no token** — `h2` at 20px and body
+  prose at 13.5px. Rather than mint tokens for one component, both were rounded
+  onto the scale: 20 → `xl` (18px), 13.5 → `base` (13px), which merges body prose
+  with the note and row text beside it. Its hierarchy is now 24/18/14/13, all on
+  the scale. **These are the only two rendered changes in the whole phase.** The
+  modal keeps its own *colours*: it is the app's one light surface, and that part
+  of it is genuinely separate.
+- **Weights were written two ways**, `fontWeight: '600'` and `fontWeight: 600`,
+  both valid in React and sitting next to each other. The tokens are numbers, and
+  the two spellings collapse.
+
+### What the plan's exit grep would have missed
+
+The plan's exit criterion is `grep "fontSize: '"` returning nothing outside
+`theme.js` and `ui/`. It came back clean while the app still had a literal on
+screen:
+
+- **`fontSize: isNarrow ? '14px' : '17px'`** in the timeline's lead-time readout.
+  The pattern only matches a literal immediately after the key, so any expression
+  hides one. Found instead by auditing *computed* sizes in the browser — a stray
+  17px was on the page after the grep was clean. 17px was on no scale at all.
+- **Four SVG `fontSize="11"` presentation attributes** in `VSUPFanLegend`, the
+  same class of literal through a different mechanism, which the pattern also
+  cannot see.
+
+The lesson generalises past typography: **grep the rendered result, not the
+source, when the question is "does any of this still exist?"** The source
+grep answers a narrower question than it appears to.
+
+### A hazard this phase created
+
+`TextureLegend` and `VSUPFanLegend` both use `t` as a local — a colormap position
+and two map-callback params — and this work gives them a module-level `t` to
+shadow. None of the converted sites happened to fall inside those scopes, but
+converting the SVG attributes *would* have put one there, silently reading
+`fontSize` off a number. A shadowed `t` compiles, passes every test (neither
+legend is covered), and fails only at render.
+
+The locals are renamed (`pos`, `frac`, `tick`), along with a `const t =
+setTimeout(...)` in `App.js` that predated the phase and was inert. `t` is now
+imported in 16 files, so shadowing it is no longer a local matter.
+
+### Verification
+
+Not a build, which cannot see any of the above. A computed-style sweep of the
+running app across **6,941 elements**: zero off-scale font sizes, zero off-scale
+weights. Both legends were opened and checked visually, since no test renders
+them. The single element at weight 800 is the lead-time readout, exactly as the
+token's comment claims.
+
+One exception, benign: 54 elements compute to 13.3333px, the user-agent default.
+They are icon-only buttons and their SVG children — none carry text, so nothing
+renders at that size.
+
 ---
 
 # Phase 6 — Text correctness
 
 Run 2026-08-20. **Seven findings, all fixed**, plus two things that are true as
-written but need a decision rather than an edit. Phase 5 (typography) is still
-unrun.
+written but need a decision rather than an edit.
 
 The prior held: the plan predicted a sweep would find more wrong strings, and it
 did. Every finding below is a string that contradicted the code it described —
@@ -466,22 +539,25 @@ The plan says to budget by risk, and the findings sort cleanly:
    informative message intact. No control moved and no capability changed, which
    is what the plan's warning was about.
 
-**Phases 1–4 and 6 are now closed.** Phase 5 (typography) is the only one left,
-and it is the mechanical one.
+**All six phases are now closed.**
 
-The guardrail in the plan still applies: `ComparisonTab.jsx` is 2,300 lines and
-`AnalysisTab.jsx` is 1,264. Land these as fixes with tests, and decide about
-extraction separately.
+The guardrail in the plan held to the end: `ComparisonTab.jsx` is 2,300 lines and
+`AnalysisTab.jsx` is 1,264, and nothing in this audit restructured either. Phase 5
+reached them for the first time, and only to change the spelling of a constant.
+Whether to extract them is still an open question, and still a separate one.
 
 ---
 
-## The pattern across all five phases
+## The pattern across all six phases
 
 Every phase found the same shape of defect, and it is worth naming because it
 predicts where the next one is. **Not one finding was a mistake made at the time
 it was written.** 1a, 1c, 6.2, 6.3 and 6.4 were all correct when written and were
 falsified later by a fix somewhere else — a migration, a renamed key, a corrected
-convention. The code moved and the sentence describing it did not.
+convention. The code moved and the sentence describing it did not. Phase 5 is the
+same story in a different register: the plan's own instruction to "add a type
+scale" was obsolete by the time it was run, because a scale had been added in
+between.
 
 That is an argument for the tests this phase added, which pin *invariants* rather
 than strings: no literal unit in the registry, no dimensionless metric with a
