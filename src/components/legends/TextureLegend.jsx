@@ -76,7 +76,7 @@ export function TextureLegend({
   const N       = numBuckets > 0 ? numBuckets : 8;
   const maxVal  = bivariateRanges?.meanMax ?? 5;
   const maxStd  = bivariateRanges?.stdMax  ?? 5;
-  const unit    = selectedVariable === 'wind' ? 'm/s' : 'mm/hr';
+  const unit    = selectedVariable === 'wind' ? 'm/s' : 'mm/h';
   const swatchW = Math.max(14, Math.min(30, Math.floor(200 / N)));
 
   const cardStyle = {

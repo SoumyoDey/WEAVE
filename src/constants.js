@@ -102,6 +102,22 @@ export const buildVsupLevels = (numBuckets) => {
   return { segCounts, rings: segCounts.length };
 };
 
+// ── Units ─────────────────────────────────────────────────────────────────────
+// The unit a value carries. Bias, MAE, RMSE and CRPS inherit it from the
+// variable; CSI, POD, FAR, Brier, SSR and correlation are dimensionless.
+// Metric text below writes `{unit}` rather than a literal, because these strings
+// are rendered for BOTH variables — a hard-coded 'mm/h' labels a wind map in a
+// precipitation unit, which is the defect /api/compare/skill used to have.
+export const VALUE_UNITS = {
+  precipitation: 'mm/h',
+  wind:          'm/s',
+};
+
+export const withUnit = (text, variable) =>
+  typeof text === 'string'
+    ? text.replaceAll('{unit}', VALUE_UNITS[variable] ?? '')
+    : text;
+
 // ── Spatial metric registry ───────────────────────────────────────────────────
 // To add a metric: append one entry here. Selector, overlay, legend, and plot
 // all read from this array automatically — no other file needs to change.
@@ -112,7 +128,12 @@ export const METRIC_CONFIG = [
     shortLabel:   'SSR',
     requiresHour: true,
     requiresThreshold: false,
-    description:  'Ratio of ensemble variance to squared forecast error at a single lead time. Ideal ≈ 1.',
+    // σ / |ε|, NOT the variance ratio the wording used to claim: the code was
+    // corrected to the conventional spread-over-error form (METRICS_AUDIT.md
+    // finding 7) and this string was left describing the old convention, which
+    // mis-states the wings — a variance ratio of 0.5 is a spread/error ratio of
+    // 0.71, which the bands below would not call "severely" anything.
+    description:  'Ensemble spread over the size of the forecast error (σ / |ε|) at a single lead time. Ideal ≈ 1.',
     colorFn: (v) => {
       if (v == null) return null;
       if (v < 0.5)  return 'rgba(192,0,0,0.82)';
@@ -136,7 +157,7 @@ export const METRIC_CONFIG = [
     shortLabel:   'SSR',
     requiresHour: false,
     requiresThreshold: false,
-    description:  'Time-aggregated SSR: mean(σ²) / mean(ε²) across all verified lead times. Ideal ≈ 1.',
+    description:  'Time-aggregated SSR: √(mean(σ²) / mean(ε²)) across all verified lead times — RMS spread over RMSE. Ideal ≈ 1.',
     colorFn: (v) => {
       if (v == null) return null;
       if (v < 0.5)  return 'rgba(192,0,0,0.82)';
@@ -184,7 +205,7 @@ export const METRIC_CONFIG = [
     shortLabel:   'Bias',
     requiresHour: false,
     requiresThreshold: false,
-    description:  'Ensemble mean minus observation (mm/h). Blue = under-forecast, red = over.',
+    description:  'Ensemble mean minus observation ({unit}). Blue = under-forecast, red = over.',
     colorFn: (v) => {
       if (v == null) return null;
       if (v < -1.0) return 'rgba(41,128,185,0.85)';
@@ -194,11 +215,11 @@ export const METRIC_CONFIG = [
       return 'rgba(192,57,43,0.85)';
     },
     legend: [
-      { color: 'rgba(41,128,185,0.85)',   label: '< −1 mm/h  —  Strong under-forecast' },
+      { color: 'rgba(41,128,185,0.85)',   label: '< −1 {unit}  —  Strong under-forecast' },
       { color: 'rgba(133,193,233,0.85)',  label: '−1 – −0.3  —  Slight under-forecast' },
       { color: 'rgba(200,200,200,0.75)',  label: '−0.3 – 0.3 —  Near-unbiased ✓' },
-      { color: 'rgba(241,148,138,0.85)',  label: '0.3 – 1 mm/h — Slight over-forecast' },
-      { color: 'rgba(192,57,43,0.85)',    label: '> 1 mm/h  —  Strong over-forecast' },
+      { color: 'rgba(241,148,138,0.85)',  label: '0.3 – 1 {unit} — Slight over-forecast' },
+      { color: 'rgba(192,57,43,0.85)',    label: '> 1 {unit}  —  Strong over-forecast' },
     ],
     legendGradient: null,
   },
@@ -208,7 +229,7 @@ export const METRIC_CONFIG = [
     shortLabel:   'MAE',
     requiresHour: false,
     requiresThreshold: false,
-    description:  'Mean |error| across lead times (mm/h). Lower = better.',
+    description:  'Mean |error| across lead times ({unit}). Lower = better.',
     colorFn: (v) => {
       if (v == null) return null;
       if (v < 0.2)  return 'rgba(39,174,96,0.82)';
@@ -217,10 +238,10 @@ export const METRIC_CONFIG = [
       return 'rgba(192,57,43,0.82)';
     },
     legend: [
-      { color: 'rgba(39,174,96,0.82)',  label: '< 0.2 mm/h  —  Excellent' },
+      { color: 'rgba(39,174,96,0.82)',  label: '< 0.2 {unit}  —  Excellent' },
       { color: 'rgba(241,196,15,0.82)', label: '0.2 – 0.5  —  Good' },
       { color: 'rgba(230,126,34,0.82)', label: '0.5 – 1.0  —  Moderate' },
-      { color: 'rgba(192,57,43,0.82)',  label: '> 1.0 mm/h  —  Poor' },
+      { color: 'rgba(192,57,43,0.82)',  label: '> 1.0 {unit}  —  Poor' },
     ],
     legendGradient: null,
   },
@@ -230,7 +251,7 @@ export const METRIC_CONFIG = [
     shortLabel:   'RMSE',
     requiresHour: false,
     requiresThreshold: false,
-    description:  'RMSE of ensemble mean vs obs (mm/h). Lower = better.',
+    description:  'RMSE of ensemble mean vs obs ({unit}). Lower = better.',
     colorFn: (v) => {
       if (v == null) return null;
       if (v < 0.3)  return 'rgba(39,174,96,0.82)';
@@ -239,10 +260,10 @@ export const METRIC_CONFIG = [
       return 'rgba(192,57,43,0.82)';
     },
     legend: [
-      { color: 'rgba(39,174,96,0.82)',  label: '< 0.3 mm/h  —  Excellent' },
+      { color: 'rgba(39,174,96,0.82)',  label: '< 0.3 {unit}  —  Excellent' },
       { color: 'rgba(241,196,15,0.82)', label: '0.3 – 0.7  —  Good' },
       { color: 'rgba(230,126,34,0.82)', label: '0.7 – 1.2  —  Moderate' },
-      { color: 'rgba(192,57,43,0.82)',  label: '> 1.2 mm/h  —  Poor' },
+      { color: 'rgba(192,57,43,0.82)',  label: '> 1.2 {unit}  —  Poor' },
     ],
     legendGradient: null,
   },
@@ -252,7 +273,7 @@ export const METRIC_CONFIG = [
     shortLabel:   'CRPS',
     requiresHour: false,
     requiresThreshold: false,
-    description:  'Mean CRPS for Gaussian forecast distribution (mm/h). Lower = better.',
+    description:  'Mean CRPS for the Gaussian forecast distribution, censored at zero for a non-negative variable ({unit}). Lower = better.',
     colorFn: (v) => {
       if (v == null) return null;
       if (v < 0.15) return 'rgba(39,174,96,0.82)';
@@ -261,10 +282,10 @@ export const METRIC_CONFIG = [
       return 'rgba(192,57,43,0.82)';
     },
     legend: [
-      { color: 'rgba(39,174,96,0.82)',  label: '< 0.15 mm/h  —  Excellent' },
+      { color: 'rgba(39,174,96,0.82)',  label: '< 0.15 {unit}  —  Excellent' },
       { color: 'rgba(241,196,15,0.82)', label: '0.15 – 0.35  —  Good' },
       { color: 'rgba(230,126,34,0.82)', label: '0.35 – 0.6   —  Moderate' },
-      { color: 'rgba(192,57,43,0.82)',  label: '> 0.6 mm/h   —  Poor' },
+      { color: 'rgba(192,57,43,0.82)',  label: '> 0.6 {unit}   —  Poor' },
     ],
     legendGradient: null,
   },

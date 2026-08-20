@@ -58,7 +58,7 @@ export function VSUPFanLegend({ bivariateRanges, selectedColormap, colormaps, se
   });
 
   const varLabel = selectedVariable === 'wind' ? 'Wind Speed' : 'Precipitation';
-  const unit     = selectedVariable === 'wind' ? 'm/s' : 'mm/hr';
+  const unit     = selectedVariable === 'wind' ? 'm/s' : 'mm/h';
 
   // 6 intervals → 7 ticks, 6 labels (skip last which lands on std dev axis)
   const VAL_SEGS = 6;

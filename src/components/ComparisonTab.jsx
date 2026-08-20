@@ -1774,9 +1774,17 @@ export function ComparisonTab({
                   >
                     {catLoading ? '⏳ Computing…' : '▶ Run advanced metrics'}
                   </button>
+                  {/* Both tabs are truthful about their own scope, but they do not
+                      use the same one: Analysis pools CSI/POD/FAR on the clicked
+                      cell alone and lets the box feed FSS only. Same threshold and
+                      same point therefore give two different numbers, which is
+                      worth saying here rather than leaving to be discovered. */}
                   <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.sm }}>
                     CSI · POD · FAR · Brier over a {boxCells}×{boxCells}-cell box at the point;
-                    FSS at a {fssWindow}×{fssWindow}-cell neighbourhood inside it
+                    FSS at a {fssWindow}×{fssWindow}-cell neighbourhood inside it.
+                    <span style={{ color: 'rgba(255,255,255,0.28)' }}>
+                      {' '}Analysis scores these on the clicked cell alone, so its values differ.
+                    </span>
                   </span>
                 </div>
 

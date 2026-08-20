@@ -345,6 +345,37 @@ class TestSpatialDiffContract:
         assert cur is not None
 
 
+class TestMapLabelsFollowTheVariable:
+    """The colourbar label is drawn into the PNG and repeated in its title, so a
+    hard-coded unit is a wrong statement a user cannot see past. Four metrics
+    inherit the variable's unit; the rest are dimensionless and must not gain
+    one. Same defect class as the `units: 'mm/h'` /api/compare/skill returned for
+    wind (CONSISTENCY_AUDIT_PLAN.md phase 6).
+    """
+
+    UNITFUL     = ('bias', 'mae', 'rmse', 'crps')
+    DIMENSIONLESS = ('ssr', 'ssr_agg', 'correlation', 'csi', 'pod', 'far', 'brier')
+
+    @pytest.mark.parametrize("metric", UNITFUL)
+    def test_a_unitful_metric_is_labelled_in_the_variables_unit(self, metric):
+        assert 'mm/h' in api._metric_cbar_label(metric, 'precipitation')
+        assert 'm/s'  in api._metric_cbar_label(metric, 'wind')
+        assert 'mm/h' not in api._metric_cbar_label(metric, 'wind')
+
+    @pytest.mark.parametrize("metric", DIMENSIONLESS)
+    def test_a_dimensionless_metric_names_no_unit(self, metric):
+        for variable in ('precipitation', 'wind'):
+            label = api._metric_cbar_label(metric, variable)
+            assert 'mm/h' not in label and 'm/s' not in label, (metric, variable)
+
+    def test_no_placeholder_survives_into_a_label(self):
+        """A registry entry that gains a `{unit}` no caller substitutes would put
+        the literal braces on the map."""
+        for metric in api.PLOT_STYLE_REGISTRY:
+            for variable in ('precipitation', 'wind'):
+                assert '{unit}' not in api._metric_cbar_label(metric, variable)
+
+
 class TestHealth:
     def test_reports_unhealthy_without_leaking(self, client, monkeypatch):
         def boom():

@@ -1737,7 +1737,7 @@ PLOT_STYLE_REGISTRY = {
     'bias': {
         'cmap': plt.cm.RdBu_r,
         'norm': mcolors.TwoSlopeNorm(vmin=-2.0, vcenter=0.0, vmax=2.0),
-        'cbar_label':      'Bias (mm/h)  [+ = over-forecast]',
+        'cbar_label':      'Bias ({unit})  [+ = over-forecast]',
         'cbar_ticks':      [-2, -1, 0, 1, 2],
         'cbar_ticklabels': ['-2', '-1', '0', '+1', '+2'],
         'cbar_fontsize':   9,
@@ -1745,7 +1745,7 @@ PLOT_STYLE_REGISTRY = {
     'mae': {
         'cmap': plt.cm.YlOrRd,
         'norm': mcolors.Normalize(vmin=0, vmax=2),
-        'cbar_label':      'MAE (mm/h)',
+        'cbar_label':      'MAE ({unit})',
         'cbar_ticks':      [0, 0.5, 1.0, 1.5, 2.0],
         'cbar_ticklabels': ['0', '0.5', '1', '1.5', '2'],
         'cbar_fontsize':   9,
@@ -1753,7 +1753,7 @@ PLOT_STYLE_REGISTRY = {
     'rmse': {
         'cmap': plt.cm.YlOrRd,
         'norm': mcolors.Normalize(vmin=0, vmax=2),
-        'cbar_label':      'RMSE (mm/h)',
+        'cbar_label':      'RMSE ({unit})',
         'cbar_ticks':      [0, 0.5, 1.0, 1.5, 2.0],
         'cbar_ticklabels': ['0', '0.5', '1', '1.5', '2'],
         'cbar_fontsize':   9,
@@ -1761,7 +1761,7 @@ PLOT_STYLE_REGISTRY = {
     'crps': {
         'cmap': plt.cm.YlOrRd,
         'norm': mcolors.Normalize(vmin=0, vmax=1),
-        'cbar_label':      'CRPS (mm/h, lower=better)',
+        'cbar_label':      'CRPS ({unit}, lower=better)',
         'cbar_ticks':      [0, 0.25, 0.5, 0.75, 1.0],
         'cbar_ticklabels': ['0', '0.25', '0.5', '0.75', '1'],
         'cbar_fontsize':   9,
@@ -1936,6 +1936,28 @@ VAR_LABELS = {
 }
 CATEGORICAL_METRICS = {'csi', 'pod', 'far', 'brier'}
 
+# The unit a value carries, for the metrics that inherit the variable's unit
+# (bias, MAE, RMSE, CRPS). The scores in [0,1] — CSI, POD, FAR, Brier, SSR,
+# correlation — are dimensionless and carry no placeholder.
+VALUE_UNITS = {
+    'precipitation':  'mm/h',
+    'wind':           'm/s',
+    'temperature_2m': 'K',
+    'pressure_msl':   'Pa',
+}
+
+
+def _metric_cbar_label(metric, variable):
+    """The colourbar label for a metric, in the unit that variable is scored in.
+
+    These labels are drawn into the PNG and repeated in its title, so a
+    hard-coded unit is a wrong statement a user cannot see past — the same
+    defect class as the `units: 'mm/h'` that /api/compare/skill used to return
+    for wind.
+    """
+    label = PLOT_STYLE_REGISTRY.get(metric, {}).get('cbar_label', metric)
+    return label.replace('{unit}', VALUE_UNITS.get(variable, ''))
+
 
 @app.route('/api/spatial-metric-plot', methods=['POST'])
 def spatial_metric_plot():
@@ -1984,7 +2006,7 @@ def spatial_metric_plot():
 
         # ── Title ─────────────────────────────────────────────────────────
         var_label    = VAR_LABELS.get(variable, variable)
-        metric_label = style['cbar_label']
+        metric_label = _metric_cbar_label(metric, variable)
         title_line1  = f"{model}  ·  {var_label}  ·  {metric_label}"
         thr_info = ''
         if metric in CATEGORICAL_METRICS:
@@ -2004,7 +2026,7 @@ def spatial_metric_plot():
             title_line2 = f"{len(points)} grid points{thr_info}"
 
         img_b64 = _render_metric_map_png(
-            points, style['cmap'], style['norm'], style['cbar_label'],
+            points, style['cmap'], style['norm'], metric_label,
             f"{title_line1}\n{title_line2}",
             cbar_ticks=style['cbar_ticks'],
             cbar_ticklabels=style['cbar_ticklabels'],
@@ -2417,9 +2439,10 @@ def compare_skill():
         # ------------------------------------------------------------------
         # 3b. Per-lead-time metrics
         # ------------------------------------------------------------------
-        # All metrics are in mm/h so cross-model comparisons are fair. SSR is
-        # scale-invariant; CRPS/bias/MAE/RMSE scale with the unit, so the shared
-        # rate normalisation is what makes them comparable.
+        # Every model is put in one unit first — mm/h for precipitation, m/s for
+        # wind — so cross-model comparisons are fair. SSR is scale-invariant;
+        # CRPS/bias/MAE/RMSE scale with the unit, so that shared normalisation is
+        # what makes them comparable.
         model_data = {}
 
         for m_name, by_hour in cases_of.items():
@@ -3939,7 +3962,7 @@ def compare_spatial_diff():
         norm = mcolors.Normalize(vmin=-vmax, vmax=vmax)
         ticks = [-vmax, -vmax / 2, 0.0, vmax / 2, vmax]
 
-        metric_label = PLOT_STYLE_REGISTRY.get(metric, {}).get('cbar_label', metric)
+        metric_label = _metric_cbar_label(metric, variable)
         var_label    = VAR_LABELS.get(variable, variable)
         thr_info = ''
         if metric in CATEGORICAL_METRICS:
