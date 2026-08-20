@@ -611,6 +611,64 @@ class TestPointCategoricalMetrics:
         assert point['scored_area']['n_cells'] == 1
         assert point['summary']['fss'] is None
 
+    def test_every_cell_of_the_contingency_table_against_real_data(self, db_client):
+        """The fixture's field has wet cells and dry ones, so one threshold
+        produces hits, misses and false alarms — and a threshold above every
+        value produces nothing but correct negatives, which is the cell no other
+        test reaches. It is a quarter of the table and it sits in the
+        denominators of FBI and the composite.
+        """
+        args = {'model': 'AIFS', 'variable': 'precipitation',
+                'lat': 36.0, 'lon': -75.0, 'hour_min': 0, 'hour_max': 36,
+                'box_cells': 5}
+
+        scored = db_client.post('/api/categorical-metrics', json={
+            **args, 'threshold_mm_6h': fx.EXPECT_PRECIP['threshold_mm_6h']}).get_json()
+        s = scored['summary']
+        assert (s['hits'] or 0) + (s['misses'] or 0) + (s['false_alarms'] or 0) > 0
+
+        # Far above the wettest cell: everything is a correct negative, so the
+        # ratios are undefined rather than zero and the table still balances.
+        quiet = db_client.post('/api/categorical-metrics', json={
+            **args, 'threshold_mm_6h': 10_000}).get_json()['summary']
+        assert quiet['hits'] == 0 and quiet['misses'] == 0
+        assert quiet['false_alarms'] == 0
+        assert quiet['correct_neg'] > 0
+        assert quiet['csi'] is None and quiet['pod'] is None
+
+    def test_the_composite_uses_both_of_its_formulas(self, db_client):
+        """0.40 CSI + 0.30 FSS + 0.20 POD + 0.10 (1-FAR), or the same without
+        FSS renormalised by 0.70. Same label over two formulas, so both need
+        exercising — and the two must not be equal, or the renormalisation is
+        doing nothing."""
+        # A wet cell, so the forecast and the observation both cross the
+        # threshold and CSI/POD/FAR are all defined — at a dry cell POD has no
+        # denominator and the composite is None either way, which would compare
+        # nothing.
+        args = {'model': 'AIFS', 'variable': 'precipitation',
+                'lat': WET_CELL[0], 'lon': WET_CELL[1], 'hour_min': 0, 'hour_max': 36,
+                'threshold_mm_6h': fx.EXPECT_PRECIP['threshold_mm_6h']}
+
+        point = db_client.post('/api/categorical-metrics',
+                               json={**args, 'box_cells': 1}).get_json()['summary']
+        boxed = db_client.post('/api/categorical-metrics',
+                               json={**args, 'box_cells': 5}).get_json()['summary']
+
+        assert point['fss'] is None
+        assert boxed['fss'] is not None
+        assert point['composite_confidence'] is not None
+        assert boxed['composite_confidence'] is not None
+        # Same CSI/POD/FAR — only FSS enters — so any difference is the formula.
+        assert point['csi'] == boxed['csi']
+        assert point['composite_confidence'] != boxed['composite_confidence']
+
+    def test_the_region_path_reaches_its_own_correct_negatives(self, db_client):
+        d = db_client.post('/api/region-categorical-metrics', json={
+            'model': 'AIFS', 'variable': 'precipitation', **BOX,
+            'hour_min': 0, 'hour_max': 36, 'threshold_mm_6h': 10_000}).get_json()
+        assert d['summary']['correct_neg'] > 0
+        assert d['summary']['hits'] == 0
+
     def test_wind_uses_a_metres_per_second_threshold(self, db_client):
         d = db_client.post('/api/categorical-metrics', json={
             'model': 'AIFS', 'variable': 'wind', 'lat': 35.0, 'lon': -76.0,

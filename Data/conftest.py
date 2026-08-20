@@ -72,3 +72,89 @@ def db_client(fixture_pool, _clear_plot_cache, monkeypatch):
     api._ENSEMBLE_SIZE_CACHE.clear()
     api.app.config.update(TESTING=True)
     return api.app.test_client()
+
+
+# ── Fake database ─────────────────────────────────────────────────────────────
+class RoutedCursor:
+    """Stands in for a psycopg2 RealDictCursor.
+
+    `routes` maps a substring of the SQL to either a list of row dicts or a
+    callable taking the bound params and returning one. The first matching
+    route wins; an unmatched query yields no rows, which is what an endpoint
+    would see for a region with no data.
+    """
+
+    def __init__(self, routes=None):
+        self.routes = routes or {}
+        self.executed = []
+        self._rows = []
+
+    def execute(self, sql, params=None):
+        self.executed.append((" ".join(sql.split()), params))
+        for fragment, rows in self.routes.items():
+            if fragment in " ".join(sql.split()):
+                self._rows = rows(params) if callable(rows) else list(rows)
+                return
+        self._rows = []
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return list(self._rows)
+
+    def close(self):
+        pass
+
+
+class _FakeConn:
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def cursor(self, *a, **kw):
+        return self._cursor
+
+    def close(self):
+        pass
+
+
+@pytest.fixture
+def client():
+    # Imported here, not at module scope: flask_api opens a pool the moment it is
+    # imported, and the stub above has to be in place first.
+    import flask_api as api
+    api.app.config.update(TESTING=True)
+    return api.app.test_client()
+
+
+@pytest.fixture
+def prod_client():
+    """A client configured the way production is.
+
+    `TESTING=True` sets PROPAGATE_EXCEPTIONS, so an exception escaping a view is
+    re-raised into the test instead of reaching Flask's 500 handler. That is
+    useful for most tests and wrong for the ones that are *about* the handler:
+    every endpoint calls get_db_connection() before its own try block, so a dead
+    pool is caught by Flask, not by the view. Testing that under TESTING=True
+    would assert a behaviour production does not have.
+    """
+    import flask_api as api
+    api.app.config.update(TESTING=True, PROPAGATE_EXCEPTIONS=False)
+    try:
+        yield api.app.test_client()
+    finally:
+        api.app.config.update(PROPAGATE_EXCEPTIONS=None)
+
+
+@pytest.fixture
+def fake_db(monkeypatch):
+    """Point the endpoints at a RoutedCursor instead of the connection pool."""
+    import flask_api as api
+    def _install(routes=None):
+        cur = RoutedCursor(routes)
+        monkeypatch.setattr(api, "get_db_connection", lambda: _FakeConn(cur))
+        monkeypatch.setattr(api, "return_db_connection", lambda conn: None)
+        # Member counts hit a very large table; keep them out of these tests.
+        monkeypatch.setattr(api, "_ensemble_size", lambda cursor, model: 50)
+        return cur
+    return _install
