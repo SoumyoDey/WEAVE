@@ -57,6 +57,16 @@ export const t = {
     statLg: '24px',   // larger stat-card numbers
     hero:   '28px',   // largest number displays
   },
+  // weights. Numbers, not strings: both work in React, and the codebase had
+  // both spellings of the same weight ('600' and 600) sitting next to each
+  // other, which made a grep for one of them lie.
+  fontWeight: {
+    normal:   400,
+    medium:   500,   // de-emphasised labels
+    semibold: 600,   // the default for anything emphasised
+    bold:     700,   // headings, stat values
+    heavy:    800,   // the lead-time readout, and nothing else
+  },
   // subtle hover lift for interactive elements that don't have a bespoke
   // hover treatment — merge into a style object on mouse-enter.
   hoverLift: { filter: 'brightness(1.18)' },

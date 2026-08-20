@@ -13,5 +13,5 @@ export function SectionHeader({ icon: Icon, children, style }) {
 }
 
 export function FieldLabel({ children, style }) {
-  return <div style={{ fontSize: t.fontSize.xs, fontWeight: 500, color: t.textMuted, marginBottom: t.space(1.5), ...style }}>{children}</div>;
+  return <div style={{ fontSize: t.fontSize.xs, fontWeight: t.fontWeight.medium, color: t.textMuted, marginBottom: t.space(1.5), ...style }}>{children}</div>;
 }

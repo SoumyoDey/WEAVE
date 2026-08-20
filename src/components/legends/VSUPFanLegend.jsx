@@ -107,7 +107,7 @@ export function VSUPFanLegend({ bivariateRanges, selectedColormap, colormaps, se
 
   return (
     <div style={cardStyle}>
-      <div style={{ color: 'white', fontSize: t.fontSize.sm, fontWeight: 600, marginBottom: '8px' }}>
+      <div style={{ color: 'white', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, marginBottom: '8px' }}>
         Fan — {varLabel}
       </div>
 
@@ -156,7 +156,7 @@ export function VSUPFanLegend({ bivariateRanges, selectedColormap, colormaps, se
         <text
           x={cx} y={cy + 26}
           fontSize={t.fontSize.xs} fill="rgba(255,255,255,0.78)"
-          textAnchor="middle" fontWeight="600"
+          textAnchor="middle" fontWeight={t.fontWeight.semibold}
         >
           ← {varLabel} ({unit}) →
         </text>
@@ -185,7 +185,7 @@ export function VSUPFanLegend({ bivariateRanges, selectedColormap, colormaps, se
         <text
           x={(stdTickData[0].lx + 4).toFixed(1)}
           y={((stdTickData[0].ly + stdTickData[ROWS].ly) / 2).toFixed(1)}
-          fontSize={t.fontSize.micro} fill="rgba(255,255,255,0.7)" fontWeight="600"
+          fontSize={t.fontSize.micro} fill="rgba(255,255,255,0.7)" fontWeight={t.fontWeight.semibold}
           textAnchor="start" dominantBaseline="middle"
         >
           Std. Dev. (σ)

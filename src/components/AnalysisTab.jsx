@@ -315,7 +315,7 @@ export function AnalysisTab({
       {/* ── Header with mode toggle ── */}
       <div style={{ padding: '12px 30px 10px', borderBottom: '1px solid rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
         <div>
-          <h2 style={{ color: 'white', margin: '0 0 3px 0', fontSize: t.fontSize.xl, fontWeight: '600', display: 'flex', alignItems: 'center', gap: '8px' }}><BarChart3 size={18} />Forecast Analysis</h2>
+          <h2 style={{ color: 'white', margin: '0 0 3px 0', fontSize: t.fontSize.xl, fontWeight: t.fontWeight.semibold, display: 'flex', alignItems: 'center', gap: '8px' }}><BarChart3 size={18} />Forecast Analysis</h2>
           <p style={{ color: 'rgba(255,255,255,0.4)', margin: 0, fontSize: t.fontSize.sm }}>
             {analysisMode === 'point'
               ? (clickedPoint ? `Point: ${fmtLat(clickedPoint.lat)}, ${fmtLon(clickedPoint.lon)} — ${currentModel?.name} — ${selectedVariable}` : 'Click anywhere on the map to analyse a location')
@@ -326,7 +326,7 @@ export function AnalysisTab({
         <div style={{ display: 'flex', borderRadius: t.radius, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.15)', flexShrink: 0 }}>
           {[{ id: 'point', icon: MapPin, label: 'Point' }, { id: 'region', icon: MapIcon, label: 'Region' }].map(({ id, icon: Icon, label }) => (
             <button key={id} onClick={() => setAnalysisMode(id)}
-              style={{ padding: '6px 18px', fontSize: t.fontSize.sm, fontWeight: '600', cursor: 'pointer', border: 'none', outline: 'none',
+              style={{ padding: '6px 18px', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, cursor: 'pointer', border: 'none', outline: 'none',
                 display: 'inline-flex', alignItems: 'center', gap: '6px',
                 background: analysisMode === id ? 'rgba(52,152,219,0.25)' : 'rgba(255,255,255,0.04)',
                 color:      analysisMode === id ? 'rgba(52,152,219,0.95)' : 'rgba(255,255,255,0.45)' }}>
@@ -355,14 +355,14 @@ export function AnalysisTab({
                 {/* ── Section 1: Cone of Uncertainty ── */}
                 <div style={{ marginBottom: '32px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '12px', flexWrap: 'wrap' }}>
-                    <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: t.fontSize.md, fontWeight: '600', margin: 0, letterSpacing: '0.02em' }}>
+                    <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: t.fontSize.md, fontWeight: t.fontWeight.semibold, margin: 0, letterSpacing: '0.02em' }}>
                       Cone of Uncertainty
                     </h3>
                     {/* Gaussian / Empirical toggle */}
                     <div style={{ display: 'flex', borderRadius: t.radiusSm, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.12)' }}>
                       {[{ id: 'gaussian', label: 'Gaussian ±σ' }, { id: 'empirical', label: 'Empirical P10–P90' }].map(({ id, label }) => (
                         <button key={id} onClick={() => setConeMode(id)}
-                          style={{ padding: '4px 12px', fontSize: t.fontSize.xs, fontWeight: '600', cursor: 'pointer', border: 'none', outline: 'none',
+                          style={{ padding: '4px 12px', fontSize: t.fontSize.xs, fontWeight: t.fontWeight.semibold, cursor: 'pointer', border: 'none', outline: 'none',
                             background: coneMode === id ? 'rgba(52,152,219,0.22)' : 'rgba(255,255,255,0.04)',
                             color:      coneMode === id ? 'rgba(52,152,219,0.95)' : 'rgba(255,255,255,0.4)' }}>
                           {label}
@@ -467,7 +467,7 @@ export function AnalysisTab({
                 {/* ── Section 2: Spread-Skill Analysis ── */}
                 <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '24px' }}>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: '16px', marginBottom: '12px', flexWrap: 'wrap' }}>
-                    <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: t.fontSize.md, fontWeight: '600', margin: 0, letterSpacing: '0.02em' }}>
+                    <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: t.fontSize.md, fontWeight: t.fontWeight.semibold, margin: 0, letterSpacing: '0.02em' }}>
                       Spread-Skill Analysis
                     </h3>
                     <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.sm }}>
@@ -553,8 +553,8 @@ export function AnalysisTab({
                             { label: 'Verified Hours',   value: ssrData.n_cases,    color: '#3498db',    hint: 'Lead times with matching observations' },
                           ].map(({ label, value, color, hint }) => (
                             <div key={label} style={{ background: 'rgba(255,255,255,0.06)', borderRadius: '10px', padding: '12px 18px', minWidth: '140px', borderLeft: `3px solid ${color}` }}>
-                              <div style={{ color, fontSize: t.fontSize.stat, fontWeight: '700', lineHeight: 1 }}>{value}</div>
-                              <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: t.fontSize.sm, marginTop: '4px', fontWeight: '500' }}>{label}</div>
+                              <div style={{ color, fontSize: t.fontSize.stat, fontWeight: t.fontWeight.bold, lineHeight: 1 }}>{value}</div>
+                              <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: t.fontSize.sm, marginTop: '4px', fontWeight: t.fontWeight.medium }}>{label}</div>
                               <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.xs, marginTop: '2px' }}>{hint}</div>
                             </div>
                           ))}
@@ -577,10 +577,10 @@ export function AnalysisTab({
                             { label: 'CRPS', value: summary.crps, hint: `probabilistic error · ${yAxisUnit}` },
                           ].map(({ label, value, hint }) => (
                             <div key={label} style={{ background: 'rgba(255,255,255,0.04)', borderRadius: '10px', padding: '10px 16px', minWidth: '120px', borderLeft: '3px solid rgba(255,255,255,0.18)' }}>
-                              <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: t.fontSize.stat, fontWeight: '700', lineHeight: 1 }}>
+                              <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: t.fontSize.stat, fontWeight: t.fontWeight.bold, lineHeight: 1 }}>
                                 {value != null ? value.toFixed(3) : 'N/A'}
                               </div>
-                              <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: t.fontSize.sm, marginTop: '4px', fontWeight: '500' }}>{label}</div>
+                              <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: t.fontSize.sm, marginTop: '4px', fontWeight: t.fontWeight.medium }}>{label}</div>
                               <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.xs, marginTop: '2px' }}>{hint}</div>
                             </div>
                           ))}
@@ -676,7 +676,7 @@ export function AnalysisTab({
                 {/* ── Section 3: Verification Metrics ── */}
                 <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '24px', marginTop: '32px' }}>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: '16px', marginBottom: '14px', flexWrap: 'wrap' }}>
-                    <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: t.fontSize.md, fontWeight: '600', margin: 0, letterSpacing: '0.02em' }}>
+                    <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: t.fontSize.md, fontWeight: t.fontWeight.semibold, margin: 0, letterSpacing: '0.02em' }}>
                       Verification metrics
                     </h3>
                     <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.sm }}>
@@ -721,7 +721,7 @@ export function AnalysisTab({
                             onClick={() => setCatMode(id)}
                             aria-pressed={catMode === id}
                             style={{
-                              padding: '5px 14px', fontSize: t.fontSize.sm, fontWeight: '600', cursor: 'pointer',
+                              padding: '5px 14px', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, cursor: 'pointer',
                               background: catMode === id ? 'rgba(52,152,219,0.25)' : 'rgba(255,255,255,0.04)',
                               color:  catMode === id ? 'rgba(52,152,219,0.95)' : 'rgba(255,255,255,0.4)',
                               border: 'none', outline: 'none',
@@ -759,7 +759,7 @@ export function AnalysisTab({
                         type="number" min="0" step="1" value={catThreshold}
                         aria-label={`Threshold (${selectedVariable === 'wind' ? 'm/s' : 'mm/6h'})`}
                         onChange={e => setCatThreshold(e.target.value)}
-                        style={{ width: '72px', padding: '4px 8px', fontSize: t.fontSize.base, fontWeight: '600', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'right', outline: 'none' }}
+                        style={{ width: '72px', padding: '4px 8px', fontSize: t.fontSize.base, fontWeight: t.fontWeight.semibold, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'right', outline: 'none' }}
                       />
                       <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.sm }}>
                         {selectedVariable === 'wind' ? 'm/s' : 'mm/6h'}
@@ -780,7 +780,7 @@ export function AnalysisTab({
                           type="number" min="1" max="41" step="2" value={catBoxCells}
                           aria-label="Scored area width (grid cells)"
                           onChange={e => setCatBoxCells(Math.max(1, Math.min(41, parseInt(e.target.value, 10) || 1)))}
-                          style={{ width: '56px', padding: '4px 6px', fontSize: t.fontSize.sm, fontWeight: '600', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'center', outline: 'none' }}
+                          style={{ width: '56px', padding: '4px 6px', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'center', outline: 'none' }}
                         />
                         <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }}>
                           {catBoxCells === 1 ? 'cell (point)' : `cells (≈${(catBoxCells * 0.5).toFixed(1)}°)`}
@@ -802,7 +802,7 @@ export function AnalysisTab({
                           type="number" min="1" max="21" step="2" value={fssWindow}
                           aria-label="FSS neighbourhood width (grid cells)"
                           onChange={e => setFssWindow(Math.max(1, Math.min(21, parseInt(e.target.value, 10) || 1)))}
-                          style={{ width: '56px', padding: '4px 6px', fontSize: t.fontSize.sm, fontWeight: '600', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'center', outline: 'none' }}
+                          style={{ width: '56px', padding: '4px 6px', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'center', outline: 'none' }}
                         />
                         <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }}>
                           cells (≈{(fssWindow * 0.5).toFixed(1)}°)
@@ -828,7 +828,7 @@ export function AnalysisTab({
                       onClick={catMode === 'point' ? handleRunCategorical : handleRunRegionCategorical}
                       disabled={catMode === 'point' ? (catLoading || !clickedPoint) : (regCatLoading || !selectedRegion?.bounds)}
                       style={{
-                        padding: '6px 16px', fontSize: t.fontSize.sm, fontWeight: '700',
+                        padding: '6px 16px', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.bold,
                         cursor: (catMode === 'point' ? catLoading : regCatLoading) ? 'not-allowed' : 'pointer',
                         background: (catMode === 'point' ? catLoading : regCatLoading) ? 'rgba(52,152,219,0.08)' : 'rgba(52,152,219,0.18)',
                         border: '1px solid rgba(52,152,219,0.45)', borderRadius: t.radius,
@@ -951,10 +951,10 @@ export function AnalysisTab({
                         <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
                           {badges.map(({ key, label, hint, val }) => (
                             <div key={key} style={{ background: 'rgba(255,255,255,0.06)', borderRadius: '10px', padding: '12px 16px', minWidth: '100px', borderLeft: `3px solid ${metricColor(key, val)}` }}>
-                              <div style={{ color: metricColor(key, val), fontSize: t.fontSize.stat, fontWeight: '700', lineHeight: 1 }}>
+                              <div style={{ color: metricColor(key, val), fontSize: t.fontSize.stat, fontWeight: t.fontWeight.bold, lineHeight: 1 }}>
                                 {Number.isFinite(val) ? val.toFixed(3) : 'N/A'}
                               </div>
-                              <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: t.fontSize.sm, marginTop: '4px', fontWeight: '600' }}>{label}</div>
+                              <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: t.fontSize.sm, marginTop: '4px', fontWeight: t.fontWeight.semibold }}>{label}</div>
                               <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.micro, marginTop: '2px' }}>{hint}</div>
                             </div>
                           ))}
@@ -966,10 +966,10 @@ export function AnalysisTab({
                             borderLeft: `3px solid ${metricColor('cc', cc)}`,
                             borderTop: `1px solid ${metricColor('cc', cc)}33`,
                           }}>
-                            <div style={{ color: metricColor('cc', cc), fontSize: t.fontSize.statLg, fontWeight: '800', lineHeight: 1 }}>
+                            <div style={{ color: metricColor('cc', cc), fontSize: t.fontSize.statLg, fontWeight: t.fontWeight.heavy, lineHeight: 1 }}>
                               {Number.isFinite(cc) ? cc.toFixed(3) : 'N/A'}
                             </div>
-                            <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: t.fontSize.sm, marginTop: '4px', fontWeight: '700' }}>Composite Confidence</div>
+                            <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: t.fontSize.sm, marginTop: '4px', fontWeight: t.fontWeight.bold }}>Composite Confidence</div>
                             <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.micro, marginTop: '2px' }}>
                               {fss != null
                                 ? '0.40×CSI + 0.30×FSS + 0.20×POD + 0.10×(1–FAR)'
@@ -992,12 +992,12 @@ export function AnalysisTab({
                             { label: 'Correct Neg.',val: s.correct_neg,  color: '#3498db' },
                           ].map(({ label, val, color }) => (
                             <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '5px', background: 'rgba(255,255,255,0.04)', borderRadius: t.radiusSm, padding: '5px 10px', border: `1px solid ${color}33` }}>
-                              <span style={{ color, fontWeight: '700', fontSize: t.fontSize.base }}>{val}</span>
+                              <span style={{ color, fontWeight: t.fontWeight.bold, fontSize: t.fontSize.base }}>{val}</span>
                               <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: t.fontSize.xs }}>{label}</span>
                             </div>
                           ))}
                           <div style={{ display: 'flex', alignItems: 'center', gap: '5px', background: 'rgba(255,255,255,0.04)', borderRadius: t.radiusSm, padding: '5px 10px', border: '1px solid rgba(255,255,255,0.1)' }}>
-                            <span style={{ color: 'rgba(255,255,255,0.6)', fontWeight: '700', fontSize: t.fontSize.base }}>{contingencyTotal}</span>
+                            <span style={{ color: 'rgba(255,255,255,0.6)', fontWeight: t.fontWeight.bold, fontSize: t.fontSize.base }}>{contingencyTotal}</span>
                             <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.xs }}>
                               Total {catMode === 'region' ? `(${(s.n_grid_pts ?? '?')} pts × hours)` : 'cases'}
                             </span>
@@ -1156,7 +1156,7 @@ export function AnalysisTab({
                 <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', padding: '14px 0 4px', display: 'flex', justifyContent: 'flex-end' }}>
                   <button
                     onClick={onCompare}
-                    style={{ background: 'rgba(52,152,219,0.12)', border: '1px solid rgba(52,152,219,0.3)', color: 'rgba(52,152,219,0.9)', fontSize: t.fontSize.sm, fontWeight: '600', padding: '6px 14px', borderRadius: t.radius, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+                    style={{ background: 'rgba(52,152,219,0.12)', border: '1px solid rgba(52,152,219,0.3)', color: 'rgba(52,152,219,0.9)', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, padding: '6px 14px', borderRadius: t.radius, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
                   >
                     Compare models at this point →
                   </button>
@@ -1200,7 +1200,7 @@ export function AnalysisTab({
                     <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: t.fontSize.xs, whiteSpace: 'nowrap' }} title="For spatial metric maps only. Verification Metrics below uses its own threshold setting.">Threshold (maps)</span>
                     <input type="number" min="0" step="1" value={regionThreshold}
                       onChange={e => setRegionThreshold(parseFloat(e.target.value) || (selectedVariable === 'wind' ? 10 : 25))}
-                      style={{ width: '60px', padding: '4px 6px', fontSize: t.fontSize.sm, fontWeight: '600', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'right', outline: 'none' }} />
+                      style={{ width: '60px', padding: '4px 6px', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'right', outline: 'none' }} />
                     <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.xs }}>
                       {selectedVariable === 'wind' ? 'm/s' : 'mm/6h'}
                     </span>
@@ -1208,7 +1208,7 @@ export function AnalysisTab({
 
                   {/* Compute button */}
                   <button onClick={handleComputeAllMaps} disabled={regionRunning}
-                    style={{ padding: '7px 20px', fontSize: t.fontSize.sm, fontWeight: '700',
+                    style={{ padding: '7px 20px', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.bold,
                       cursor: regionRunning ? 'not-allowed' : 'pointer',
                       background: regionRunning ? 'rgba(52,152,219,0.08)' : 'rgba(52,152,219,0.2)',
                       border: '1px solid rgba(52,152,219,0.5)', borderRadius: t.radius,
@@ -1226,7 +1226,7 @@ export function AnalysisTab({
                 ].map(group => (
                   <div key={group.id} style={{ marginBottom: '32px' }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: '12px', marginBottom: '14px' }}>
-                      <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: t.fontSize.base, fontWeight: '700', margin: 0, letterSpacing: '0.02em' }}>{group.label}</h3>
+                      <h3 style={{ color: 'rgba(255,255,255,0.85)', fontSize: t.fontSize.base, fontWeight: t.fontWeight.bold, margin: 0, letterSpacing: '0.02em' }}>{group.label}</h3>
                       <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.xs }}>{group.hint}</span>
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(420px, 100%), 1fr))', gap: '16px' }}>
@@ -1237,7 +1237,7 @@ export function AnalysisTab({
                           <div key={key} style={{ background: 'rgba(255,255,255,0.04)', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.08)', overflow: 'hidden' }}>
                             {/* Card header */}
                             <div style={{ padding: '8px 12px', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                              <span style={{ fontSize: t.fontSize.sm, fontWeight: '600', color: 'rgba(255,255,255,0.75)' }}>{cfg?.label ?? key.toUpperCase()}</span>
+                              <span style={{ fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, color: 'rgba(255,255,255,0.75)' }}>{cfg?.label ?? key.toUpperCase()}</span>
                               {st?.url && (
                                 <div style={{ display: 'flex', gap: '4px' }}>
                                   <button
@@ -1292,7 +1292,7 @@ export function AnalysisTab({
               <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', padding: '14px 0 4px', display: 'flex', justifyContent: 'flex-end' }}>
                 <button
                   onClick={onCompare}
-                  style={{ background: 'rgba(52,152,219,0.12)', border: '1px solid rgba(52,152,219,0.3)', color: 'rgba(52,152,219,0.9)', fontSize: t.fontSize.sm, fontWeight: '600', padding: '6px 14px', borderRadius: t.radius, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+                  style={{ background: 'rgba(52,152,219,0.12)', border: '1px solid rgba(52,152,219,0.3)', color: 'rgba(52,152,219,0.9)', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, padding: '6px 14px', borderRadius: t.radius, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
                 >
                   Compare models for this region →
                 </button>

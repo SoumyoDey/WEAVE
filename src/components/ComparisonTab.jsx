@@ -124,14 +124,14 @@ const CARD = {
 const SECTION_TITLE = {
   color: 'rgba(255,255,255,0.85)',
   fontSize: t.fontSize.md,
-  fontWeight: '600',
+  fontWeight: t.fontWeight.semibold,
   letterSpacing: '0.02em',
   margin: '0 0 14px 0',
 };
 
 const LABEL = {
   fontSize: t.fontSize.xs,
-  fontWeight: '500',
+  fontWeight: t.fontWeight.medium,
   letterSpacing: '0.02em',
   color: 'rgba(255,255,255,0.5)',
   marginBottom: '6px',
@@ -195,7 +195,7 @@ function RegionNudge() {
     }}>
       <span style={{ lineHeight: 1, display: 'inline-flex' }}><MapPin size={18} /></span>
       <div>
-        <div style={{ fontWeight: '600', color: 'rgba(255,255,255,0.5)', marginBottom: '4px' }}>
+        <div style={{ fontWeight: t.fontWeight.semibold, color: 'rgba(255,255,255,0.5)', marginBottom: '4px' }}>
           No region selected
         </div>
         Switch to the <strong style={{ color: 'rgba(255,255,255,0.6)' }}>Visualization</strong> tab,
@@ -251,7 +251,7 @@ function NoData({ text = 'No data for this selection' }) {
 function MetricCard({ label, hint, height, children }) {
   return (
     <div style={{ ...CARD, padding: '12px 10px 6px' }}>
-      <div style={{ fontSize: t.fontSize.base, fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>{label}</div>
+      <div style={{ fontSize: t.fontSize.base, fontWeight: t.fontWeight.semibold, color: 'rgba(255,255,255,0.85)' }}>{label}</div>
       <div style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.4)', marginBottom: '4px' }}>
         {hint || ' '}
       </div>
@@ -375,10 +375,10 @@ function ForecastTooltip({ active, payload, label, selectedModels, normalized, v
         <div key={model} style={{ marginBottom: '6px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <span style={{ display: 'inline-block', width: '10px', height: '10px', borderRadius: '2px', background: MODEL_COLORS[model] }} />
-            <span style={{ color: 'rgba(255,255,255,0.85)', fontWeight: '600', minWidth: '44px' }}>{model}</span>
-            <span style={{ color: 'rgba(255,255,255,0.85)', fontWeight: '700' }}>
+            <span style={{ color: 'rgba(255,255,255,0.85)', fontWeight: t.fontWeight.semibold, minWidth: '44px' }}>{model}</span>
+            <span style={{ color: 'rgba(255,255,255,0.85)', fontWeight: t.fontWeight.bold }}>
               {rateMean.toFixed(3)}
-              <span style={{ color: 'rgba(255,255,255,0.5)', fontWeight: '400', fontSize: t.fontSize.micro, marginLeft: '2px' }}>{displayUnit}</span>
+              <span style={{ color: 'rgba(255,255,255,0.5)', fontWeight: t.fontWeight.normal, fontSize: t.fontSize.micro, marginLeft: '2px' }}>{displayUnit}</span>
             </span>
             {rateStd != null && (
               <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.xs }}>±{rateStd.toFixed(3)}</span>
@@ -892,7 +892,7 @@ export function ComparisonTab({
     <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: 1 }}>
       {/* ── Header ── */}
       <div style={{ padding: '16px 30px 10px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-        <h2 style={{ color: 'white', margin: '0 0 4px 0', fontSize: t.fontSize.xl, fontWeight: '600', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <h2 style={{ color: 'white', margin: '0 0 4px 0', fontSize: t.fontSize.xl, fontWeight: t.fontWeight.semibold, display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Scale size={18} />Model comparison
         </h2>
         <p style={{ color: 'rgba(255,255,255,0.4)', margin: '0 0 8px 0', fontSize: t.fontSize.base }}>
@@ -901,7 +901,7 @@ export function ComparisonTab({
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           {/* Variable badge */}
           <span style={{
-            fontSize: t.fontSize.xs, fontWeight: '600', padding: '3px 10px', borderRadius: '20px',
+            fontSize: t.fontSize.xs, fontWeight: t.fontWeight.semibold, padding: '3px 10px', borderRadius: '20px',
             background: 'rgba(52,152,219,0.15)', border: '1px solid rgba(52,152,219,0.3)',
             color: '#3498db',
           }}>
@@ -910,7 +910,7 @@ export function ComparisonTab({
           {/* Location badge */}
           {validLocation && (
             <span style={{
-              fontSize: t.fontSize.xs, fontWeight: '600', padding: '3px 10px', borderRadius: '20px',
+              fontSize: t.fontSize.xs, fontWeight: t.fontWeight.semibold, padding: '3px 10px', borderRadius: '20px',
               background: 'rgba(46,204,113,0.12)', border: '1px solid rgba(46,204,113,0.25)',
               color: '#2ecc71',
             }}>
@@ -934,7 +934,7 @@ export function ComparisonTab({
                   onClick={() => setCompareMode(mode)}
                   aria-pressed={compareMode === mode}
                   style={{
-                    padding: '6px 18px', fontSize: t.fontSize.sm, fontWeight: '600', cursor: 'pointer',
+                    padding: '6px 18px', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, cursor: 'pointer',
                     background: compareMode === mode ? 'rgba(52,152,219,0.25)' : 'rgba(255,255,255,0.04)',
                     color: compareMode === mode ? 'rgba(52,152,219,0.95)' : 'rgba(255,255,255,0.4)',
                     border: 'none', outline: 'none',
@@ -961,7 +961,7 @@ export function ComparisonTab({
             <div style={LABEL}>Region</div>
             {hasRegion ? (
               <span style={{
-                fontSize: t.fontSize.xs, fontWeight: '600', padding: '5px 12px', borderRadius: '20px',
+                fontSize: t.fontSize.xs, fontWeight: t.fontWeight.semibold, padding: '5px 12px', borderRadius: '20px',
                 background: 'rgba(230,126,34,0.12)', border: '1px solid rgba(230,126,34,0.3)',
                 color: '#e67e22', display: 'inline-block',
               }}>
@@ -1014,7 +1014,7 @@ export function ComparisonTab({
                     borderRadius: '7px',
                     color: '#3498db',
                     fontSize: t.fontSize.sm,
-                    fontWeight: '600',
+                    fontWeight: t.fontWeight.semibold,
                     padding: '6px 12px',
                     cursor: 'pointer',
                     display: 'flex',
@@ -1043,7 +1043,7 @@ export function ComparisonTab({
                     style={{
                       display: 'flex', alignItems: 'center', gap: '6px',
                       padding: '6px 14px', borderRadius: '20px', cursor: 'pointer',
-                      fontSize: t.fontSize.base, fontWeight: '600',
+                      fontSize: t.fontSize.base, fontWeight: t.fontWeight.semibold,
                       background: active ? `${color}22` : 'rgba(255,255,255,0.04)',
                       border: `1px solid ${active ? color : 'rgba(255,255,255,0.12)'}`,
                       color: active ? color : 'rgba(255,255,255,0.4)',
@@ -1172,7 +1172,7 @@ export function ComparisonTab({
                 borderRadius: t.radius,
                 padding: '9px 24px',
                 fontSize: t.fontSize.md,
-                fontWeight: '700',
+                fontWeight: t.fontWeight.bold,
                 cursor: canRun ? 'pointer' : 'not-allowed',
                 display: 'flex',
                 alignItems: 'center',
@@ -1278,7 +1278,7 @@ export function ComparisonTab({
                       {REGION_METRIC_GROUPS.map(group => (
                         <div key={group.id} style={{ marginBottom: '24px' }}>
                           <div style={SUBHEAD}>
-                            <span style={{ fontWeight: '600' }}>
+                            <span style={{ fontWeight: t.fontWeight.semibold }}>
                               {group.label}
                               {group.id === 'categorical' && ` (> ${regionThreshold} ${thresholdUnit})`}
                             </span>
@@ -1328,7 +1328,7 @@ export function ComparisonTab({
                 </span>
                 {selectedModels.map(m => (
                   <span key={m} style={{
-                    fontSize: t.fontSize.xs, fontWeight: '600',
+                    fontSize: t.fontSize.xs, fontWeight: t.fontWeight.semibold,
                     color: MODEL_COLORS[m],
                     opacity: 0.75,
                   }}>
@@ -1370,7 +1370,7 @@ export function ComparisonTab({
                         borderRadius: t.radiusSm,
                         color: '#7ec8f7',
                         fontSize: t.fontSize.sm,
-                        fontWeight: '600',
+                        fontWeight: t.fontWeight.semibold,
                         padding: '4px 12px',
                         cursor: 'pointer',
                         whiteSpace: 'nowrap',
@@ -1398,7 +1398,7 @@ export function ComparisonTab({
                         padding: '4px 12px',
                       }}>
                         <span style={{ display: 'inline-block', width: '12px', height: '3px', background: color, borderRadius: '2px' }} />
-                        <span style={{ color: 'rgba(255,255,255,0.85)', fontSize: t.fontSize.sm, fontWeight: '600' }}>{m}</span>
+                        <span style={{ color: 'rgba(255,255,255,0.85)', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold }}>{m}</span>
                         {rateValue != null && (
                           <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: t.fontSize.xs }}>
                             {rateValue.toFixed(3)} {yAxisUnit}
@@ -1606,7 +1606,7 @@ export function ComparisonTab({
                             }}>
                               {/* Model name */}
                               <span style={{
-                                fontWeight: '700', fontSize: t.fontSize.base, color,
+                                fontWeight: t.fontWeight.bold, fontSize: t.fontSize.base, color,
                                 minWidth: '48px',
                               }}>
                                 {m}
@@ -1614,7 +1614,7 @@ export function ComparisonTab({
                               {/* Stat chips */}
                               {stats.map(({ label, value, color: vc }) => (
                                 <div key={label} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                                  <span style={{ color: vc, fontSize: t.fontSize.md, fontWeight: '700', lineHeight: 1 }}>{value}</span>
+                                  <span style={{ color: vc, fontSize: t.fontSize.md, fontWeight: t.fontWeight.bold, lineHeight: 1 }}>{value}</span>
                                   <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.micro, marginTop: '2px', whiteSpace: 'nowrap' }}>{label}</span>
                                 </div>
                               ))}
@@ -1626,7 +1626,7 @@ export function ComparisonTab({
                       {/* Aggregate comparison — one bar per model, per metric */}
                       <div style={{ marginBottom: '26px' }}>
                         <div style={SUBHEAD}>
-                          <span style={{ fontWeight: '600' }}>
+                          <span style={{ fontWeight: t.fontWeight.semibold }}>
                             Aggregate over {obsHours.length} verified lead time{obsHours.length === 1 ? '' : 's'}
                           </span>
                           <span style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.3)' }}>
@@ -1651,7 +1651,7 @@ export function ComparisonTab({
                       {/* Per-lead-time comparison — one line per model, per metric */}
                       <div>
                         <div style={SUBHEAD}>
-                          <span style={{ fontWeight: '600' }}>By lead time</span>
+                          <span style={{ fontWeight: t.fontWeight.semibold }}>By lead time</span>
                           {selectedModels.map(m => (
                             <span key={m} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                               <span style={{ display: 'inline-block', width: '16px', height: '2px', background: MODEL_COLORS[m], borderRadius: '1px' }} />
@@ -1699,7 +1699,7 @@ export function ComparisonTab({
               style={{
                 background: 'none', border: 'none', cursor: 'pointer',
                 display: 'flex', alignItems: 'center', gap: '8px',
-                color: 'rgba(255,255,255,0.7)', fontSize: t.fontSize.md, fontWeight: '600',
+                color: 'rgba(255,255,255,0.7)', fontSize: t.fontSize.md, fontWeight: t.fontWeight.semibold,
                 letterSpacing: '0.02em',
                 padding: '0 0 12px 0',
               }}
@@ -1767,7 +1767,7 @@ export function ComparisonTab({
                       background: (!catLoading && validLocation) ? '#9b59b6' : 'rgba(255,255,255,0.08)',
                       color: (!catLoading && validLocation) ? 'white' : 'rgba(255,255,255,0.25)',
                       border: 'none', borderRadius: t.radius, padding: '7px 18px',
-                      fontSize: t.fontSize.base, fontWeight: '700',
+                      fontSize: t.fontSize.base, fontWeight: t.fontWeight.bold,
                       cursor: (!catLoading && validLocation) ? 'pointer' : 'not-allowed',
                       display: 'flex', alignItems: 'center', gap: '6px', transition: 'background 0.15s',
                     }}
@@ -1808,7 +1808,7 @@ export function ComparisonTab({
                     {/* Aggregate — scores pooled over every verified lead time */}
                     <div style={{ marginBottom: '26px' }}>
                       <div style={SUBHEAD}>
-                        <span style={{ fontWeight: '600' }}>Aggregate</span>
+                        <span style={{ fontWeight: t.fontWeight.semibold }}>Aggregate</span>
                         <span style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.3)' }}>
                           CSI / POD / FAR pooled from hit-miss-false-alarm counts across lead times
                         </span>
@@ -1828,11 +1828,11 @@ export function ComparisonTab({
                       </div>
                     </div>
 
-                    <div style={SUBHEAD}><span style={{ fontWeight: '600' }}>By lead time</span></div>
+                    <div style={SUBHEAD}><span style={{ fontWeight: t.fontWeight.semibold }}>By lead time</span></div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px' }}>
                       {CAT_METRICS.map(({ key, label, hint, bounded }) => (
                         <div key={key} style={{ ...CARD, padding: '14px 12px 8px' }}>
-                          <div style={{ fontSize: t.fontSize.md, fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>{label}</div>
+                          <div style={{ fontSize: t.fontSize.md, fontWeight: t.fontWeight.semibold, color: 'rgba(255,255,255,0.85)' }}>{label}</div>
                           <div style={{ fontSize: t.fontSize.xs, color: 'rgba(255,255,255,0.4)', marginBottom: '6px' }}>{hint}</div>
                           <div style={{ height: '180px' }}>
                             <ResponsiveContainer width="100%" height="100%">
@@ -1934,7 +1934,7 @@ export function ComparisonTab({
                   background: mapsRunning ? 'rgba(255,255,255,0.08)' : '#9b59b6',
                   color: mapsRunning ? 'rgba(255,255,255,0.25)' : 'white',
                   border: 'none', borderRadius: t.radius, padding: '7px 18px',
-                  fontSize: t.fontSize.base, fontWeight: '700',
+                  fontSize: t.fontSize.base, fontWeight: t.fontWeight.bold,
                   cursor: mapsRunning ? 'not-allowed' : 'pointer',
                   display: 'flex', alignItems: 'center', gap: '6px', transition: 'background 0.15s',
                 }}
@@ -1967,7 +1967,7 @@ export function ComparisonTab({
                         padding: '8px 12px', borderBottom: '1px solid rgba(255,255,255,0.06)',
                         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                       }}>
-                        <span style={{ fontSize: t.fontSize.sm, fontWeight: '700', color: MODEL_COLORS[m] }}>{m}</span>
+                        <span style={{ fontSize: t.fontSize.sm, fontWeight: t.fontWeight.bold, color: MODEL_COLORS[m] }}>{m}</span>
                         {st?.url && (
                           <button
                             onClick={() => downloadMap(m, st.url)}
@@ -2022,7 +2022,7 @@ export function ComparisonTab({
                     value={value || ''}
                     onChange={e => setter(e.target.value)}
                     aria-label={`Model ${side}`}
-                    style={{ ...INPUT, width: 'auto', cursor: 'pointer', color: MODEL_COLORS[value] || INPUT.color, fontWeight: 600 }}
+                    style={{ ...INPUT, width: 'auto', cursor: 'pointer', color: MODEL_COLORS[value] || INPUT.color, fontWeight: t.fontWeight.semibold }}
                   >
                     {selectedModels.map(m => (
                       <option key={m} value={m} style={{ background: '#1a2535' }}>{m}</option>
@@ -2038,7 +2038,7 @@ export function ComparisonTab({
                   background: (!diffLoading && effDiffA && effDiffB) ? '#e67e22' : 'rgba(255,255,255,0.08)',
                   color: (!diffLoading && effDiffA && effDiffB) ? 'white' : 'rgba(255,255,255,0.25)',
                   border: 'none', borderRadius: t.radius, padding: '7px 18px',
-                  fontSize: t.fontSize.base, fontWeight: '700',
+                  fontSize: t.fontSize.base, fontWeight: t.fontWeight.bold,
                   cursor: (!diffLoading && effDiffA && effDiffB) ? 'pointer' : 'not-allowed',
                   display: 'flex', alignItems: 'center', gap: '6px', transition: 'background 0.15s',
                 }}
@@ -2090,7 +2090,7 @@ export function ComparisonTab({
                     { label: 'Largest difference', value: diffData.max_abs_diff?.toFixed(4) },
                   ].map(({ label, value }) => (
                     <div key={label} style={{ textAlign: 'center' }}>
-                      <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: t.fontSize.md, fontWeight: '700' }}>
+                      <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: t.fontSize.md, fontWeight: t.fontWeight.bold }}>
                         {value ?? '—'}
                       </div>
                       <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.micro, marginTop: '1px' }}>
@@ -2132,7 +2132,7 @@ export function ComparisonTab({
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginBottom: '16px' }}>
                   {/* Region badge */}
                   <span style={{
-                    fontSize: t.fontSize.xs, fontWeight: '600', padding: '4px 12px', borderRadius: '20px',
+                    fontSize: t.fontSize.xs, fontWeight: t.fontWeight.semibold, padding: '4px 12px', borderRadius: '20px',
                     background: 'rgba(230,126,34,0.12)', border: '1px solid rgba(230,126,34,0.3)',
                     color: '#e67e22',
                   }}>
@@ -2166,7 +2166,7 @@ export function ComparisonTab({
                       borderRadius: t.radius,
                       padding: '7px 18px',
                       fontSize: t.fontSize.base,
-                      fontWeight: '700',
+                      fontWeight: t.fontWeight.bold,
                       cursor: (!spatialLoading && selectedModels.length >= 2) ? 'pointer' : 'not-allowed',
                       display: 'flex',
                       alignItems: 'center',
@@ -2268,7 +2268,7 @@ export function ComparisonTab({
                         { label: 'Lead time', value: `+${spatialData.hour}h` },
                       ].map(({ label, value }) => (
                         <div key={label} style={{ textAlign: 'center' }}>
-                          <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: t.fontSize.md, fontWeight: '700' }}>
+                          <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: t.fontSize.md, fontWeight: t.fontWeight.bold }}>
                             {value ?? '—'}
                           </div>
                           <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.micro, marginTop: '1px' }}>

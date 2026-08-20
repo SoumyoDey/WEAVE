@@ -41,7 +41,7 @@ export function BivariateLegend({ bivariateRanges, selectedColormap, selectedVar
 
   return (
     <div style={cardStyle}>
-      <div style={{ color: 'white', fontSize: t.fontSize.sm, fontWeight: 600, marginBottom: '8px' }}>
+      <div style={{ color: 'white', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, marginBottom: '8px' }}>
         Grid — {xLabel}
       </div>
 

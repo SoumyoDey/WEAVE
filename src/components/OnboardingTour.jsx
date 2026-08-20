@@ -29,7 +29,7 @@ export function OnboardingTour({ open, onClose }) {
         </div>
         <div style={{ padding: '6px 24px 22px', textAlign: 'center' }}>
           <div style={{ width: '56px', height: '56px', borderRadius: '14px', background: t.accentSoft, color: t.accentText, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '8px auto 16px' }}><Icon size={28} /></div>
-          <h2 style={{ margin: '0 0 8px', fontSize: t.fontSize.xl, fontWeight: 600, color: 'white' }}>{title}</h2>
+          <h2 style={{ margin: '0 0 8px', fontSize: t.fontSize.xl, fontWeight: t.fontWeight.semibold, color: 'white' }}>{title}</h2>
           <p style={{ margin: 0, fontSize: t.fontSize.base, lineHeight: 1.6, color: 'rgba(255,255,255,0.7)' }}>{body}</p>
 
           <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', margin: '18px 0' }}>
