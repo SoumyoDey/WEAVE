@@ -142,7 +142,7 @@ export function Timeline({ currentModel, selectedHour, setSelectedHour, obsCover
               <div style={{ position: 'absolute', left: `${verifiedPct}%`, top: '-11px', display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
                 <div style={{ width: '1px', height: '17px', background: 'rgba(243,156,18,0.75)' }} />
                 {!isNarrow && (
-                  <span style={{ fontSize: '9px', color: 'rgba(243,156,18,0.8)', whiteSpace: 'nowrap', paddingLeft: '3px', marginTop: '-2px' }}>
+                  <span style={{ fontSize: t.fontSize.nano, color: 'rgba(243,156,18,0.8)', whiteSpace: 'nowrap', paddingLeft: '3px', marginTop: '-2px' }}>
                     verified to +{verifiedTo}h
                   </span>
                 )}
@@ -158,7 +158,7 @@ export function Timeline({ currentModel, selectedHour, setSelectedHour, obsCover
                 <div key={h} style={{ position: 'absolute', left: `${pos}%`, transform: 'translateX(-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
                   <div style={{ width: '1px', height: showLabel ? '6px' : '4px', background: showLabel ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.18)' }} />
                   {showLabel && (
-                    <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)', whiteSpace: 'nowrap' }}>
+                    <span style={{ fontSize: t.fontSize.nano, color: 'rgba(255,255,255,0.3)', whiteSpace: 'nowrap' }}>
                       {h === 0 ? 'Now' : `+${dayNum}d`}
                     </span>
                   )}
@@ -175,18 +175,18 @@ export function Timeline({ currentModel, selectedHour, setSelectedHour, obsCover
           marginLeft: isNarrow ? 'auto' : 0,
         }}>
           <div>
-            <span style={{ fontSize: isNarrow ? '14px' : '17px', fontWeight: '800', color: 'white', letterSpacing: '-0.5px' }}>+{selectedHour}h</span>
-            <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.38)', marginLeft: '5px' }}>({(selectedHour / 24).toFixed(1)}d)</span>
+            <span style={{ fontSize: isNarrow ? t.fontSize.md : t.fontSize.lg, fontWeight: '800', color: 'white', letterSpacing: '-0.5px' }}>+{selectedHour}h</span>
+            <span style={{ fontSize: t.fontSize.xs, color: 'rgba(255,255,255,0.38)', marginLeft: '5px' }}>({(selectedHour / 24).toFixed(1)}d)</span>
           </div>
           {!isNarrow && (
-            <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.5)' }}>
-              <span style={{ color: 'rgba(255,255,255,0.28)', fontSize: '9px', letterSpacing: '0.05em' }}>Valid </span>{validStr}
+            <div style={{ fontSize: t.fontSize.xs, color: 'rgba(255,255,255,0.5)' }}>
+              <span style={{ color: 'rgba(255,255,255,0.28)', fontSize: t.fontSize.nano, letterSpacing: '0.05em' }}>Valid </span>{validStr}
             </div>
           )}
           {/* Say it at the lead time the user has actually chosen, not only on the
               axis — this is the readout they are looking at when a panel is empty. */}
           {pastVerified && (
-            <div style={{ fontSize: '10px', color: '#f39c12', marginTop: '1px' }}
+            <div style={{ fontSize: t.fontSize.micro, color: '#f39c12', marginTop: '1px' }}
                  title={`Observations for ${obsCoverage.variable} end ${obsCoverage.record_end_lead_hours}h after initialisation`}>
               beyond verification (+{verifiedTo}h)
             </div>
@@ -197,9 +197,9 @@ export function Timeline({ currentModel, selectedHour, setSelectedHour, obsCover
       {/* Copyright footer */}
       {!isNarrow && (
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', marginLeft: '-20px', marginRight: '-20px', padding: '3px 20px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', marginTop: '6px' }}>
-          <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.2)', letterSpacing: '0.03em' }}>© {new Date().getFullYear()} Northeastern University</span>
-          <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.1)' }}>·</span>
-          <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.15)', letterSpacing: '0.05em', fontWeight: 600 }}>WEAVE</span>
+          <span style={{ fontSize: t.fontSize.nano, color: 'rgba(255,255,255,0.2)', letterSpacing: '0.03em' }}>© {new Date().getFullYear()} Northeastern University</span>
+          <span style={{ fontSize: t.fontSize.nano, color: 'rgba(255,255,255,0.1)' }}>·</span>
+          <span style={{ fontSize: t.fontSize.nano, color: 'rgba(255,255,255,0.15)', letterSpacing: '0.05em', fontWeight: 600 }}>WEAVE</span>
         </div>
       )}
     </div>

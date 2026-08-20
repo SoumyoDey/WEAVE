@@ -16,7 +16,7 @@ export function Button({ variant = 'secondary', style, children, disabled = fals
       style={{
         minHeight: '36px', padding: `${t.space(2)} ${t.space(3)}`,
         borderRadius: t.radius, cursor: disabled ? 'not-allowed' : 'pointer',
-        fontSize: '13px', fontWeight: 600, transition: t.transition,
+        fontSize: t.fontSize.base, fontWeight: 600, transition: t.transition,
         opacity: disabled ? 0.5 : 1, ...variants[variant], ...style,
       }}
       {...props}

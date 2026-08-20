@@ -49,7 +49,7 @@ export function SelectionToolbar({ selectionMode, setSelectionMode, selectedRegi
 
       {/* Draw mode indicator */}
       {selectionMode && (
-        <div style={{ position: 'absolute', top: '60px', left: '50%', transform: 'translateX(-50%)', background: 'rgba(22,33,44,0.92)', color: 'white', padding: '8px 18px', borderRadius: '20px', fontSize: '13px', fontWeight: '600', zIndex: 1002, pointerEvents: 'none', whiteSpace: 'nowrap', boxShadow: '0 2px 12px rgba(0,0,0,0.4)', border: '1px solid rgba(52,152,219,0.5)' }}>
+        <div style={{ position: 'absolute', top: '60px', left: '50%', transform: 'translateX(-50%)', background: 'rgba(22,33,44,0.92)', color: 'white', padding: '8px 18px', borderRadius: '20px', fontSize: t.fontSize.base, fontWeight: '600', zIndex: 1002, pointerEvents: 'none', whiteSpace: 'nowrap', boxShadow: '0 2px 12px rgba(0,0,0,0.4)', border: '1px solid rgba(52,152,219,0.5)' }}>
           {selectionMode === 'rectangle'
             ? 'Click and drag to draw a rectangle'
             : 'Click to add vertices · double-click to close'}

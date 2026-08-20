@@ -1,4 +1,5 @@
 import React from 'react';
+import { t } from '../../theme';
 
 export function VSUPBoxesLegend({ stats, selectedVariable, invertUncertainty = false, numBuckets = 0, stdMax }) {
   // When bucketing is on, show one row per bucket centre (largest → smallest) so the
@@ -23,7 +24,7 @@ export function VSUPBoxesLegend({ stats, selectedVariable, invertUncertainty = f
 
   return (
     <div style={cardStyle}>
-      <div style={{ color: 'white', fontSize: '12px', fontWeight: 600, marginBottom: '8px' }}>
+      <div style={{ color: 'white', fontSize: t.fontSize.sm, fontWeight: 600, marginBottom: '8px' }}>
         Boxes — spread
       </div>
 
@@ -44,13 +45,13 @@ export function VSUPBoxesLegend({ stats, selectedVariable, invertUncertainty = f
                   flexShrink: 0,
                 }}
               />
-              <span style={{ color: 'rgba(255,255,255,0.8)', fontSize: '11px' }}>{stdVal}</span>
+              <span style={{ color: 'rgba(255,255,255,0.8)', fontSize: t.fontSize.xs }}>{stdVal}</span>
             </div>
           );
         })}
       </div>
 
-      <div style={{ color: 'rgba(255,255,255,0.45)', fontSize: '10px', marginTop: '10px' }}>
+      <div style={{ color: 'rgba(255,255,255,0.45)', fontSize: t.fontSize.micro, marginTop: '10px' }}>
         Std Dev ({unit}) — {invertUncertainty ? 'smaller = more uncertain' : 'larger = more uncertain'}
       </div>
     </div>

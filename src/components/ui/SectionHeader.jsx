@@ -4,7 +4,7 @@ import { t } from '../../theme';
 export function SectionHeader({ icon: Icon, children, style }) {
   return (
     <div style={{
-      fontSize: '11px', color: t.textMuted, letterSpacing: '0.01em', marginBottom: t.space(2),
+      fontSize: t.fontSize.xs, color: t.textMuted, letterSpacing: '0.01em', marginBottom: t.space(2),
       display: 'flex', alignItems: 'center', gap: t.space(1.5), ...style,
     }}>
       {Icon && <Icon size={13} aria-hidden="true" />}{children}
@@ -13,5 +13,5 @@ export function SectionHeader({ icon: Icon, children, style }) {
 }
 
 export function FieldLabel({ children, style }) {
-  return <div style={{ fontSize: '11px', fontWeight: 500, color: t.textMuted, marginBottom: t.space(1.5), ...style }}>{children}</div>;
+  return <div style={{ fontSize: t.fontSize.xs, fontWeight: 500, color: t.textMuted, marginBottom: t.space(1.5), ...style }}>{children}</div>;
 }

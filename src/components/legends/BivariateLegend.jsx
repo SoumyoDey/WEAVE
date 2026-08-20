@@ -1,4 +1,5 @@
 import React from 'react';
+import { t } from '../../theme';
 
 export function BivariateLegend({ bivariateRanges, selectedColormap, selectedVariable, buildColorMatrix, invertUncertainty = false, numBuckets = 0, flipColormap = false }) {
   if (!bivariateRanges) return null;
@@ -40,7 +41,7 @@ export function BivariateLegend({ bivariateRanges, selectedColormap, selectedVar
 
   return (
     <div style={cardStyle}>
-      <div style={{ color: 'white', fontSize: '12px', fontWeight: 600, marginBottom: '8px' }}>
+      <div style={{ color: 'white', fontSize: t.fontSize.sm, fontWeight: 600, marginBottom: '8px' }}>
         Grid — {xLabel}
       </div>
 
@@ -51,7 +52,7 @@ export function BivariateLegend({ bivariateRanges, selectedColormap, selectedVar
             key={i}
             style={{
               width: (i === 0 || i === cols) ? cellSize / 2 : cellSize,
-              fontSize: '10px',
+              fontSize: t.fontSize.micro,
               color: 'rgba(255,255,255,0.7)',
               textAlign: 'center',
             }}
@@ -90,7 +91,7 @@ export function BivariateLegend({ bivariateRanges, selectedColormap, selectedVar
             {yTicks.map((tick, i) => (
               <div
                 key={i}
-                style={{ fontSize: '10px', color: 'rgba(255,255,255,0.7)' }}
+                style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.7)' }}
               >
                 {tick}
               </div>
@@ -101,7 +102,7 @@ export function BivariateLegend({ bivariateRanges, selectedColormap, selectedVar
             style={{
               writingMode: 'vertical-rl',
               transform: 'rotate(180deg)',
-              fontSize: '10px',
+              fontSize: t.fontSize.micro,
               color: 'rgba(255,255,255,0.6)',
               marginLeft: '4px',
               alignSelf: 'center',
@@ -113,10 +114,10 @@ export function BivariateLegend({ bivariateRanges, selectedColormap, selectedVar
       </div>
 
       {/* X-axis label */}
-      <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: '10px', textAlign: 'center', marginTop: '4px' }}>
+      <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: t.fontSize.micro, textAlign: 'center', marginTop: '4px' }}>
         {xLabel} ({unit}) →
       </div>
-      <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '10px', textAlign: 'center', marginTop: '6px' }}>
+      <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.micro, textAlign: 'center', marginTop: '6px' }}>
         Right = more · down = less certain.
       </div>
     </div>

@@ -6,7 +6,7 @@ export function Select({ style, children, ...props }) {
     <select
       style={{
         width: '100%', minHeight: '36px', padding: `${t.space(2)} ${t.space(2.5)}`,
-        fontSize: '12px', border: `1px solid ${t.borderStrong}`, borderRadius: t.radiusSm,
+        fontSize: t.fontSize.sm, border: `1px solid ${t.borderStrong}`, borderRadius: t.radiusSm,
         background: t.surface, color: t.text, cursor: 'pointer', outline: 'none', ...style,
       }}
       {...props}
