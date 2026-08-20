@@ -1,29 +1,30 @@
 # Next steps
 
 State as of 2026-08-20. Branch `p0-reliability`, PR #2 on `SoumyoDey/WEAVE`.
-Local and remote are in sync; working tree clean.
 
 **Read this, then `REVIEW_GUIDE.md`.** Items 3, 3b and 4 below are done, all seven
-defects the fixture layer found are fixed, and consistency-audit phases 1-4 are
-closed (`CONSISTENCY_AUDIT.md`). **The only thing left that needs someone other
-than whoever is reading this is the review — item 1.**
+defects the fixture layer found are fixed, and consistency-audit phases 1-4 **and
+6** are closed (`CONSISTENCY_AUDIT.md`). **The only thing left that needs someone
+other than whoever is reading this is the review — item 1.**
 
 ## Where things stand
 
-PR #2 is **open and deliberately not merged** — 63 commits, 40 files,
-+12702/-1569. `main` has not moved, so it is a clean fast-forward.
+PR #2 is **open and deliberately not merged** — 64 commits, 40 files,
++12777/-1569 as pushed. `main` has not moved, so it is a clean fast-forward.
 
-- **290 backend + 22 frontend tests pass**, no xfails. `metrics.py` 100%,
+- **302 backend + 49 frontend tests pass**, no xfails. `metrics.py` 100%,
   `flask_api.py` 83%. `python -m pytest -q` in `Data/` runs anywhere: without
-  PostgreSQL it is 176 pass / 114 skip.
+  PostgreSQL most of it skips.
 - No reviews, and no CI on the repo (`checks: 0`) — nothing runs on merge.
 - The four records, in the order to read them:
   - `REVIEW_GUIDE.md` — what changed and how to check it. Delete after merge.
+    **Its header counts are stale** (57 commits, +12,111): the branch has moved
+    since. The body is still accurate; only the summary numbers drifted.
   - `METRICS_AUDIT.md` — the metric audit. Read before re-deriving anything.
-  - `CONSISTENCY_AUDIT.md` — phases 1-4 results, findings classified.
+  - `CONSISTENCY_AUDIT.md` — phases 1-4 and 6, findings classified.
   - `Data/fixture_db.py` docstring — every expected test number, derived.
 
-### Done on 2026-08-19/20, in ten commits
+### Done on 2026-08-19/20
 
 1. **Fixture-database test layer** (item 3): `flask_api.py` 41% -> 83%. Found
    seven defects, all fixed.
@@ -35,6 +36,11 @@ PR #2 is **open and deliberately not merged** — 63 commits, 40 files,
 4. **Per-model native grids in the fixture**, so a cell-collapse bug can be seen.
 5. **Consistency audit phases 1-4**, then its safe-mechanical, documentation and
    page-flow groups.
+6. **Consistency audit phase 6, text correctness.** Seven wrong user-visible
+   strings, all fixed; two open questions recorded rather than guessed at. The
+   headline one: four spatial metrics labelled wind maps in `mm/h`, including on
+   the Cartopy PNG itself. Every finding was a string that a later fix had
+   falsified — see the pattern note at the end of `CONSISTENCY_AUDIT.md`.
 
 ---
 
@@ -45,28 +51,25 @@ In priority order. Everything here is unstarted; nothing is half-done.
 1. **Item 1, the review.** Blocked on a person, not on work. `REVIEW_GUIDE.md`
    exists to make it tractable and lists every change that moves a published
    number, with before/after values and the test that pins each one.
-2. **Consistency audit phase 6, text correctness.** The best-value work left. It
-   has the strongest track record of the six phases: the metric audit found three
-   wrong user-visible strings, and this session found five more without looking
-   systematically (`units: 'mm/h'` on wind, `mean_ssr` naming a pooled ratio a
-   mean, three stale docstrings, and a README paragraph repeating a claim I had
-   retracted). The plan's mechanical starting point still applies:
-   `grep -rn "mm/6h\|mm/h\|mm/hr\|m/s" src/`, then cross-check each against
-   `metrics.py`.
-3. **Consistency audit phase 5, typography.** Mechanical. `theme.js` already has
-   the scale; the holdouts are listed in `CONSISTENCY_AUDIT_PLAN.md`. Note
-   `ui/PanelState.jsx` was written to the scale, so it is not on that list.
-4. **Item 2, drop `regridded_forecast`** (245 MB, nothing reads it). Repoint
+2. **Consistency audit phase 5, typography.** Now the only unrun phase, and the
+   mechanical one. `theme.js` already has the scale; the holdouts are listed in
+   `CONSISTENCY_AUDIT_PLAN.md`. Two corrections to that list before you start:
+   `ui/PanelState.jsx` was written to the scale, and `MetricPanel.jsx` — named
+   there as the worst offender at four inline sizes — should be re-checked rather
+   than assumed, since phase 6 has been through it since.
+3. **Item 2, drop `regridded_forecast`** (245 MB, nothing reads it). Repoint
    `regrid_members.py`'s grid lookup at `regridded_forecast_ens` in the same
    change. `observation_data` is *also* unread now, but it is raw ingested data no
    script in this repo can regenerate — leave it.
-5. **Item 6, the lower-priority list.** Vite (CRA is EOL), caching the
+4. **Item 6, the lower-priority list.** Vite (CRA is EOL), caching the
    deterministic metric endpoints, row caps on point-list queries.
-6. **`DATA_EXPANSION_DESIGN.md`.** Still blocked on the missing `init_time`
-   column. One trap was removed this session: `Timeline.jsx` no longer hard-codes
-   the initialisation date.
+5. **`DATA_EXPANSION_DESIGN.md`.** Still blocked on the missing `init_time`
+   column. One trap was removed: `Timeline.jsx` no longer hard-codes the
+   initialisation date.
 
-### Two open items with no owner
+### Four open items with no owner
+
+The first two are old; the last two came out of phase 6.
 
 - **`fbi` and `composite_confidence` are Analysis-only and nobody decided that.**
   Recorded as undecided in `categorical_metrics_endpoint`'s docstring rather than
@@ -75,6 +78,19 @@ In priority order. Everything here is unstarted; nothing is half-done.
 - **UKMO's wind and precipitation coordinates differ** in `ensemble_statistics`
   (`35.1562` vs `35.15625`, two loaders). Nothing joins across variables, so
   nothing is broken; a test pins the difference so it cannot surprise anyone.
+- **The two tabs pool the point categorical metrics differently.** Analysis scores
+  CSI/POD/FAR on the clicked cell alone; Comparison pools them over the whole
+  `box_cells` box (default 9×9). Each says what it does and neither is wrong, but
+  the same point at the same threshold gives two different CSIs. Phase 1 missed it
+  because its matrix asked what is *available*, not which estimator produced it —
+  the same blind spot as `METRICS_AUDIT.md` finding 8. A cross-reference now makes
+  it visible; deciding which one is right is the actual work.
+- **The metric colour bands are precipitation-calibrated and wind uses them.**
+  `< 0.2 — Excellent` is an mm/h judgement applied to m/s, and the backend norms
+  cap MAE/RMSE at 2, which a real wind MAE exceeds (2.18 m/s over 35–37 N,
+  77–74 W), so most of the map saturates to one colour. Setting wind bands needs
+  someone who can say what a good wind MAE is; the panel says whose scale it is
+  in the meantime.
 
 ### Traps
 
@@ -90,6 +106,12 @@ In priority order. Everything here is unstarted; nothing is half-done.
   Assert non-emptiness first.
 - **Cartopy drops coverage's tracer** partway through both render functions, so
   ~120 executed lines read as uncovered. Do not chase it.
+- **A comment or label that was right when written is the most likely thing to be
+  wrong now.** Every one of phase 6's seven findings was accurate at the time and
+  falsified later by a fix elsewhere — the code moved, the sentence did not. When
+  you change behaviour, grep for the strings that described the old behaviour, and
+  prefer a test on the *invariant* over a test on the wording: a test that asserts
+  a sentence gets rewritten by the same change that breaks it.
 
 ---
 
@@ -431,11 +453,13 @@ fallback. That is one less thing for DATA_EXPANSION_DESIGN.md to trip over.
 
 ## 5. Two planned pieces of work, with their own documents
 
-- **`CONSISTENCY_AUDIT_PLAN.md`** — **phases 1-4 are run and closed**; results and
-  every finding are in `CONSISTENCY_AUDIT.md`. Phase 2 found no wind/precipitation
-  gap at all, which the plan did not expect; the real gap was in phase 1 (no
-  accuracy metrics at an Analysis point) and is fixed. **Phases 5 (typography) and
-  6 (text correctness) are still unrun** — see "If you are picking this up cold".
+- **`CONSISTENCY_AUDIT_PLAN.md`** — **phases 1-4 and 6 are run and closed**;
+  results and every finding are in `CONSISTENCY_AUDIT.md`. Phase 2 found no
+  wind/precipitation gap at all, which the plan did not expect; the real gap was
+  in phase 1 (no accuracy metrics at an Analysis point) and is fixed. Phase 6 then
+  found the wind gap the plan had been looking for, but in the *text* rather than
+  the capability — four metrics labelled wind in `mm/h`. **Only phase 5
+  (typography) is unrun** — see "If you are picking this up cold".
 - **`DATA_EXPANSION_DESIGN.md`** — selecting date and initialisation. Blocked on
   one thing: the regridded tables have **no `init_time` column**, and the API
   resolves valid time from "the latest run". Loading a second run before that is

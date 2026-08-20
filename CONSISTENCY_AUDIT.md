@@ -268,13 +268,180 @@ off by default and unrelated to bounded scores.
 
 ---
 
-## What the surveys did not cover
+---
 
-Phases 5 (typography) and 6 (text correctness) are the plan's "work" phases rather
-than surveys, and were not run. Phase 6 is the one with a track record: the metric
-audit found three user-visible strings that were wrong, this session found two more
-(`units: 'mm/h'` for wind, and three stale docstrings), so the prior is that a
-sweep would find more.
+# Phase 6 — Text correctness
+
+Run 2026-08-20. **Seven findings, all fixed**, plus two things that are true as
+written but need a decision rather than an edit. Phase 5 (typography) is still
+unrun.
+
+The prior held: the plan predicted a sweep would find more wrong strings, and it
+did. Every finding below is a string that contradicted the code it described —
+in each case the code had been corrected and the string left behind.
+
+Method: the plan's two greps for unit labels and literal JSX text, then each
+string checked against `metrics.py` and `flask_api.py` rather than against
+another string. Where a claim was about behaviour it was checked by calling the
+endpoint, not by reading the code — 6.3 is the one that needed it.
+
+### 6.1 Four spatial metrics label wind maps in mm/h — **accidental · FIXED**
+
+`bias`, `mae`, `rmse` and `crps` inherit the variable's unit. Their text was
+written for precipitation and rendered for both variables:
+
+| where | string | shown for |
+|---|---|---|
+| `constants.js` descriptions | `Mean \|error\| across lead times (mm/h)` | wind and precipitation |
+| `constants.js` legends, 12 bands | `< 0.2 mm/h — Excellent` | wind and precipitation |
+| `flask_api.py` `PLOT_STYLE_REGISTRY` | `MAE (mm/h)` | drawn into the PNG **and** its title |
+
+Exactly the defect the fixture layer found in `/api/compare/skill`
+(`units: 'mm/h'` hard-coded), in three more places — and the backend one is worse,
+because it is burned into an image a user can download and pass on.
+
+**Fixed** by making the unit a property of the variable in both layers:
+`VALUE_UNITS` + `withUnit()` in `constants.js`, `VALUE_UNITS` +
+`_metric_cbar_label()` in `flask_api.py`. Verified by rendering the same 35
+points as both variables: the title and colourbar read `MAE (m/s)` for wind and
+`MAE (mm/h)` for precipitation.
+
+Tests pin both directions and, more usefully, the invariant: no registry entry
+may contain a literal unit, no dimensionless metric may gain one, and no
+`{unit}` placeholder may reach a label unsubstituted.
+
+### 6.2 SSR is described as a variance ratio — **accidental · FIXED**
+
+`METRICS_AUDIT.md` finding 7 changed SSR from a variance ratio to the
+conventional σ/RMSE, because the interpretation bands were always the σ/RMSE
+ones. The code moved; three descriptions did not:
+
+- `ssr`: "Ratio of ensemble variance to squared forecast error"
+- `ssr_agg`: "mean(σ²) / mean(ε²)" — **missing the square root**
+- the README's `ssr` vs `ssr_agg` note, repeating the same formula
+
+The app therefore contradicted itself: `AboutModal`'s glossary said "spread
+against error", which is right, next to a panel saying variance over squared
+error, which is not. And the bands are named for the σ/RMSE convention, so the
+description as written could not be reconciled with the legend beside it.
+
+**Fixed** to `σ / |ε|` and `√(mean(σ²) / mean(ε²))`, with the README stating the
+square root explicitly and why it is there.
+
+### 6.3 The Analysis badge tells users the two tabs legitimately disagree — **accidental · FIXED**
+
+The spread-skill badge carried: *"Analysis verifies individual ensemble members at
+the nearest **native** grid cell. The Comparison tab uses the **regridded ensemble
+mean and spread**, so its values for the same metric can differ."*
+
+Both halves are now false. The member grid is on the shared 0.5° grid, not a
+native one; and `/api/compare/skill` was moved onto `_member_cases_by_cell` in
+1a, so the two panels share an estimator and a summary. The string survived the
+migration that existed to remove the difference it describes — and it sends a
+user looking for a discrepancy that is no longer there.
+
+Re-measured rather than assumed, at 36.0/−75.5 over +6/12/18h:
+
+| | bias | mae | rmse | crps | correlation | ssr_agg |
+|---|---|---|---|---|---|---|
+| Analysis point | 0.0628 | 0.0918 | 0.1013 | 0.0546 | 0.9889 | 1.2331 |
+| Comparison point | 0.0628 | 0.0918 | 0.1013 | 0.0546 | 0.9889 | 1.2331 |
+
+**Fixed** to state the shared grid and the agreement, hedged only on lead-time
+range, which is the one thing the two tabs can genuinely differ on because
+Comparison has its own hour controls.
+
+### 6.4 The timeline denies observations that exist — **accidental · FIXED**
+
+The hatched track read *"No observations beyond +18h — nothing to verify
+against"*. Observations run to **+19.5h**; verification stops at +18h because a
+precipitation record needs its whole 6 h window observed. The distinction is the
+entire point of `record_end_lead_hours` vs `last_verifiable_hour`, and the other
+two surfaces that report coverage state it correctly — this one flattened them
+into a claim about the data that was not true.
+
+**Fixed**, and the two cases are worded apart: precipitation gets "observations
+run to +19.5h, and a score needs its whole window observed"; wind, being
+instantaneous, gets "the observation record ends there" — the window clause is
+meaningless for it. Caught only by reading the rendered tooltip in both variables;
+the first fix said "whole window" for wind too.
+
+### 6.5 "Every model is scored over the same six hours" omits wind — **accidental · FIXED**
+
+An `AboutModal` section heading and its paragraph, stated without qualification.
+Wind is exempt — instantaneous, no window to reconcile — and that is a standing
+decision, not an oversight. The README's verification-conventions bullet
+("Everything is compared in mm/h") had the same shape.
+
+**Fixed**: the heading now says "Every precipitation model", with the exemption
+stated in its own sentence.
+
+### 6.6 One unit, two spellings — **cosmetic · FIXED**
+
+`mm/h` in `constants.js`, `ComparisonTab` and every API response; `mm/hr` in the
+Analysis axis label and all five map legends. Both true, one product.
+**Standardised on `mm/h`**, which is what the API returns in `units`, so a label
+and the response behind it can no longer look like two different quantities.
+
+### 6.7 UKMO's grid is quoted as one number — **accidental · FIXED**
+
+`AboutModal` said 0.1875°; the grid is **0.1875° × 0.28125°** and is anisotropic,
+which is exactly why its latitudes collapsed under a 0.25° snap and its
+longitudes did not (defect 6). **Fixed** to state both.
+
+---
+
+## Two things phase 6 found that are not text bugs
+
+Recorded rather than edited, because both need a decision and one needs a
+meteorologist.
+
+### The point categorical metrics use different estimators in the two tabs — **open**
+
+Analysis pools CSI/POD/FAR over the **clicked cell alone**; `box_cells` only
+feeds FSS, and the control says so. Comparison pools the same metrics over the
+**whole `box_cells`×`box_cells` box** (default 9×9), and its caption says so too.
+Both are honest about themselves; neither says the other exists, so the same
+point at the same threshold gives two different CSIs with no visible reason.
+
+This is a phase-1 finding that phase 1 missed, because the matrix asked whether a
+metric is *available* in each surface and not which estimator produced it — the
+same blind spot as `METRICS_AUDIT.md` finding 8. **A cross-reference was added to
+Comparison's caption** so the difference is at least visible; which estimator is
+right is a real decision and is left open.
+
+### The metric colour bands are calibrated for precipitation — **open**
+
+`< 0.2 — Excellent` through `> 1.0 — Poor` are mm/h judgements, and the same
+numbers are applied to m/s. The backend norms have the same problem: MAE and RMSE
+cap at `vmax=2`, and a wind MAE map over 35–37 N, 77–74 W runs to **2.18 m/s**, so
+most of the domain saturates into one flat colour and the map stops discriminating.
+
+Setting wind bands is a judgement about what a good wind MAE is, and this project's
+own method lesson is not to guess a constant. So the panel now **says whose scale
+it is** ("Band edges and verdicts are calibrated for precipitation, not for wind")
+and the decision is left to someone who can make it.
+
+---
+
+## What phase 6 checked and found correct
+
+Worth recording so it is not re-swept:
+
+- **Every direction claim.** All 30-odd "higher/lower is better", "0 = perfect"
+  and "ideal ≈ 1" strings match `metrics.py`, including the ones that are easy to
+  get backwards (FAR lower, FBI ideal 1, bias 0). SSR's five-tier verdict in
+  `AnalysisTab` is correct in the σ/RMSE convention — under 1 is overconfident —
+  and agrees with the backend colourbar band for band.
+- **The scope claims in `AboutModal`**, which are the app's most load-bearing
+  prose. Checked against the code, not assumed: `box_cells` really does leave the
+  contingency table on the centre cell, FSS really is `None` at one cell, and a
+  partially observed window really is rejected.
+- **Threshold labels**, already variable-aware everywhere (phase 2 found this too).
+- **Backend `obs_warning` strings**, all honest about what was and was not found.
+
+The one tonal wart left alone: two empty states tell the user to "ingest more
+data", which addresses an operator rather than a reader. Not false, so not phase 6.
 
 ## Suggested sequencing, by risk
 
@@ -299,9 +466,25 @@ The plan says to budget by risk, and the findings sort cleanly:
    informative message intact. No control moved and no capability changed, which
    is what the plan's warning was about.
 
-**All of phases 1–4 are now closed.** Phases 5 (typography) and 6 (text
-correctness) remain unrun — 6 is the one with the track record.
+**Phases 1–4 and 6 are now closed.** Phase 5 (typography) is the only one left,
+and it is the mechanical one.
 
 The guardrail in the plan still applies: `ComparisonTab.jsx` is 2,300 lines and
 `AnalysisTab.jsx` is 1,264. Land these as fixes with tests, and decide about
 extraction separately.
+
+---
+
+## The pattern across all five phases
+
+Every phase found the same shape of defect, and it is worth naming because it
+predicts where the next one is. **Not one finding was a mistake made at the time
+it was written.** 1a, 1c, 6.2, 6.3 and 6.4 were all correct when written and were
+falsified later by a fix somewhere else — a migration, a renamed key, a corrected
+convention. The code moved and the sentence describing it did not.
+
+That is an argument for the tests this phase added, which pin *invariants* rather
+than strings: no literal unit in the registry, no dimensionless metric with a
+unit, no unsubstituted placeholder. A test on the wording would have to be
+rewritten by the same change that breaks the wording, and would therefore never
+catch it.
