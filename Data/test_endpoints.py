@@ -122,6 +122,46 @@ class TestValidationReturns400:
         """Model and variable names are allowlisted before reaching SQL."""
         assert client.post(path, json=body).status_code == 400
 
+    # Every endpoint that takes a single point, GET and POST. The bbox path has
+    # range-checked since the P1 work and these never did, so `lat=999` returned
+    # 200 with `cell: [999.0, -75.0]` — a coordinate that is not a place, handed
+    # back as though it were a grid cell.
+    POINT_GET  = ["/api/spread-skill", "/api/point-timeseries"]
+    POINT_POST = ["/api/compare/skill", "/api/compare/timeseries",
+                  "/api/compare/categorical", "/api/categorical-metrics"]
+
+    @pytest.mark.parametrize("lat,lon", [
+        (999, -75), (-999, -75), (36, 9999), (36, -9999), (91, 0), (0, 181),
+    ])
+    @pytest.mark.parametrize("path", POINT_GET)
+    def test_get_point_endpoints_reject_impossible_coordinates(self, client, path, lat, lon):
+        r = client.get(f"{path}?model=AIFS&variable=precipitation&lat={lat}&lon={lon}")
+        assert r.status_code == 400, r.get_json()
+        assert "error" in r.get_json()
+
+    @pytest.mark.parametrize("lat,lon", [(999, -75), (36, 9999)])
+    @pytest.mark.parametrize("path", POINT_POST)
+    def test_post_point_endpoints_reject_impossible_coordinates(self, client, path, lat, lon):
+        body = {"models": ["AIFS"], "model": "AIFS", "variable": "precipitation",
+                "lat": lat, "lon": lon}
+        r = client.post(path, json=body)
+        assert r.status_code == 400, r.get_json()
+
+    @pytest.mark.parametrize("bad", ["nan", "inf", "-inf"])
+    def test_point_endpoints_reject_non_finite_coordinates(self, client, bad):
+        """float('nan') parses fine and then compares false against every bound,
+        so it has to be rejected explicitly rather than by the range check."""
+        r = client.get(f"/api/spread-skill?model=AIFS&variable=precipitation&lat={bad}&lon=-75")
+        assert r.status_code == 400, r.get_json()
+
+    def test_the_edges_of_the_range_are_still_accepted(self, client, fake_db):
+        """The guard must reject what is impossible, not what is merely unusual:
+        the poles and the antimeridian are real places."""
+        fake_db({"FROM forecast_runs": []})
+        for lat, lon in ((90, 180), (-90, -180), (0, 0)):
+            r = client.get(f"/api/spread-skill?model=AIFS&variable=precipitation&lat={lat}&lon={lon}")
+            assert r.status_code != 400, (lat, lon, r.get_json())
+
     def test_region_metrics_rejects_unknown_metric(self, client):
         r = client.post("/api/compare/region-metrics", json={
             "models": ["AIFS"], "metrics": ["not_a_metric"],

@@ -2,6 +2,7 @@ import React from 'react';
 import { Square, Hexagon, X } from 'lucide-react';
 import { METRIC_CONFIG, withUnit } from '../constants';
 import { t } from '../theme';
+import { fmtLat, fmtLon } from '../utils/geoUtils';
 
 /**
  * Draggable/minimizable floating panel for spatial metric computation.
@@ -85,9 +86,11 @@ export function MetricPanel({
             <div style={{ fontSize: t.fontSize.sm, fontWeight: t.fontWeight.bold, color: 'rgba(255,255,255,0.9)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {selectedRegion.type === 'rectangle' ? 'Rectangle Region' : 'Polygon Region'}
             </div>
+            {/* fmtLat/fmtLon, not a hard-coded °N/°E: every region here is in the
+                western hemisphere, so "-83.6°–-79.9°E" was wrong every time. */}
             <div style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.4)', whiteSpace: 'nowrap' }}>
-              {selectedRegion.bounds.min_lat.toFixed(1)}°–{selectedRegion.bounds.max_lat.toFixed(1)}°N &nbsp;
-              {selectedRegion.bounds.min_lon.toFixed(1)}°–{selectedRegion.bounds.max_lon.toFixed(1)}°E
+              {fmtLat(selectedRegion.bounds.min_lat, 1)}–{fmtLat(selectedRegion.bounds.max_lat, 1)} &nbsp;
+              {fmtLon(selectedRegion.bounds.min_lon, 1)}–{fmtLon(selectedRegion.bounds.max_lon, 1)}
             </div>
           </div>
         </div>

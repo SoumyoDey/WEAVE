@@ -661,10 +661,23 @@ export function ComparisonTab({
           metric: mapMetric, modelName: m, variable: selectedVariable,
           threshold: thr, hourMin, hourMax, bounds,
         });
+        // Don't ask the renderer to draw nothing. It rejects an empty list with
+        // 400 "No points provided", and `plot.error ||` put that in front of the
+        // message written for exactly this case, so the useful sentence below
+        // could never be reached.
+        if (!pts.points?.length) {
+          if (seq !== mapsSeqRef.current) return;
+          setModelMaps(prev => ({
+            ...prev,
+            [m]: { loading: false, url: null,
+                   error: 'No forecast/observation matches in this region' },
+          }));
+          return;
+        }
         const plot = await fetchSpatialMetricPlot({
           metric: mapMetric, model: m, variable: selectedVariable,
           ...(thr != null && (isWind ? { threshold_ms: thr } : { threshold_mm_6h: thr })),
-          points: pts.points || [], n_hours: pts.n_hours,
+          points: pts.points, n_hours: pts.n_hours,
         });
         if (seq !== mapsSeqRef.current) return;
         setModelMaps(prev => ({
@@ -672,8 +685,7 @@ export function ComparisonTab({
           [m]: {
             loading: false,
             url:   plot.image ? 'data:image/png;base64,' + plot.image : null,
-            error: plot.error || ((pts.points?.length || 0) === 0
-              ? 'No forecast/observation matches in this region' : null),
+            error: plot.error || null,
           },
         }));
       } catch (err) {
