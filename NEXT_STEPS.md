@@ -14,9 +14,13 @@ lines, over half of it tests and documentation. `main` has not moved, so it is a
 clean fast-forward. Exact figures are deliberately not written down here: they go
 stale on every push. Run `git diff --shortstat main...p0-reliability`.
 
-- **302 backend + 49 frontend tests pass**, no xfails. `metrics.py` 100%,
-  `flask_api.py` 83%. `python -m pytest -q` in `Data/` runs anywhere: without
+- **584 backend + 128 frontend tests pass**, no xfails. `metrics.py` 100%,
+  `flask_api.py` 99%. `python -m pytest -q` in `Data/` runs anywhere: without
   PostgreSQL most of it skips.
+  The last 24 uncovered lines in `flask_api.py` are single `continue` and
+  `return []` guards three or four helpers deep. Each is reachable and none is
+  dead code; each needs a fake cursor that satisfies several other layers first,
+  so they were left rather than closed with a pragma that tests nothing.
 - No reviews, and no CI on the repo (`checks: 0`) — nothing runs on merge.
 - The four records, in the order to read them:
   - `REVIEW_GUIDE.md` — what changed and how to check it. Delete after merge.
@@ -104,8 +108,18 @@ The first two are old; the last two came out of phase 6.
 - **A refactor can hollow out a test instead of failing it.** Two tests filtering
   on `lat == 35.0` passed vacuously once UKMO moved to a grid with no cell there.
   Assert non-emptiness first.
-- **Cartopy drops coverage's tracer** partway through both render functions, so
-  ~120 executed lines read as uncovered. Do not chase it.
+- ~~**Cartopy drops coverage's tracer** partway through both render functions, so
+  ~120 executed lines read as uncovered. Do not chase it.~~ **Retracted
+  2026-08-21 — it was chaseable.** True of coverage's default C tracer, which
+  Cartopy's extension modules disturb; false of the `sys.monitoring` backend
+  added in Python 3.12. `Data/.coveragerc` now sets `core = sysmon`, which
+  reclaimed 58 lines with no code change and no pragma, and both render bodies
+  are traced for real rather than inferred from the PNG assertions. The original
+  caveat returns on Python < 3.12, where coverage falls back to the C tracer.
+
+  Worth keeping as a lesson rather than deleting: "do not chase it" was written
+  after a real investigation and was accurate about the tool available at the
+  time. A trap can go stale the same way a comment can.
 - **A comment or label that was right when written is the most likely thing to be
   wrong now.** Every one of phase 6's seven findings was accurate at the time and
   falsified later by a fix elsewhere — the code moved, the sentence did not. When
@@ -157,10 +171,12 @@ Grep for the name first, in case something new started reading it.
 
 ## 3. A fixture-database test layer  ← DONE (2026-08-19)
 
-`flask_api.py` went from **41% to 83%** statement coverage; the real figure is a
-little higher, because Cartopy drops coverage's tracer partway through both
-render functions (the PNG assertions prove those bodies run). 283 backend tests
-pass in ~11 s, with no xfails left.
+`flask_api.py` went from **41% to 83%** statement coverage here, and to **99%**
+once the error, input and guard paths were covered on 2026-08-21. The caveat this
+paragraph used to carry — that the real figure was a little higher because
+Cartopy drops coverage's tracer — is gone: switching coverage to the
+`sys.monitoring` backend traces those render bodies directly, so the number no
+longer needs an asterisk.
 
 - `Data/fixture_db.py` builds `weave_fixture_test` from the real schema
   (`schema.sql` + the DDL in `regrid_members.py`, read from source so a new

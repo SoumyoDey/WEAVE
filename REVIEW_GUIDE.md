@@ -178,7 +178,8 @@ times unchanged; wind never affected.
 
 ## What the tests do and do not prove
 
-`flask_api.py` went from 41% to 83% statement coverage; `metrics.py` is at 100%.
+`flask_api.py` went from 41% to **99%** statement coverage; `metrics.py` is at
+100%. 584 backend and 128 frontend tests, no xfails.
 
 The load-bearing idea in `fixture_db.py` is that **all three models are given the
 same true field in each one's own storage convention**, so they must return
@@ -188,8 +189,14 @@ than imported from `metrics.py`, so a wrong divisor cannot cancel itself out.
 
 Known blind spots, all recorded in `NEXT_STEPS.md`:
 
-- **Cartopy drops coverage's tracer** partway through both render functions, so
-  ~120 executed lines read as uncovered. The PNG assertions prove they run.
+- ~~**Cartopy drops coverage's tracer** partway through both render functions, so
+  ~120 executed lines read as uncovered.~~ **No longer true.** It was a property
+  of coverage's C tracer, not of Cartopy; `Data/.coveragerc` sets
+  `core = sysmon` and both render bodies are traced directly. Nothing about the
+  code changed — only what the measurement could see.
+- **24 lines are still uncovered**, all single `continue` / `return []` guards
+  deep inside helpers. Reachable, not dead, and deliberately not papered over
+  with pragmas.
 - `regridded_forecast_ens.std_dev` still agrees with the members by construction,
   so the fixture cannot tell which of those two an endpoint read. Only matters if
   the pairs-based metrics are ever migrated.
