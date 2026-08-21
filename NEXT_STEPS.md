@@ -14,13 +14,14 @@ lines, over half of it tests and documentation. `main` has not moved, so it is a
 clean fast-forward. Exact figures are deliberately not written down here: they go
 stale on every push. Run `git diff --shortstat main...p0-reliability`.
 
-- **584 backend + 128 frontend tests pass**, no xfails. `metrics.py` 100%,
-  `flask_api.py` 99%. `python -m pytest -q` in `Data/` runs anywhere: without
-  PostgreSQL most of it skips.
-  The last 24 uncovered lines in `flask_api.py` are single `continue` and
-  `return []` guards three or four helpers deep. Each is reachable and none is
-  dead code; each needs a fake cursor that satisfies several other layers first,
-  so they were left rather than closed with a pragma that tests nothing.
+- **604 backend + 128 frontend tests pass**, no xfails. `metrics.py` **100%**,
+  `flask_api.py` **100%**. `python -m pytest -q` in `Data/` runs anywhere:
+  without PostgreSQL it is 483 pass / 121 skip.
+  Two branches are excluded with `# pragma: no cover`, each carrying the reason
+  it cannot execute — they are dead code, not untested code, and a test asserts
+  the invariant that makes each one dead (`test_last_guards.py`). Removing both
+  pragmas leaves exactly those two lines uncovered and nothing else, which is
+  worth re-checking rather than trusting if the number ever matters.
 - No reviews, and no CI on the repo (`checks: 0`) — nothing runs on merge.
 - The four records, in the order to read them:
   - `REVIEW_GUIDE.md` — what changed and how to check it. Delete after merge.
