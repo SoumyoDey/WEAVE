@@ -124,7 +124,7 @@ def _cache_get(key):
         return None
     try:
         return cache.get(key)
-    except Exception as _e:  # pragma: no cover
+    except Exception as _e:
         print(f"⚠️  Cache read failed: {_e}")
         return None
 
@@ -133,7 +133,7 @@ def _cache_set(key, value, timeout):
         return
     try:
         cache.set(key, value, timeout=timeout)
-    except Exception as _e:  # pragma: no cover
+    except Exception as _e:
         print(f"⚠️  Cache write failed: {_e}")
 
 
@@ -2517,7 +2517,13 @@ def compare_skill():
                 f"({obs_hours_sorted[0]}h–{obs_hours_sorted[-1]}h). "
                 f"Ingest more data for extended coverage."
             )
-        else:
+        else:  # pragma: no cover - unreachable; see note
+            # `cases_of` only gains a model whose `by_hour` is non-empty, and the
+            # endpoint returns early when `cases_of` is empty, so every entry in
+            # `model_data` contributes at least one hour and `obs_hours_all` is
+            # never empty here. Kept as a guard rather than deleted, because the
+            # invariant lives two screens up; a test asserts the coupling
+            # (test_last_guards.py) and will fail if it ever breaks.
             obs_warning = 'No observations found for this location/variable.'
 
         print(f"✅ compare/skill: {len(result_models)} models, "
@@ -3375,7 +3381,14 @@ def region_categorical_metrics_endpoint():
         if csi is not None and pod is not None and far is not None:
             if mean_fss is not None:
                 composite = round(0.40*csi + 0.30*mean_fss + 0.20*pod + 0.10*(1.0-far), 4)
-            else:
+            else:  # pragma: no cover - unreachable in the REGION path; see note
+                # Here CSI and FSS are decided by the same per-hour loop: FSS's
+                # denominator is the sum of squared event fractions and CSI's is
+                # the count of hits, misses and false alarms, so either an event
+                # exists somewhere and both are defined, or neither is. The POINT
+                # endpoint genuinely needs this arm, because there FSS is gated on
+                # `box_cells > 1` regardless of whether any event exists — which
+                # is why the same-looking branch is live there and dead here.
                 composite = round((0.40*csi + 0.20*pod + 0.10*(1.0-far)) / 0.70, 4)
         else:
             composite = None
