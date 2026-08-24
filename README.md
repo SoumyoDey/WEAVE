@@ -254,8 +254,11 @@ npm install
 npm start
 
 # Production build
-CI=false npm run build
+npm run build
 ```
+
+The build is warning-clean, so it needs no `CI=false` escape hatch; CI compiles it with
+`CI=true`, where react-scripts treats warnings as errors.
 
 ### Flask API
 
@@ -286,7 +289,81 @@ Three layers, deliberately separate:
 
 The third layer exists because a fake cursor returns whatever the test hands it, so it can never disagree with the SQL. `fixture_db.py` creates `weave_fixture_test`, loads the real schema, and seeds one 5×5 patch of grid whose answer is known by construction — **the same true field given to all three models in each one's own storage convention**, so any regression in the unit or window layer breaks exactly one model and the test names it. Read that module's docstring before changing an expected number; every one of them is derived there.
 
-Those tests skip themselves when PostgreSQL is unreachable (or with `WEAVE_SKIP_DB_TESTS=1`), so the suite still runs anywhere. To inspect the fixture by hand:
+Those tests skip themselves when PostgreSQL is unreachable (or with `WEAVE_SKIP_DB_TESTS=1`), so the suite still runs anywhere.
+
+### Frontend tests
+
+```bash
+npm test                  # Jest + Testing Library (jsdom), 128 tests
+npm run test:e2e          # Playwright, real Chromium — needs neither API nor DB
+npm run test:e2e:headed   # same, but watch it drive the browser
+npm run test:e2e:report   # open the HTML report after a failing run
+```
+
+`npm run test:e2e` starts its own dev server (or reuses one already on :3000) and
+needs no Flask API and no PostgreSQL — every assertion in it is client-side map
+behaviour, and the app degrades to "no forecast overlay" without a backend.
+
+| Layer | What it covers | Needs a browser |
+|---|---|---|
+| `src/**/*.test.js` | Component rendering, props, accessible names, pure helpers | no (jsdom) |
+| `e2e/*.spec.js` | Leaflet map interaction: point clicks, rectangle drags, and how the two interfere | yes (Chromium) |
+
+The e2e layer exists because jsdom has no layout, so Leaflet can never produce a
+real coordinate there and map input cannot be exercised at all. `e2e/mapSelection.spec.js`
+pins a bug that lived exactly in that blind spot: finishing a rectangle drag used to
+move the user's clicked point to the box's far corner, because the `click` Leaflet
+synthesises from the drag's mouseup arrives *after* React has already cleared
+`selectionMode`, defeating the guard in `App.js`. It presented as the Analysis tab
+scoring a point nobody chose — a data bug to look at, an input bug in fact. Removing
+the `suppressMapClickRef` lines in `App.js` fails two of those six specs and leaves
+the other four green.
+
+### Continuous integration
+
+`.github/workflows/tests.yml` runs all three layers on every pull request, and on
+pushes to `main`. Feature branches are deliberately absent from the push trigger —
+an open PR already covers them, and listing both ran every commit twice.
+
+| Job | Runs | Needs |
+|---|---|---|
+| `frontend · jest` | `npm test` | Node 24 |
+| `frontend · playwright` | `npm run test:e2e` | Node 24 + Chromium (cached) |
+| `frontend · build` | `npm run build` | Node 24 |
+| `backend · pytest` | `python -m pytest` | Python 3.13, GEOS/PROJ, PostgreSQL 15 service |
+
+The build job exists because nothing else compiles the production bundle — Jest and
+Playwright both exercise the dev pipeline. It runs with `CI=true` (which GitHub sets),
+so react-scripts treats webpack warnings as errors. The build is warning-clean today,
+and keeping the job strict is what stops that decaying.
+
+One thing there is load-bearing rather than incidental: **the backend job asserts
+PostgreSQL answers before running pytest.** `test_db_endpoints.py` skips itself when the
+database is unreachable, so a broken service container would otherwise quietly shrink the
+run to a green tick over untested SQL.
+
+### Why `yaml` is a devDependency
+
+**Do not remove it because nothing imports it.** No application code uses `yaml`; it is
+there to pin a transitive peer dependency, and dropping it breaks `npm ci` on npm 10.
+
+`react-scripts` depends on `tailwindcss` (inert here — there is no `tailwind.config.js`),
+which resolves `postcss-load-config@6`, which declares `yaml@^2.4.2` as an *optional* peer.
+npm 10 and npm 11 disagree about whether to materialise that optional peer: npm 11 omits it,
+so a lockfile written by npm 11 has no `yaml@2`, and npm 10 then refuses the tree with
+`Missing: yaml@2.9.0 from lock file`. Regenerating the lockfile under npm 10 fixes it only
+until the next `npm install` on npm 11, which strips the entry straight back out.
+
+Declaring `yaml` explicitly makes it a hard requirement no npm version prunes. The four
+cases that matter — `npm ci` and `npm install` under both npm 10 and npm 11 — all now
+succeed and leave the lockfile byte-identical. Overriding `postcss-load-config` down to v4
+was tried first and rejected: npm registers the override but installs v6 regardless and
+marks it `invalid`.
+
+The `yaml@1.x` consumers (`cssnano`, `cosmiconfig`, `fork-ts-checker-webpack-plugin`) get
+their own nested copies, so the production build and the CSS minifier are unaffected.
+
+To inspect the fixture by hand:
 
 ```bash
 python fixture_db.py && psql -d weave_fixture_test

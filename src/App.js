@@ -129,6 +129,9 @@ function App() {
   const clickMarkerRef        = useRef(null);
   const selectionLayerRef     = useRef(null);
   const selectionModeRef      = useRef(null);
+  // Set when a rectangle drag completes, to swallow the click Leaflet
+  // synthesises from that same mouseup. See the map click handler.
+  const suppressMapClickRef   = useRef(false);
   const spatialDataRef        = useRef(null);
   const metricTypeRef         = useRef('ssr');
   const isDraggingPanelRef    = useRef(false);
@@ -342,6 +345,15 @@ function App() {
     const map = mapInstanceRef.current;
     const handleClick = (e) => {
       if (selectionModeRef.current) return;
+      // Finishing a rectangle drag clears selectionMode, and React has already
+      // flushed that through to selectionModeRef by the time the browser
+      // dispatches the click for the very same mouseup — so the guard above
+      // lets it through and the drag's far corner silently replaces whatever
+      // point the user had chosen. Swallow exactly that one click.
+      if (suppressMapClickRef.current) {
+        suppressMapClickRef.current = false;
+        return;
+      }
       const { lat, lng } = e.latlng;
       setClickedPoint({ lat: lat.toFixed(3), lon: lng.toFixed(3) });
       if (clickMarkerRef.current) map.removeLayer(clickMarkerRef.current);
@@ -483,7 +495,14 @@ function App() {
       startLL = null; activePointer = null;
       try { container.releasePointerCapture(e.pointerId); } catch { /* non-fatal */ }
       // A tap is a zero-area drag: ignore it rather than selecting a sliver.
+      // selectionMode stays 'rectangle' here, so the click that follows is
+      // still guarded and must not be suppressed.
       if (Math.abs(ne.lat - sw.lat) < 0.1 || Math.abs(ne.lng - sw.lng) < 0.1) return;
+      // This mouseup will also produce a click; don't let it move the point.
+      // Cleared on a timer too, so a drag that never yields one (pointer
+      // released off-window) can't leave the next real click swallowed.
+      suppressMapClickRef.current = true;
+      setTimeout(() => { suppressMapClickRef.current = false; }, 0);
       if (selectionLayerRef.current) map.removeLayer(selectionLayerRef.current);
       selectionLayerRef.current = L.rectangle(bounds, { color: '#e67e22', weight: 2, dashArray: '6 4', fillOpacity: 0.06, fillColor: '#e67e22', interactive: false }).addTo(map);
       setSelectedRegion({ type: 'rectangle', bounds: { min_lat: sw.lat, max_lat: ne.lat, min_lon: sw.lng, max_lon: ne.lng } });
