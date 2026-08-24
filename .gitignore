@@ -22,6 +22,17 @@ venv/
 coverage.xml
 htmlcov/
 
+# Playwright e2e artifacts (traces/screenshots on failure, HTML report).
+# The browser binaries live in ~/Library/Caches/ms-playwright, not here.
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+
+# Generated app screenshots (report figures). Regenerated from the running app
+# on demand — several MB of PNG that would otherwise churn in every diff.
+screenshots/
+
 # Raw model files kept locally for checking ingest conventions against source
 # (GRIB/NetCDF, tens of MB each). Useful to have on hand, too big to version —
 # see METRICS_AUDIT.md finding 16 for what they were used to verify.
