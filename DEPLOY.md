@@ -17,6 +17,13 @@ Architecture: a **React single-page app** (static build) talking to a **Flask JS
 ---
 
 ## 2. Database
+
+**Two stages, and the second is not optional.** The loaders populate the *native*
+tables; every scored endpoint reads the *regridded* ones. Until 2026-08-27 this
+section stopped after the loaders, which produced a deployment whose maps and
+metric panels were all empty — the app looked installed and verified nothing.
+
+### 2a. Schema and native data
 ```bash
 createdb weave_weather
 psql -d weave_weather -f Data/schema.sql
@@ -27,6 +34,40 @@ python Data/load_wind.py
 python Data/load_gefs_ukmo_wind.py
 ```
 Verify: `psql -d weave_weather -c "SELECT count(*) FROM forecast_data;"` should be non-zero.
+
+### 2b. Regrid onto the common 0.5° grid
+```bash
+cd Data
+python regrid_members.py --variables precipitation          # forecasts
+python regrid_members.py --variables wind_u_10m,wind_v_10m
+python regrid_observations.py --table regridded_observation --truncate   # truth
+```
+
+Both scripts create their own tables, so nothing needs adding to `schema.sql`.
+`regrid_members.py` writes `regridded_forecast_member` and
+`regridded_forecast_ens`; `regrid_observations.py` box-averages
+`observation_data` into `regridded_observation`.
+
+Two things to know:
+
+- **`regrid_observations.py` defaults to a `_rebuilt` table, not the live one**, so
+  the `--table regridded_observation` above is deliberate and required on a fresh
+  install. On an *existing* database, run `--compare` first: the rule here is not
+  the one that produced the pre-2026-08-27 data, and the difference is material
+  (see `NEXT_STEPS.md` §7).
+- **`observation_data` still has no loader in this repo.** It is the one remaining
+  hole: the native point observations were ingested off-repo, and 2b can only
+  coarsen what 2a loaded. A fresh deployment therefore gets forecasts and no
+  truth until that table is populated by other means.
+
+Verify:
+```bash
+psql -d weave_weather -c "SELECT count(*) FROM regridded_forecast_ens;"
+psql -d weave_weather -c "SELECT count(*) FROM regridded_observation;"
+python Data/regrid_members.py --verify-grid --hours 0   # coordinates land on the grid
+```
+Both counts must be non-zero. If `regridded_observation` is empty, every metric
+panel will be correctly-but-confusingly blank.
 
 ---
 

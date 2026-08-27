@@ -21,9 +21,9 @@ lines, over half of it tests and documentation. `main` has not moved, so it is a
 clean fast-forward. Exact figures are deliberately not written down here: they go
 stale on every push. Run `git diff --shortstat main...p0-reliability`.
 
-- **615 backend + 128 frontend tests pass**, no xfails. `metrics.py` **100%**,
+- **630 backend + 128 frontend tests pass**, no xfails. `metrics.py` **100%**,
   `flask_api.py` **100%**. `python -m pytest -q` in `Data/` runs anywhere:
-  without PostgreSQL it is 494 pass / 121 skip (re-measured 2026-08-27, not
+  without PostgreSQL it is 505 pass / 125 skip (re-measured 2026-08-27, not
   arithmetic on the previous figure).
   Two branches are excluded with `# pragma: no cover`, each carrying the reason
   it cannot execute — they are dead code, not untested code, and a test asserts
@@ -297,7 +297,7 @@ path working for the first time.
 waits on PR #2 merging plus a decision about `WEAVE_v2` and `WEAVE_presentation`.
 Nothing in this repository needs touching for it either way: `verify_grid` reads
 the table when present and prints `absent, skipped` when not, and the fixture
-database already builds from `schema.sql` and passes without it (615 tests).
+database already builds from `schema.sql` and passes without it (630 tests).
 
 **How the "not used" claim was established for this branch**, so the next person
 can re-run it rather than trust it:
@@ -651,6 +651,73 @@ fallback. That is one less thing for DATA_EXPANSION_DESIGN.md to trip over.
 - **Vite migration** — CRA is EOL.
 - **Cache the deterministic metric endpoints** — only the plot endpoint is cached.
 - **Row caps on point-list queries** — currently unbounded.
+
+---
+
+## 7. The observation regrid, and a defect in the current truth field
+
+**New 2026-08-27.** `Data/regrid_observations.py` box-averages `observation_data`
+onto the 0.5° grid, so `regridded_observation` — the truth field behind every
+scored endpoint — can be produced from this repository for the first time.
+DEPLOY.md §2b now runs it. **`observation_data` itself still has no loader here**,
+so a fresh deployment gets forecasts and no truth until that table arrives by
+other means; that is the one remaining hole in the install path.
+
+### The defect
+
+Writing it turned up a real problem with the **existing** table. The original
+off-repo script assigned each native observation to a target cell with
+`np.round(x / 0.5) * 0.5`. `np.round` rounds half to **even**, and on this
+lattice a coordinate at a .25 or .75 offset divides by 0.5 to an exact .5 — so
+both of a cell's boundary neighbours are pushed onto the whole-degree (even)
+cell, starving the half-degree one. Interior stencils, measured:
+
+| | whole/whole | mixed | half/half |
+|---|---|---|---|
+| ERA5 wind (0.25° native) | 9 | 3 | **1** |
+| IMERG precip (0.1° native) | 36 | 24 | 16 |
+
+Predicted from the rounding rule and confirmed against every stored cell. So
+**7,776 interior ERA5 wind cells — about 19% of that field — are a single native
+observation presented as a 0.5° box mean**, beside neighbours averaging nine. The
+artifact is a checkerboard keyed to coordinate parity, which means it does not
+average out: it injects parity-correlated structure into every spatial metric
+computed against this truth field.
+
+The replacement uses the half-open box `[c-0.25, c+0.25)` via
+`floor(x + 0.25)` — rounding half consistently **up** — which partitions the
+plane: every observation counted exactly once, every interior cell the same
+stencil (25 for IMERG, 4 for ERA5, verified uniform across all four parities).
+
+### What this costs, measured before anything was overwritten
+
+`regrid_observations.py --compare` against the stored table. Same cell set
+exactly — 97,200 and 40,344, nothing gained or lost — but different values:
+
+| | identical | median abs diff | p95 | max | median rel |
+|---|---|---|---|---|---|
+| IMERG precip | 56.5% | 0 | 0.357 mm/h | 6.54 mm/h | 21.8% |
+| ERA5 wind | 0.04% | 0.126 m/s | 0.583 m/s | 2.32 m/s | 3.0% |
+
+IMERG's "56.5% identical" is mostly cells that are zero under both rules, and its
+large relative figures are near-zero denominators; the absolute column is the one
+to read.
+
+### The decision nobody has made yet
+
+**The live `regridded_observation` is untouched.** The rebuild is in
+`regridded_observation_rebuilt` so the two can be compared without committing.
+Switching over is a judgement call, because **every published number in
+`METRICS_AUDIT.md` and `REVIEW_GUIDE.md` was computed against the current truth
+field**, and the table above says they would move — wind especially, where the
+current field is barely smoothed on half-degree cells.
+
+Options, in the order I would consider them: rebuild and re-derive the audit
+numbers (correct, and invalidates a lot of written-up work); rebuild after PR #2
+merges so the review is not aimed at a moving target (my preference); or keep the
+current field and treat this as documentation of a known artifact. What should not
+happen is a silent switch — the numbers change materially and a reader comparing
+against the audit would have no way to know why.
 
 ---
 
