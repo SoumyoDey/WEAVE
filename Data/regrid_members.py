@@ -37,14 +37,17 @@ member therefore means "no precipitation", and is filled with 0.0 rather than
 being treated as missing — interpolating around such a hole would bias the
 result wet. Wind is dense and unaffected.
 
-Nothing here overwrites `regridded_forecast`. Output goes to
+Nothing here reads or writes `regridded_forecast`. Output goes to
 `regridded_forecast_member` and `regridded_forecast_ens`, so the old and new
-numbers can be compared before anything is switched over.
+numbers can be compared before anything is switched over. The target grid used
+to be read from `regridded_forecast` — it is now a constant, which is what makes
+that table droppable; `target_grid` says why.
 
 Usage
 -----
     python regrid_members.py --variables precipitation
     python regrid_members.py --models AIFS --hours 0-48 --verify
+    python regrid_members.py --verify-grid --hours 0   # check the grid constant
 """
 import argparse
 import io
@@ -70,6 +73,13 @@ DB_CONFIG = {
 # Variables that were sparsified on load — an absent native cell means zero,
 # not missing. See the module docstring.
 ZERO_FILL_VARIABLES = {'precipitation'}
+
+# The common analysis grid every scored endpoint reads: 0.5° over the domain the
+# whole project uses. Stated here rather than discovered by query — see
+# `target_grid` for why that changed.
+TARGET_LAT_RANGE  = (25.0, 45.0)
+TARGET_LON_RANGE  = (-85.0, -65.0)
+TARGET_RESOLUTION = 0.5
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS regridded_forecast_member (
@@ -107,14 +117,79 @@ CREATE INDEX IF NOT EXISTS idx_rfe_cell
 """
 
 
-def target_grid(cursor):
-    """The 0.5° grid already in use, read from regridded_forecast so the new
-    tables land on exactly the same cells as the old one."""
-    cursor.execute("SELECT DISTINCT latitude FROM regridded_forecast ORDER BY 1")
-    lats = [float(r[0]) for r in cursor.fetchall()]
-    cursor.execute("SELECT DISTINCT longitude FROM regridded_forecast ORDER BY 1")
-    lons = [float(r[0]) for r in cursor.fetchall()]
-    return np.array(lats), np.array(lons)
+def target_grid():
+    """The common 0.5° grid, as a constant.
+
+    This used to read `SELECT DISTINCT latitude/longitude FROM
+    regridded_forecast`, so the new tables would land on exactly the same cells
+    as the old one. Two things made that wrong to keep:
+
+    - **Nothing in this repository writes `regridded_forecast`.** It was produced
+      off-repo, so on a fresh database the query returned nothing and this script
+      died on the next line printing `tgt_lats[0]`. There was no way to bootstrap.
+    - **Repointing it at `regridded_forecast_ens` would be worse**, that being
+      this script's own output: empty on the first run, and thereafter keyed on
+      the union of whatever native hulls have been regridded so far rather than
+      on the canonical grid. Cells outside a model's hull are never written (see
+      the `inside` test in `regrid`), and UKMO's native grid does not reach the
+      domain edge, so a `_ens` holding UKMO alone yields 39x39 spanning
+      25.5..44.5 — silently clipping AIFS and GEFS to UKMO's footprint on the
+      next run, 160 cells per model/variable/hour, with no error.
+
+    The grid was never a discovered quantity, only an undocumented one. 0.5 is
+    exact in binary, so this reproduces the stored coordinates bit-for-bit rather
+    than approximately; verified against all three regridded tables on the loaded
+    run, 41x41 identical in both axes. `--verify-grid` re-runs that check against
+    whichever of them still exist.
+
+    That exactness is doing real work, and it is worth knowing why it holds: the
+    two tables this script writes declare their coordinates `REAL`, i.e. float32,
+    while `regridded_forecast` used `FLOAT`. Multiples of 0.5 survive both
+    identically, which is why one constant can be compared against all three and
+    why `WHERE latitude = 35.5` still matches its own row. A grid at a resolution
+    that is *not* a binary fraction — 0.1, 0.05 — would not survive the float32
+    round trip, and this comparison would have to move to a tolerance. That is
+    already visible elsewhere in the schema: `ensemble_statistics` holds UKMO wind
+    at 35.1562 and UKMO precipitation at 35.15625 for exactly this reason.
+    """
+    def axis(lo, hi):
+        # Half a step of headroom: arange's stop is exclusive, and this keeps the
+        # endpoint from turning on floating-point luck.
+        return np.arange(lo, hi + TARGET_RESOLUTION / 2, TARGET_RESOLUTION)
+
+    return axis(*TARGET_LAT_RANGE), axis(*TARGET_LON_RANGE)
+
+
+def verify_grid(cursor, tgt_lats, tgt_lons):
+    """Assert the constant grid matches what the regridded tables already hold.
+
+    This is what makes dropping `regridded_forecast` safe: the coordinates it
+    defined for everything downstream have to be the coordinates the constant
+    produces, exactly. Tables that do not exist yet are skipped rather than
+    failing, so this is runnable on a partly built database.
+    """
+    for table in ('regridded_forecast', 'regridded_forecast_ens',
+                  'regridded_forecast_member'):
+        cursor.execute("SELECT to_regclass(%s) IS NOT NULL", (table,))
+        if not cursor.fetchone()[0]:
+            print(f"  {table}: absent, skipped")
+            continue
+        for column, expected in (('latitude', tgt_lats), ('longitude', tgt_lons)):
+            cursor.execute(f"SELECT DISTINCT {column} FROM {table} ORDER BY 1")
+            stored = [float(r[0]) for r in cursor.fetchall()]
+            if not stored:
+                print(f"  {table}.{column}: empty, skipped")
+                continue
+            # A subset is the expected state for one model whose native hull does
+            # not span the domain; a coordinate that is *not* on the grid is not.
+            off_grid = sorted(set(stored) - {float(v) for v in expected})
+            if off_grid:
+                raise AssertionError(
+                    f"{table}.{column} holds {len(off_grid)} coordinate(s) that "
+                    f"the constant grid does not produce, e.g. {off_grid[:5]} — "
+                    f"the constant and the stored data disagree")
+            print(f"  {table}.{column}: {len(stored)} of {len(expected)} cells, "
+                  f"all on the grid")
 
 
 def fetch_hour(cursor, model, variable, hour):
@@ -285,6 +360,9 @@ def main():
     ap.add_argument('--hours', default=None, help='e.g. "0-48" or "6,12,18"; default all')
     ap.add_argument('--verify', action='store_true',
                     help='assert bilinear linearity and compare against the stored table')
+    ap.add_argument('--verify-grid', action='store_true',
+                    help='assert every stored coordinate lies on the constant '
+                         'target grid, then continue')
     ap.add_argument('--truncate', action='store_true',
                     help='clear the target tables for these models/variables first')
     args = ap.parse_args()
@@ -296,10 +374,16 @@ def main():
             cur.execute(INDEXES)
         conn.commit()
 
-        with conn.cursor() as cur:
-            tgt_lats, tgt_lons = target_grid(cur)
-        print(f"target grid: {len(tgt_lats)} x {len(tgt_lons)} at 0.5deg "
+        tgt_lats, tgt_lons = target_grid()
+        print(f"target grid: {len(tgt_lats)} x {len(tgt_lons)} at "
+              f"{TARGET_RESOLUTION}deg "
               f"({tgt_lats[0]}..{tgt_lats[-1]}, {tgt_lons[0]}..{tgt_lons[-1]})\n")
+
+        if args.verify_grid:
+            print("verifying the constant grid against the stored tables:")
+            with conn.cursor() as cur:
+                verify_grid(cur, tgt_lats, tgt_lons)
+            print()
 
         for model in args.models.split(','):
             for variable in args.variables.split(','):
