@@ -68,8 +68,14 @@ CREATE TABLE ensemble_statistics (
 CREATE INDEX idx_ensemble_stats_lat_lon ON ensemble_statistics(latitude, longitude);
 CREATE INDEX idx_ensemble_stats_run_var_hour ON ensemble_statistics(run_id, variable_id, forecast_hour);
 
--- 6. Point observations (sparse gauge/station obs) — used by SSR & correlation
---    spatial metrics, joined to ensemble_statistics by rounded lat/lon.
+-- 6. Point observations (sparse gauge/station obs). This WAS the truth source
+--    for the SSR and correlation metrics, joined to ensemble_statistics by
+--    rounded lat/lon. Nothing in the API reads it since the member-grid
+--    migration moved every scored path onto `regridded_observation` over the
+--    window each forecast record spans. Retained rather than dropped because it
+--    is raw ingested data that no script in this repository can regenerate —
+--    unlike `regridded_forecast`, which was reproducible and is therefore gone.
+--    `fixture_db.py` still seeds it so the fixture mirrors the real database.
 CREATE TABLE observation_data (
     obs_id BIGSERIAL PRIMARY KEY,
     obs_time TIMESTAMP NOT NULL,
@@ -99,8 +105,10 @@ CREATE INDEX idx_obs_time_ll ON observation_data(obs_time, latitude, longitude);
 -- cannot drift from the code that populates them. `fixture_db.py` reads this file
 -- and that script's DDL together for the same reason.
 
--- 7. Regridded (dense gridded) observation grid — covers every grid cell, used
---    as the truth field for all spatial metrics except SSR/correlation.
+-- 7. Regridded (dense gridded) observation grid — covers every grid cell, and is
+--    the truth field for every spatial metric. It used to carry the exception
+--    "except SSR/correlation", which those two took from `observation_data`; the
+--    member-grid migration moved them here too, so there is no exception left.
 CREATE TABLE regridded_observation (
     id BIGSERIAL PRIMARY KEY,
     source TEXT NOT NULL,

@@ -5,7 +5,10 @@
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_forecast_data_run_var_latlon
     ON forecast_data(run_id, variable_id, latitude, longitude);
 
--- observation_data: time + spatial lookups used by SSR / correlation
+-- observation_data: time + spatial lookups. These served the SSR / correlation
+-- paths, which now read regridded_observation instead, so the index no longer
+-- has a query behind it. Kept because the table is kept (see schema.sql) and a
+-- fresh install should not silently differ from the loaded database.
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_observation_data_time_latlon
     ON observation_data(obs_time, latitude, longitude);
 

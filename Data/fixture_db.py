@@ -422,9 +422,16 @@ def _rows_regridded_obs():
 
 
 def _rows_point_obs():
-    """Sparse point observations, on the hour, for the SSR/correlation paths.
+    """Sparse point observations, on the hour.
 
-    Those queries match `obs_time` exactly, so only whole hours are useful here.
+    These fed the SSR/correlation paths before the member-grid migration moved
+    them onto `regridded_observation`; no endpoint reads this table now. Seeded
+    anyway so the fixture mirrors the real database, which still holds it. Note
+    that nothing *enforces* the unread-ness — if an endpoint started querying
+    this table again it would find plausible data here and no test would object.
+
+    The old queries matched `obs_time` exactly, which is why only whole hours are
+    generated here.
     """
     for hour in range(0, OBS_HOUR_MAX + 1, 6):
         t = INIT_TIME + timedelta(hours=hour)
