@@ -160,14 +160,40 @@ gh pr merge 2 --repo SoumyoDey/WEAVE --squash --delete-branch
 if the individual messages are worth keeping — they carry most of the reasoning,
 and several record why an approach was abandoned.
 
-## 2. Drop the superseded table — code done, DROP BLOCKED
+## 2. Drop the superseded table — RENAMED 2026-08-27, drop still pending
 
 245 MB, superseded by `regridded_forecast_ens`, which carries a true ensemble
 spread derived from `regridded_forecast_member`. It was kept only so the old and
 new numbers could be compared, and that comparison is done and written up.
 
-> **Do not run the `DROP` yet.** Three live consumers still read this table, all
-> pointed at the same `weave_weather` database (checked in each one's `.env`):
+> **State: renamed, not dropped.** On 2026-08-27 the table on `weave_weather`
+> became `regridded_forecast_deprecated` — 245 MB and all 1,499,977 rows intact,
+> reversible in one statement:
+>
+> ```sql
+> ALTER TABLE regridded_forecast_deprecated RENAME TO regridded_forecast;
+> ```
+>
+> **What this means in practice: `main`, `WEAVE_v2` and `WEAVE_presentation` will
+> now fail against this database** until that rename-back is run. That was the
+> accepted trade — the point of renaming rather than dropping is that a
+> consumer nobody remembered fails loudly and recoverably. If something breaks
+> and you want it working again immediately, run the statement above; the data
+> never left.
+>
+> Checked before renaming: two Flask servers were live on `weave_weather`, both
+> from `WEAVE_v3` (pids 9244 and 45818), so neither reads this table. Verified
+> after: `/api/compare/skill` and `/api/categorical-metrics` returned
+> byte-identical responses to the pre-rename baseline, `/api/health` stayed
+> healthy, 615 tests passed, and `regrid_members.py --verify-grid` degraded to
+> `regridded_forecast: absent, skipped` as designed.
+>
+> **The `DROP` is still pending**, and still wants PR #2 merged plus a decision
+> about the two older app copies. Give the rename time to flush out an unknown
+> reader first — that is what it is for.
+>
+> The consumers that made this more than a cleanup, all pointed at the same
+> `weave_weather` database (checked in each one's `.env`):
 >
 > | consumer | reads | note |
 > |---|---|---|
@@ -187,20 +213,13 @@ new numbers could be compared, and that comparison is done and written up.
 > ```
 >
 > `origin/comparison-tab` and `origin/phase2-restructure` read it too; only
-> `origin/kartik` is clean, being frontend-only. **So this is blocked on PR #2
-> merging** — and merging only clears `main`. Dropping the table also ends
-> `WEAVE_v2` and `WEAVE_presentation`'s ability to serve from this database,
-> which is a decision about those apps, not a cleanup.
+> `origin/kartik` is clean, being frontend-only. Merging PR #2 clears `main`;
+> it does nothing for `WEAVE_v2` and `WEAVE_presentation`, which need retiring
+> or repointing on their own.
 >
-> When it is time, prefer a reversible first step:
->
-> ```sql
-> ALTER TABLE regridded_forecast RENAME TO regridded_forecast_deprecated;
-> ```
->
-> Leave it a week. A forgotten reader — an ad-hoc `psql` session, a notebook
-> outside this tree, something on the HPC — then fails loudly and recoverably
-> instead of silently after 245 MB is gone. Only then `DROP`.
+> The class of reader the rename exists to catch is the one no search can reach:
+> an ad-hoc `psql` session, a notebook outside this tree, something on the HPC.
+> A `DROP` would have hidden those behind a permanent 245 MB loss.
 
 **This section has now claimed "nothing reads the table" twice, and been wrong
 both times.** Worth reading as a pattern rather than two mistakes:

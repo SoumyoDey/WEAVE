@@ -101,9 +101,11 @@ CREATE INDEX idx_obs_time_ll ON observation_data(obs_time, latitude, longitude);
 -- target-grid lookup in `regrid_members.py`) became a constant.
 -- NOTE: that is true of THIS branch only. `main`, and the `WEAVE_v2` and
 -- `WEAVE_presentation` app copies, still query `regridded_forecast` against the
--- same weave_weather database, so a loaded database must keep the table until
--- those are retired — do not drop it on the strength of this file. NEXT_STEPS.md
--- section 2 has the counts and the reversible rename to do first.
+-- same weave_weather database. On 2026-08-27 that database's copy was renamed to
+-- `regridded_forecast_deprecated` rather than dropped, so those three now fail
+-- against it and the data is still recoverable with one statement:
+--     ALTER TABLE regridded_forecast_deprecated RENAME TO regridded_forecast;
+-- NEXT_STEPS.md section 2 has the read counts and what the drop still waits on.
 -- Its replacements — `regridded_forecast_ens` and `regridded_forecast_member` —
 -- are created by the script that writes them, `regrid_members.py`, so their DDL
 -- cannot drift from the code that populates them. `fixture_db.py` reads this file
