@@ -1,11 +1,18 @@
 # Next steps
 
-State as of 2026-08-20. Branch `p0-reliability`, PR #2 on `SoumyoDey/WEAVE`.
+State as of 2026-08-27. Branch `p0-reliability`, PR #2 on `SoumyoDey/WEAVE`.
 
 **Read this, then `REVIEW_GUIDE.md`.** Items 3, 3b and 4 below are done, all seven
 defects the fixture layer found are fixed, and **the consistency audit is closed —
 all six phases** (`CONSISTENCY_AUDIT.md`). **The only thing left that needs someone
 other than whoever is reading this is the review — item 1.**
+
+Two things changed on 2026-08-27 that the rest of this document assumes: the
+target grid became a constant, so `regrid_members.py` can run on a fresh database
+for the first time (§2), and `regridded_forecast` on `weave_weather` was **renamed
+to `regridded_forecast_deprecated`** — which means `main`, `WEAVE_v2` and
+`WEAVE_presentation` now fail against that database until it is renamed back. If
+you check out `main` and hit a missing-relation error, that is this, not a bug.
 
 ## Where things stand
 
@@ -14,15 +21,26 @@ lines, over half of it tests and documentation. `main` has not moved, so it is a
 clean fast-forward. Exact figures are deliberately not written down here: they go
 stale on every push. Run `git diff --shortstat main...p0-reliability`.
 
-- **604 backend + 128 frontend tests pass**, no xfails. `metrics.py` **100%**,
+- **615 backend + 128 frontend tests pass**, no xfails. `metrics.py` **100%**,
   `flask_api.py` **100%**. `python -m pytest -q` in `Data/` runs anywhere:
-  without PostgreSQL it is 483 pass / 121 skip.
+  without PostgreSQL it is 494 pass / 121 skip (re-measured 2026-08-27, not
+  arithmetic on the previous figure).
   Two branches are excluded with `# pragma: no cover`, each carrying the reason
   it cannot execute — they are dead code, not untested code, and a test asserts
   the invariant that makes each one dead (`test_last_guards.py`). Removing both
   pragmas leaves exactly those two lines uncovered and nothing else, which is
   worth re-checking rather than trusting if the number ever matters.
-- No reviews, and no CI on the repo (`checks: 0`) — nothing runs on merge.
+- **CI exists and is green.** `.github/workflows/tests.yml`, added 2026-08-24,
+  runs four jobs on every PR and on pushes to `main`: jest, playwright against
+  real Chromium, the production bundle with warnings-as-errors, and pytest
+  against a PostgreSQL service container. Two details there are load-bearing —
+  the backend job asserts the database answers *before* running pytest, because
+  `test_db_endpoints.py` skips itself when PostgreSQL is unreachable and would
+  otherwise return a green tick over untested SQL; and the build job's
+  warnings-as-errors is what stops a clean build from quietly decaying.
+- **Still 0 reviews**, but `SoumyoDey` is on `reviewRequests` as of 2026-08-27.
+  Worth knowing why it sat: nobody had ever been *asked*. The PR was not waiting
+  on a slow reviewer, it was waiting on a request that was never sent.
 - The four records, in the order to read them:
   - `REVIEW_GUIDE.md` — what changed and how to check it. Delete after merge.
     **Its header counts are stale** (57 commits, +12,111): the branch has moved
