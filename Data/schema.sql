@@ -88,26 +88,18 @@ CREATE INDEX idx_obs_lat_lon ON observation_data(latitude, longitude);
 CREATE INDEX idx_obs_time ON observation_data(obs_time);
 CREATE INDEX idx_obs_time_ll ON observation_data(obs_time, latitude, longitude);
 
--- 7. Regridded (coarsened) forecast grid — dense per-cell mean/std used by all
---    spatial metrics except SSR/correlation. Keyed by model_name + variable_name
---    + forecast_hour (NOT run_id); the latest run is resolved separately.
-CREATE TABLE regridded_forecast (
-    id BIGSERIAL PRIMARY KEY,
-    model_name TEXT NOT NULL,
-    variable_name TEXT NOT NULL,
-    forecast_hour INTEGER NOT NULL,
-    latitude FLOAT NOT NULL,
-    longitude FLOAT NOT NULL,
-    mean_value FLOAT,
-    std_dev FLOAT,
-    source_points INTEGER,
-    resolution TEXT
-);
+-- The regridded forecast tables are deliberately NOT here. `regridded_forecast`
+-- used to be, and is no longer created: it is superseded by
+-- `regridded_forecast_ens`, whose std_dev is a true ensemble spread rather than
+-- a pooled member x native-cell one, and its last reader (the target-grid lookup
+-- in `regrid_members.py`) became a constant. A database loaded before that change
+-- still holds the table; dropping it there is a separate, manual step.
+-- Its replacements — `regridded_forecast_ens` and `regridded_forecast_member` —
+-- are created by the script that writes them, `regrid_members.py`, so their DDL
+-- cannot drift from the code that populates them. `fixture_db.py` reads this file
+-- and that script's DDL together for the same reason.
 
-CREATE INDEX idx_rgf_lat_lon ON regridded_forecast(latitude, longitude);
-CREATE INDEX idx_rgf_model_var_hour ON regridded_forecast(model_name, variable_name, forecast_hour);
-
--- 8. Regridded (dense gridded) observation grid — covers every grid cell, used
+-- 7. Regridded (dense gridded) observation grid — covers every grid cell, used
 --    as the truth field for all spatial metrics except SSR/correlation.
 CREATE TABLE regridded_observation (
     id BIGSERIAL PRIMARY KEY,
@@ -124,13 +116,13 @@ CREATE TABLE regridded_observation (
 CREATE INDEX idx_rgo_lat_lon ON regridded_observation(latitude, longitude);
 CREATE INDEX idx_rgo_source_var_time ON regridded_observation(source, variable_name, obs_time);
 
--- 9. Insert initial model metadata
+-- 8. Insert initial model metadata
 INSERT INTO models (model_name, ensemble_count, description) VALUES
     ('AIFS', 50, 'AI Forecasting System - ECMWF'),
     ('GEFS', 30, 'Global Ensemble Forecast System - NOAA'),
     ('UKMO', 18, 'UK Met Office Global Ensemble');
 
--- 10. Insert initial variable metadata
+-- 9. Insert initial variable metadata
 INSERT INTO variables (variable_name, units, description) VALUES
     ('precipitation', 'mm/hr', 'Total precipitation rate'),
     ('temperature_2m', 'K', '2-meter temperature'),

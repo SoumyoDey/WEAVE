@@ -192,19 +192,24 @@ run, and `--verify-grid` re-runs that check against whichever still exist.
 `test_regrid_grid.py` pins the values, and pins that `target_grid` takes no
 cursor, because the source was the bug rather than the numbers.
 
-So the drop is now genuinely a one-liner:
+The code side is **done as of 2026-08-27**: `schema.sql` no longer creates the
+table and `add_indexes.sql` no longer indexes it, so a fresh install never gets
+one. Verified by applying both files to a throwaway database and then running
+`regrid_members.py --verify-grid` against it — the script gets its 41x41 grid,
+creates `_ens` and `_member` for itself, and exits 0, where the old lookup gets
+`ERROR: relation "regridded_forecast" does not exist`. That is the fresh-install
+path working for the first time.
+
+**All that is left is the drop on the loaded database**, which is deliberately
+not automated — it is destructive and worth being its own act:
 
 ```sql
 DROP TABLE regridded_forecast;
 ```
 
-Then remove its `CREATE TABLE`/`CREATE INDEX` from `schema.sql` and
-`add_indexes.sql`, which still create it on a fresh install. `verify_grid` reads
-the table when it is present and prints `absent, skipped` when it is not, so it
-does not need changing either way.
-
-**Not done here**, because it is a destructive change to the loaded database and
-worth being a deliberate act rather than a side effect.
+`verify_grid` reads the table when present and prints `absent, skipped` when not,
+so it needs no change either way; the same is true of the fixture database, which
+builds from `schema.sql` and passes without the table (615 tests).
 
 ## 3. A fixture-database test layer  ← DONE (2026-08-19)
 
