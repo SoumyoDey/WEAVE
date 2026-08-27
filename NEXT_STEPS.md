@@ -21,10 +21,22 @@ lines, over half of it tests and documentation. `main` has not moved, so it is a
 clean fast-forward. Exact figures are deliberately not written down here: they go
 stale on every push. Run `git diff --shortstat main...p0-reliability`.
 
-- **630 backend + 128 frontend tests pass**, no xfails. `metrics.py` **100%**,
-  `flask_api.py` **100%**. `python -m pytest -q` in `Data/` runs anywhere:
-  without PostgreSQL it is 505 pass / 125 skip (re-measured 2026-08-27, not
-  arithmetic on the previous figure).
+- **The backend and frontend suites pass with no xfails**, and `metrics.py` and
+  `flask_api.py` are both at **100%** statement coverage. `python -m pytest -q` in
+  `Data/` runs anywhere: without PostgreSQL a little over a fifth of it skips
+  itself and the rest still runs.
+
+  **Exact counts are deliberately not written here** — they went stale three
+  times on 2026-08-27 alone, and a number that is wrong more often than right is
+  worse than no number. Measure instead:
+
+  ```bash
+  cd Data && python -m pytest -q | tail -1              # with PostgreSQL
+  cd Data && WEAVE_SKIP_DB_TESTS=1 python -m pytest -q | tail -1
+  ```
+
+  If a figure ever matters, re-measure it rather than doing arithmetic on a
+  previous one — that is the same rule this document applies to the PR size.
   Two branches are excluded with `# pragma: no cover`, each carrying the reason
   it cannot execute — they are dead code, not untested code, and a test asserts
   the invariant that makes each one dead (`test_last_guards.py`). Removing both
