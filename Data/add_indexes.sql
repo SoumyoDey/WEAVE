@@ -14,9 +14,9 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_observation_data_time_latlon
 
 -- The two idx_rgf_* indexes on `regridded_forecast` were removed from this file
 -- along with the table's CREATE (see schema.sql). An existing database still
--- holds both the table and the indexes, and should: `main` and the WEAVE_v2 /
--- WEAVE_presentation copies still query it. This file only stops a NEW install
--- from creating what nothing on this branch reads.
+-- holds table and indexes under the name `regridded_forecast_deprecated`, as of
+-- the 2026-08-27 rename — the indexes came along with it, so a rename back
+-- restores a fully indexed table and this file needs no part in that.
 -- The replacement tables are indexed by `regrid_members.py`'s own INDEXES block,
 -- which runs every time the script does, so nothing is needed for them here.
 
