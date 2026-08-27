@@ -33,7 +33,7 @@ the member regrid script, schema and config.
 
 ```bash
 cd Data && pip install -r requirements.txt -r requirements-dev.txt
-python -m pytest -q                 # 604 pass; 483 without PostgreSQL
+python -m pytest -q                 # 615 pass; 494 without PostgreSQL
 ```
 
 Then, against the loaded database:
@@ -179,7 +179,9 @@ times unchanged; wind never affected.
 ## What the tests do and do not prove
 
 `flask_api.py` went from 41% to **100%** statement coverage; `metrics.py` is also
-at 100%. 604 backend and 128 frontend tests, no xfails.
+at 100%. 615 backend and 128 frontend tests, no xfails. All four CI jobs are green
+on the head commit — CI landed 2026-08-24, so unlike earlier in this branch's life
+there is now something running on every push.
 
 The load-bearing idea in `fixture_db.py` is that **all three models are given the
 same true field in each one's own storage convention**, so they must return
