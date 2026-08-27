@@ -97,9 +97,13 @@ CREATE INDEX idx_obs_time_ll ON observation_data(obs_time, latitude, longitude);
 -- The regridded forecast tables are deliberately NOT here. `regridded_forecast`
 -- used to be, and is no longer created: it is superseded by
 -- `regridded_forecast_ens`, whose std_dev is a true ensemble spread rather than
--- a pooled member x native-cell one, and its last reader (the target-grid lookup
--- in `regrid_members.py`) became a constant. A database loaded before that change
--- still holds the table; dropping it there is a separate, manual step.
+-- a pooled member x native-cell one, and this branch's last reader of it (the
+-- target-grid lookup in `regrid_members.py`) became a constant.
+-- NOTE: that is true of THIS branch only. `main`, and the `WEAVE_v2` and
+-- `WEAVE_presentation` app copies, still query `regridded_forecast` against the
+-- same weave_weather database, so a loaded database must keep the table until
+-- those are retired — do not drop it on the strength of this file. NEXT_STEPS.md
+-- section 2 has the counts and the reversible rename to do first.
 -- Its replacements — `regridded_forecast_ens` and `regridded_forecast_member` —
 -- are created by the script that writes them, `regrid_members.py`, so their DDL
 -- cannot drift from the code that populates them. `fixture_db.py` reads this file

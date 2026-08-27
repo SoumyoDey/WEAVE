@@ -12,9 +12,13 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_forecast_data_run_var_latlon
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_observation_data_time_latlon
     ON observation_data(obs_time, latitude, longitude);
 
--- The two idx_rgf_* indexes on `regridded_forecast` were removed with the table.
--- Its replacements are indexed by `regrid_members.py`'s own INDEXES block, which
--- runs every time the script does, so nothing is needed for them here.
+-- The two idx_rgf_* indexes on `regridded_forecast` were removed from this file
+-- along with the table's CREATE (see schema.sql). An existing database still
+-- holds both the table and the indexes, and should: `main` and the WEAVE_v2 /
+-- WEAVE_presentation copies still query it. This file only stops a NEW install
+-- from creating what nothing on this branch reads.
+-- The replacement tables are indexed by `regrid_members.py`'s own INDEXES block,
+-- which runs every time the script does, so nothing is needed for them here.
 
 -- regridded_observation: time + spatial + source lookups
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_regridded_obs_src_time_latlon
