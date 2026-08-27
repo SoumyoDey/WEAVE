@@ -62,9 +62,12 @@ In priority order. Everything here is unstarted; nothing is half-done.
 1. **Item 1, the review.** Blocked on a person, not on work. `REVIEW_GUIDE.md`
    exists to make it tractable and lists every change that moves a published
    number, with before/after values and the test that pins each one.
-2. **Item 2, drop `regridded_forecast`** (245 MB, nothing reads it). Repoint
-   `regrid_members.py`'s grid lookup at `regridded_forecast_ens` in the same
-   change. `observation_data` is *also* unread now, but it is raw ingested data no
+2. **Item 2, drop `regridded_forecast`** (245 MB). The prerequisite is **done**
+   as of 2026-08-27 — its last reader was `regrid_members.py`'s grid lookup, now
+   a constant — so this is a one-line SQL change against the database.
+   **The instruction that used to be here was wrong**: it said to repoint that
+   lookup at `regridded_forecast_ens`, which is `regrid_members.py`'s own output.
+   See §2. `observation_data` is *also* unread now, but it is raw ingested data no
    script in this repo can regenerate — leave it.
 3. **Item 6, the lower-priority list.** Vite (CRA is EOL), caching the
    deterministic metric endpoints, row caps on point-list queries.
@@ -156,19 +159,52 @@ gh pr merge 2 --repo SoumyoDey/WEAVE --squash --delete-branch
 if the individual messages are worth keeping — they carry most of the reasoning,
 and several record why an approach was abandoned.
 
-## 2. Drop the superseded table
+## 2. Drop the superseded table — prerequisite done 2026-08-27
 
-Quick and safe. Nothing reads `regridded_forecast` any more (only comments
-mention it); it is 245 MB superseded by `regridded_forecast_ens`, which carries a
-true ensemble spread derived from `regridded_forecast_member`. It was kept only
-so the old and new numbers could be compared, and that comparison is done and
-written up.
+245 MB, superseded by `regridded_forecast_ens`, which carries a true ensemble
+spread derived from `regridded_forecast_member`. It was kept only so the old and
+new numbers could be compared, and that comparison is done and written up.
+
+**This section used to claim nothing read the table. That was wrong** —
+`regrid_members.py`'s `target_grid` read `SELECT DISTINCT latitude/longitude
+FROM regridded_forecast` to decide which cells to interpolate onto, so the table
+was still defining every scored cell in the app. Two consequences that a grep for
+readers would have caught and the sentence hid:
+
+- **Nothing in this repo writes `regridded_forecast`.** On a fresh database the
+  query returned nothing and the script died on the next line printing
+  `tgt_lats[0]`. `regrid_members.py` could never have run on a new deployment.
+- **The fix this section recommended would have made that permanent.** Repointing
+  the lookup at `regridded_forecast_ens` points it at `regrid_members.py`'s *own
+  output*: empty on the first run, and thereafter keyed on the union of whatever
+  native hulls have been regridded rather than on the canonical grid. Cells
+  outside a model's hull are never written, and UKMO's native grid stops at
+  25.0312–44.9062 / −84.7969 to −65.1094, so a `_ens` holding UKMO alone gives
+  39×39 spanning 25.5–44.5 and silently clips AIFS and GEFS to UKMO's footprint
+  on the next run — 160 cells per model/variable/hour, no error.
+
+The grid was never a discovered quantity, only an undocumented one:
+`TARGET_LAT_RANGE`, `TARGET_LON_RANGE` and `TARGET_RESOLUTION` in
+`regrid_members.py` now state it as 25–45 N, −85 to −65 W at 0.5°, 41×41. 0.5 is
+exact in binary, so this reproduces the stored coordinates bit-for-bit rather
+than approximately — verified against all three regridded tables on the loaded
+run, and `--verify-grid` re-runs that check against whichever still exist.
+`test_regrid_grid.py` pins the values, and pins that `target_grid` takes no
+cursor, because the source was the bug rather than the numbers.
+
+So the drop is now genuinely a one-liner:
 
 ```sql
 DROP TABLE regridded_forecast;
 ```
 
-Grep for the name first, in case something new started reading it.
+Then remove its `CREATE TABLE`/`CREATE INDEX` from `schema.sql` and
+`add_indexes.sql`, which still create it on a fresh install. `verify_grid` reads
+the table when it is present and prints `absent, skipped` when it is not, so it
+does not need changing either way.
+
+**Not done here**, because it is a destructive change to the loaded database and
+worth being a deliberate act rather than a side effect.
 
 ## 3. A fixture-database test layer  ← DONE (2026-08-19)
 
