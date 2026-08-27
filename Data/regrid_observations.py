@@ -277,6 +277,19 @@ def main():
         sys.exit(f"unknown source(s): {', '.join(unknown)}. "
                  f"Known: {', '.join(SOURCES)}")
 
+    # Every argument check happens before the connection is opened. Validation
+    # that needs I/O to reject a typo is validation that fails obscurely: with
+    # this guard below the connect, `--table regridded_observation` on a host
+    # with no database reported a psycopg2 OperationalError instead of saying
+    # what was wrong with the argument. CI caught that, because the CI database
+    # is deliberately not this one.
+    if args.table == LIVE_TABLE and not args.truncate:
+        # Appending to the live table would double every cell and leave the
+        # endpoints averaging a field with itself.
+        sys.exit(f"refusing to append to {LIVE_TABLE} — pass --truncate to "
+                 f"replace the rows for these sources, or use the default "
+                 f"{DEFAULT_TABLE} table")
+
     conn = psycopg2.connect(**DB_CONFIG)
     try:
         if args.compare:
@@ -285,13 +298,6 @@ def main():
                 for source in sources:
                     compare(cur, source)
             return
-
-        if args.table == LIVE_TABLE and not args.truncate:
-            # Appending to the live table would double every cell and leave the
-            # endpoints averaging a field with itself.
-            sys.exit(f"refusing to append to {LIVE_TABLE} — pass --truncate to "
-                     f"replace the rows for these sources, or use the default "
-                     f"{DEFAULT_TABLE} table")
 
         with conn.cursor() as cur:
             cur.execute(SCHEMA_TEMPLATE.format(table=args.table))

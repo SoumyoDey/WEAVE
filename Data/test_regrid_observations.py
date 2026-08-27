@@ -100,6 +100,24 @@ class TestGuards:
             ro.main()
         assert ro.LIVE_TABLE in str(e.value)
 
+    @pytest.mark.parametrize('argv', [
+        ['regrid_observations.py', '--sources', 'NOPE'],
+        ['regrid_observations.py', '--table', ro.LIVE_TABLE],
+    ])
+    def test_the_guards_reject_before_touching_the_database(self, monkeypatch, argv):
+        # The regression this pins: the live-table guard used to sit *below*
+        # psycopg2.connect, so on a host where the database is unreachable a bad
+        # argument surfaced as an OperationalError instead of the refusal. CI
+        # found it, because the CI database is deliberately not weave_weather.
+        # Point the config at a port nothing listens on: a guard that still
+        # rejects cleanly here cannot be doing I/O first.
+        monkeypatch.setattr(ro, 'DB_CONFIG',
+                            {**ro.DB_CONFIG, 'host': '127.0.0.1', 'port': 1,
+                             'dbname': 'definitely_not_a_database'})
+        monkeypatch.setattr('sys.argv', argv)
+        with pytest.raises(SystemExit):
+            ro.main()
+
 
 # ── Against the real database ─────────────────────────────────────────────────
 
