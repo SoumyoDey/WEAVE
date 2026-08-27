@@ -62,13 +62,14 @@ In priority order. Everything here is unstarted; nothing is half-done.
 1. **Item 1, the review.** Blocked on a person, not on work. `REVIEW_GUIDE.md`
    exists to make it tractable and lists every change that moves a published
    number, with before/after values and the test that pins each one.
-2. **Item 2, drop `regridded_forecast`** (245 MB). The prerequisite is **done**
-   as of 2026-08-27 — its last reader was `regrid_members.py`'s grid lookup, now
-   a constant — so this is a one-line SQL change against the database.
-   **The instruction that used to be here was wrong**: it said to repoint that
-   lookup at `regridded_forecast_ens`, which is `regrid_members.py`'s own output.
-   See §2. `observation_data` is *also* unread now, but it is raw ingested data no
-   script in this repo can regenerate — leave it.
+2. **Item 2, drop `regridded_forecast`** (245 MB). The code side of *this branch*
+   is done as of 2026-08-27, but **DO NOT RUN THE DROP YET — `main` still reads
+   the table in six places, and so do the `WEAVE_v2` and `WEAVE_presentation`
+   app copies, all three against this same `weave_weather` database.** It is
+   blocked on PR #2 merging, not ready to run. See §2, which twice stated
+   "nothing reads it" and was twice wrong. `observation_data` is *also* unread
+   now, but it is raw ingested data no script in this repo can regenerate —
+   leave it.
 3. **Item 6, the lower-priority list.** Vite (CRA is EOL), caching the
    deterministic metric endpoints, row caps on point-list queries.
 4. **`DATA_EXPANSION_DESIGN.md`.** Still blocked on the missing `init_time`
@@ -159,29 +160,84 @@ gh pr merge 2 --repo SoumyoDey/WEAVE --squash --delete-branch
 if the individual messages are worth keeping — they carry most of the reasoning,
 and several record why an approach was abandoned.
 
-## 2. Drop the superseded table — prerequisite done 2026-08-27
+## 2. Drop the superseded table — code done, DROP BLOCKED
 
 245 MB, superseded by `regridded_forecast_ens`, which carries a true ensemble
 spread derived from `regridded_forecast_member`. It was kept only so the old and
 new numbers could be compared, and that comparison is done and written up.
 
-**This section used to claim nothing read the table. That was wrong** —
-`regrid_members.py`'s `target_grid` read `SELECT DISTINCT latitude/longitude
-FROM regridded_forecast` to decide which cells to interpolate onto, so the table
-was still defining every scored cell in the app. Two consequences that a grep for
-readers would have caught and the sentence hid:
+> **Do not run the `DROP` yet.** Three live consumers still read this table, all
+> pointed at the same `weave_weather` database (checked in each one's `.env`):
+>
+> | consumer | reads | note |
+> |---|---|---|
+> | `origin/main`, this repo | 6 | the merge target for PR #2 |
+> | `WEAVE_v2/Data/flask_api.py` | 6 | `DB_NAME=weave_weather` |
+> | `WEAVE_presentation/Data/flask_api.py` | 14 | `DB_NAME=weave_weather` |
+>
+> On `main` the readers are `_fetch_fcst_obs_pairs_spatial` plus
+> `/api/compare/timeseries`, `/api/compare/skill`,
+> `/api/compare/spatial-agreement`, `/api/categorical-metrics` and
+> `/api/region-categorical-metrics` — the core of the app. The single shared
+> helper differs by exactly one line between branches:
+>
+> ```
+> origin/main:      FROM regridded_forecast
+> p0-reliability:   FROM {_frm}   ->  regridded_forecast_ens
+> ```
+>
+> `origin/comparison-tab` and `origin/phase2-restructure` read it too; only
+> `origin/kartik` is clean, being frontend-only. **So this is blocked on PR #2
+> merging** — and merging only clears `main`. Dropping the table also ends
+> `WEAVE_v2` and `WEAVE_presentation`'s ability to serve from this database,
+> which is a decision about those apps, not a cleanup.
+>
+> When it is time, prefer a reversible first step:
+>
+> ```sql
+> ALTER TABLE regridded_forecast RENAME TO regridded_forecast_deprecated;
+> ```
+>
+> Leave it a week. A forgotten reader — an ad-hoc `psql` session, a notebook
+> outside this tree, something on the HPC — then fails loudly and recoverably
+> instead of silently after 245 MB is gone. Only then `DROP`.
 
-- **Nothing in this repo writes `regridded_forecast`.** On a fresh database the
-  query returned nothing and the script died on the next line printing
-  `tgt_lats[0]`. `regrid_members.py` could never have run on a new deployment.
-- **The fix this section recommended would have made that permanent.** Repointing
-  the lookup at `regridded_forecast_ens` points it at `regrid_members.py`'s *own
-  output*: empty on the first run, and thereafter keyed on the union of whatever
-  native hulls have been regridded rather than on the canonical grid. Cells
-  outside a model's hull are never written, and UKMO's native grid stops at
-  25.0312–44.9062 / −84.7969 to −65.1094, so a `_ens` holding UKMO alone gives
-  39×39 spanning 25.5–44.5 and silently clips AIFS and GEFS to UKMO's footprint
-  on the next run — 160 cells per model/variable/hour, no error.
+**This section has now claimed "nothing reads the table" twice, and been wrong
+both times.** Worth reading as a pattern rather than two mistakes:
+
+1. The first version said it while `regrid_members.py`'s `target_grid` was
+   reading `SELECT DISTINCT latitude/longitude FROM regridded_forecast` to decide
+   which cells to interpolate onto — so the table was still defining every scored
+   cell in the app. Two consequences that a grep for readers would have caught
+   and the sentence hid:
+
+   - **Nothing in this repo writes `regridded_forecast`.** On a fresh database
+     the query returned nothing and the script died on the next line printing
+     `tgt_lats[0]`. `regrid_members.py` could never have run on a new deployment.
+   - **The fix this section recommended would have made that permanent.**
+     Repointing the lookup at `regridded_forecast_ens` points it at
+     `regrid_members.py`'s *own output*: empty on the first run, and thereafter
+     keyed on the union of whatever native hulls have been regridded rather than
+     on the canonical grid. Cells outside a model's hull are never written, and
+     UKMO's native grid stops at 25.0312–44.9062 / −84.7969 to −65.1094, so a
+     `_ens` holding UKMO alone gives 39×39 spanning 25.5–44.5 and silently clips
+     AIFS and GEFS to UKMO's footprint on the next run — 160 cells per
+     model/variable/hour, no error.
+
+2. The second version — written 2026-08-27, after that was fixed — said it again,
+   and was wrong for a completely different reason: **it was scoped to this
+   branch without saying so.** `p0-reliability` genuinely has no reader; `main`,
+   `WEAVE_v2` and `WEAVE_presentation` have twenty-six between them. Nothing in
+   the sentence was false about the working tree, and it was still dangerous,
+   because the instruction attached to it was a destructive `DROP` against a
+   database three other consumers share.
+
+**The lesson, which is the reusable part:** "nothing reads X" is not a property
+of a working tree. Before writing it, ask *whose* code and *which* database — the
+right check is every branch (`git grep X $(git branch -r)`) and every app copy
+pointed at the same `DB_NAME`, not `grep` in the current checkout. A drop is also
+not undoable, so the claim has to be true of everything holding a connection, not
+just of the thing you happen to be editing.
 
 The grid was never a discovered quantity, only an undocumented one:
 `TARGET_LAT_RANGE`, `TARGET_LON_RANGE` and `TARGET_RESOLUTION` in
@@ -200,16 +256,34 @@ creates `_ens` and `_member` for itself, and exits 0, where the old lookup gets
 `ERROR: relation "regridded_forecast" does not exist`. That is the fresh-install
 path working for the first time.
 
-**All that is left is the drop on the loaded database**, which is deliberately
-not automated — it is destructive and worth being its own act:
+**What is left is not a code change.** It is the rename-then-drop above, and it
+waits on PR #2 merging plus a decision about `WEAVE_v2` and `WEAVE_presentation`.
+Nothing in this repository needs touching for it either way: `verify_grid` reads
+the table when present and prints `absent, skipped` when not, and the fixture
+database already builds from `schema.sql` and passes without it (615 tests).
 
-```sql
-DROP TABLE regridded_forecast;
-```
+**How the "not used" claim was established for this branch**, so the next person
+can re-run it rather than trust it:
 
-`verify_grid` reads the table when present and prints `absent, skipped` when not,
-so it needs no change either way; the same is true of the fixture database, which
-builds from `schema.sql` and passes without the table (615 tests).
+- Every table name after `FROM`/`JOIN` in `flask_api.py`, enumerated:
+  `ensemble_statistics`, `forecast_data`, `forecast_runs`, `models`,
+  `regridded_forecast_ens`, `regridded_forecast_member`, `regridded_observation`,
+  `variables`. The bare table is not among them.
+- **The dynamic-SQL hole closed**, which a plain grep misses. Five sites build
+  `FROM {_frm}`; `_frm` comes only from `_fcst_speed_sql`, which returns two
+  hard-coded literals, both `regridded_forecast_ens`. No other constructed table
+  name exists in `Data/*.py`.
+- **Runtime, not just static:** the fixture database no longer creates the table
+  (`to_regclass` → NULL) and 17 of the 18 endpoints run against it. Any reader
+  would fail with `relation does not exist`. The 18th,
+  `/api/compare/categorical`, issues no direct SQL — it goes through
+  `_fetch_fcst_obs_pairs_spatial` and `_region_metric_points`.
+- **Database objects:** no views, matviews, functions, triggers or rules mention
+  it, and no inbound foreign keys. The only dependents are its own two indexes,
+  its toast table and its sequence.
+- **Not certifiable this way:** anything leaving no trace in the repo or the
+  catalog — an ad-hoc `psql` session, a notebook elsewhere, something on the HPC.
+  That is what the rename week is for.
 
 ## 3. A fixture-database test layer  ← DONE (2026-08-19)
 
