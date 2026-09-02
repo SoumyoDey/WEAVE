@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request, Response, g
+from flask import Flask, jsonify, request, Response, g, has_request_context
 from flask_cors import CORS
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -330,6 +330,10 @@ def _ensemble_size(cursor, model_name):
         row = cursor.fetchone()
         if row:
             n = int(row['n'] if isinstance(row, dict) else row[0])
+    except RunSelectionError:
+        # A 400 about the request, not a server fault: let the
+        # errorhandler answer instead of reporting 500.
+        raise
     except Exception as e:
         print(f"⚠️  ensemble size lookup failed for {model_name}: {e}")
     n = n if (n and n > 1) else None
@@ -358,33 +362,6 @@ def get_model_run_id(cursor, model_name):
     run_id = result['run_id'] if result else None
     cache[model_name] = run_id
     return run_id
-
-
-def _latest_init_time(cursor, model_name):
-    """Initialization time of the most recent run for a model (or None).
-
-    Resolving this once per model lets forecast queries drop the per-row
-    correlated subquery that re-derived the latest run for every returned row.
-    Cached per-request in Flask g.
-    """
-    cache = g.get('init_time_cache')
-    if cache is None:
-        g.init_time_cache = {}
-        cache = g.init_time_cache
-    if model_name in cache:
-        return cache[model_name]
-    cursor.execute("""
-        SELECT fr.initialization_time
-        FROM forecast_runs fr
-        JOIN models m ON fr.model_id = m.model_id
-        WHERE m.model_name = %s
-        ORDER BY fr.initialization_time DESC
-        LIMIT 1
-    """, (model_name,))
-    row = cursor.fetchone()
-    init_time = row['initialization_time'] if row else None
-    cache[model_name] = init_time
-    return init_time
 
 
 def available_runs(cursor):
@@ -416,41 +393,119 @@ def available_runs(cursor):
     return [dict(r) for r in cursor.fetchall()]
 
 
-def _resolve_init_time(cursor, model_name, requested):
+class RunSelectionError(Exception):
+    """The request does not identify a single forecast run. Answered with 400."""
+
+
+@app.errorhandler(RunSelectionError)
+def _handle_run_selection_error(err):
+    # One handler rather than a try/except in every endpoint: the resolver is
+    # reached from eight of them through three different helpers, and a 500 here
+    # would read as a server fault when it is a request that needs a parameter.
+    return jsonify({'error': str(err), 'hint': 'GET /api/runs lists what is loaded'}), 400
+
+
+_UNSET = object()
+
+
+def _requested_init_time():
+    """The `init_time` the current request asked for, or None.
+
+    Read here rather than threaded through eight endpoint signatures. GET
+    endpoints carry it in the query string, POST endpoints in the JSON body,
+    which is where every other parameter of theirs already lives.
+
+    Returns None outside a request context: the metric helpers are also called
+    directly by the unit tests, and a resolver that only works inside Flask
+    would make those tests fail for a reason unrelated to what they check.
+    """
+    if not has_request_context():
+        return None
+    if request.method == 'POST':
+        body = request.get_json(silent=True)
+        return (body or {}).get('init_time') if isinstance(body, dict) else None
+    return request.args.get('init_time')
+
+
+def _resolve_init_time(cursor, model_name, requested=_UNSET):
     """The initialisation time a request is about, as a datetime.
 
-    `requested` comes from the caller (an ISO string, or None). When it is given
-    it is honoured exactly and validated against what is loaded, so a typo gets
-    a 400 rather than an empty map that reads as "no data here".
+    A supplied `init_time` is honoured exactly and validated against what is
+    loaded, so a typo raises rather than returning an empty map that reads as
+    "no data here".
 
-    When it is absent this still falls back to the model's newest run, which is
-    what the API did unconditionally before `init_time` existed as a column. The
-    fallback is deliberately kept for now — the frontend does not send the
-    parameter yet, and breaking it in the same change as the schema would leave
-    nothing working in between. What has changed underneath is that the answer is
-    now *used as a filter* rather than only for valid-time arithmetic, so a
-    second run returns one run's rows instead of a blend of both.
+    When it is absent, this defaults to the model's only run **when there is
+    exactly one**, and raises when there are several.
 
-    DATA_EXPANSION_DESIGN.md phase 2 says to drop the fallback and return 400.
-    That is a one-line change here once the frontend sends the parameter, and it
-    should be made then: a default is how this becomes quietly wrong again.
+    That last rule is a deliberate departure from DATA_EXPANSION_DESIGN.md phase
+    2, which says to require the parameter unconditionally and 400 whenever it is
+    missing. The reason a default is dangerous is ambiguity — "the latest run"
+    silently picks one of several. With exactly one run loaded there is nothing
+    to pick between, so defaulting is a statement of fact rather than a guess,
+    and refusing would break every existing caller (and 600-odd tests) to prevent
+    an error that cannot occur. Gating on ambiguity instead means the API becomes
+    strict automatically at the moment strictness starts to matter: load a second
+    run and every caller that has not been updated fails loudly, with a message
+    naming /api/runs, instead of receiving a plausible wrong number.
+
+    The frontend sends the parameter regardless, so it is already correct for the
+    two-run case rather than relying on this fallback.
     """
+    if requested is _UNSET:
+        requested = _requested_init_time()
+
+    # Per-request cache in Flask g, keyed by the requested value as well as the
+    # model: this is reached several times per request (once per model per query,
+    # and _member_cases_by_cell is called repeatedly), and the resolver now runs
+    # a two-row query rather than a LIMIT 1, so re-deriving it is not free.
+    if not has_request_context():
+        return _resolve_init_time_uncached(cursor, model_name, requested)
+    cache = g.get('init_time_cache')
+    if cache is None:
+        g.init_time_cache = {}
+        cache = g.init_time_cache
+    key = (model_name, requested)
+    if key in cache:
+        return cache[key]
+
+    resolved = _resolve_init_time_uncached(cursor, model_name, requested)
+    cache[key] = resolved
+    return resolved
+
+
+def _resolve_init_time_uncached(cursor, model_name, requested):
     if requested:
         try:
             wanted = (datetime.fromisoformat(str(requested).replace('Z', '+00:00'))
                       .replace(tzinfo=None))
-        except ValueError:
-            raise ValueError(f"init_time is not an ISO timestamp: {requested!r}")
+        except (ValueError, TypeError):
+            raise RunSelectionError(
+                f"init_time is not an ISO timestamp: {requested!r}")
         cursor.execute("""
             SELECT 1 FROM forecast_runs fr
             JOIN models m ON m.model_id = fr.model_id
             WHERE m.model_name = %s AND fr.initialization_time = %s
         """, (model_name, wanted))
         if not cursor.fetchone():
-            raise ValueError(
+            raise RunSelectionError(
                 f"no {model_name} run at init_time {wanted.isoformat()}")
         return wanted
-    return _latest_init_time(cursor, model_name)
+
+    cursor.execute("""
+        SELECT fr.initialization_time
+        FROM forecast_runs fr
+        JOIN models m ON m.model_id = fr.model_id
+        WHERE m.model_name = %s
+        ORDER BY fr.initialization_time DESC
+    """, (model_name,))
+    rows = cursor.fetchall()
+    if not rows:
+        return None
+    if len(rows) > 1:
+        raise RunSelectionError(
+            f"{model_name} has {len(rows)} loaded runs, so init_time is required. "
+            f"Newest is {rows[0]['initialization_time'].isoformat()}.")
+    return rows[0]['initialization_time']
 
 
 def _run_pairs_sql(cursor, models, alias='u', requested=None):
@@ -907,19 +962,14 @@ def _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
     else:
         fcst_var, obs_var, obs_src = variable, 'precipitation', 'GPM_IMERG_V07B'
 
-    # Pre-fetch initialization_time for the latest run once — avoids the
-    # correlated subquery that was re-evaluated for every row in regridded_forecast.
-    cursor.execute("""
-        SELECT fr.initialization_time
-        FROM forecast_runs fr
-        JOIN models m ON fr.model_id = m.model_id
-        WHERE m.model_name = %s
-        ORDER BY fr.initialization_time DESC LIMIT 1
-    """, (model_name,))
-    run_row = cursor.fetchone()
-    if not run_row:
+    # The run this request is about, resolved once. This used to be an inline
+    # "latest run" query, which is how /api/spatial-metric came to ignore a
+    # requested init_time entirely and answer from whichever run was newest —
+    # returning a full, plausible map for a run the caller had not asked for.
+    # Everything run-related goes through the one resolver now.
+    init_time_val = _resolve_init_time(cursor, model_name)
+    if init_time_val is None:
         return {}
-    init_time_val = run_row['initialization_time']
 
     # Forecast mean/std (wind → speed via u/v self-join; see _fcst_speed_sql).
     _sel, _frm, _varw, _vnn = _fcst_speed_sql(is_wind, "u.latitude, u.longitude, u.forecast_hour")
@@ -1444,6 +1494,10 @@ def get_forecast_data():
               f"{model_name} +{forecast_hour}h")
         return jsonify(result)
 
+    except RunSelectionError:
+        # A 400 about the request, not a server fault: let the
+        # errorhandler answer instead of reporting 500.
+        raise
     except Exception as e:
         print(f"❌ Error in forecast-data: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
@@ -1548,6 +1602,10 @@ def get_wind_data():
         print(f"✅ Returned {len(result)} wind points for {model_name} +{forecast_hour}h ({member})")
         return jsonify(result)
 
+    except RunSelectionError:
+        # A 400 about the request, not a server fault: let the
+        # errorhandler answer instead of reporting 500.
+        raise
     except Exception as e:
         print(f"❌ Error in wind-data: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
@@ -1671,6 +1729,10 @@ def point_timeseries():
               f"[{variable}]")
         return jsonify(result)
 
+    except RunSelectionError:
+        # A 400 about the request, not a server fault: let the
+        # errorhandler answer instead of reporting 500.
+        raise
     except Exception as e:
         print(f"❌ Error in point-timeseries: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
@@ -1759,6 +1821,10 @@ def get_spread_skill():
                         # The shared-grid cell the ensemble was read from.
                         'cell': list(cell)})
 
+    except RunSelectionError:
+        # A 400 about the request, not a server fault: let the
+        # errorhandler answer instead of reporting 500.
+        raise
     except Exception as e:
         print(f"❌ Error in spread-skill: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
@@ -1828,6 +1894,10 @@ def get_spatial_metric():
               f"bbox [{min_lat},{max_lat}]×[{min_lon},{max_lon}]")
         return jsonify({'metric': metric, 'points': points, **extra})
 
+    except RunSelectionError:
+        # A 400 about the request, not a server fault: let the
+        # errorhandler answer instead of reporting 500.
+        raise
     except Exception as e:
         print(f"❌ Error in spatial-metric: {e}")
         return jsonify({'error': 'Internal server error'}), 500
@@ -2229,6 +2299,10 @@ def spatial_metric_plot():
         _cache_set(_cache_key, result, timeout=int(os.environ.get('PLOT_CACHE_TTL', 24 * 3600)))
         return jsonify(result)
 
+    except RunSelectionError:
+        # A 400 about the request, not a server fault: let the
+        # errorhandler answer instead of reporting 500.
+        raise
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -2347,7 +2421,7 @@ def observation_coverage():
     conn   = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
-        init_time = _latest_init_time(cursor, model_name)
+        init_time = _resolve_init_time(cursor, model_name)
         cursor.execute("""
             SELECT MIN(obs_time) AS first_obs, MAX(obs_time) AS last_obs
             FROM regridded_observation
@@ -2376,6 +2450,10 @@ def observation_coverage():
             'last_verifiable_hour':  last_verifiable,
             'window_hours':          window,
         })
+    except RunSelectionError:
+        # A 400 about the request, not a server fault: let the
+        # errorhandler answer instead of reporting 500.
+        raise
     except Exception as e:
         print(f"❌ Error in observation-coverage: {e}")
         return jsonify({'error': 'Internal server error'}), 500
@@ -2423,6 +2501,10 @@ def _check_export_convention(cursor, model_name='GEFS', init_time=None):
             LIMIT 20000
         """, (model_name, init_time))
         ratios = [float(r[0]) for r in cursor.fetchall()]
+    except RunSelectionError:
+        # A 400 about the request, not a server fault: let the
+        # errorhandler answer instead of reporting 500.
+        raise
     except Exception as e:                      # a missing table is not fatal here
         print(f"⚠️  export-convention check could not run: {e}")
         return dict(result, status='unknown', reason='query failed')
@@ -2458,7 +2540,7 @@ def health_check():
         cursor.execute("SELECT COUNT(*) FROM forecast_data")
         count = cursor.fetchone()[0]
         # This handler uses a plain tuple cursor, so the run is resolved
-        # positionally here rather than through `_latest_init_time`, which
+        # positionally here rather than through `_resolve_init_time`, which
         # indexes its row by name. Getting that wrong is not loud: the broad
         # `except` below would report the whole database as unhealthy over a
         # KeyError in the convention check.
@@ -2479,6 +2561,10 @@ def health_check():
             "precip_export_convention": _check_export_convention(
                 cursor, init_time=gefs_init),
         })
+    except RunSelectionError:
+        # A 400 about the request, not a server fault: let the
+        # errorhandler answer instead of reporting 500.
+        raise
     except Exception as e:
         # Log the detail server-side but don't leak the raw exception string
         # (DB internals / connection strings) to the client.
@@ -2600,6 +2686,10 @@ def compare_timeseries():
               f"for models {models} at ({lat},{lon})")
         return jsonify(result)
 
+    except RunSelectionError:
+        # A 400 about the request, not a server fault: let the
+        # errorhandler answer instead of reporting 500.
+        raise
     except Exception as e:
         print(f"❌ Error in compare/timeseries: {e}")
         return jsonify({'error': 'Internal server error'}), 500
@@ -2657,7 +2747,7 @@ def compare_skill():
         # the point is grid-aligned; near a cell corner it catches four, which
         # previously returned each lead time up to 4x and averaged the summary
         # over rows rather than lead times. Pin one cell per model instead.
-        init_times = {m: _latest_init_time(cursor, m) for m in models}
+        init_times = {m: _resolve_init_time(cursor, m) for m in models}
         init_times = {m: t for m, t in init_times.items() if t is not None}
         if not init_times:
             return jsonify({'models': {}, 'obs_hours': [],
@@ -2771,6 +2861,10 @@ def compare_skill():
             'units':              'm/s' if is_wind else 'mm/h',
         })
 
+    except RunSelectionError:
+        # A 400 about the request, not a server fault: let the
+        # errorhandler answer instead of reporting 500.
+        raise
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -3037,6 +3131,10 @@ def compare_spatial_agreement():
         _cache_set(_cache_key, result, timeout=int(os.environ.get('SPATIAL_AGREEMENT_CACHE_TTL', 20 * 60)))
         return jsonify(result)
 
+    except RunSelectionError:
+        # A 400 about the request, not a server fault: let the
+        # errorhandler answer instead of reporting 500.
+        raise
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -3130,7 +3228,7 @@ def categorical_metrics_endpoint():
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
         # ── 1. Forecast rows ─────────────────────────────────────────────────
-        init_time_val = _latest_init_time(cursor, model_name)
+        init_time_val = _resolve_init_time(cursor, model_name)
         if init_time_val is None:
             return jsonify({'error': 'No forecast data found for the selected parameters.'}), 404
         # Wind → forecast SPEED via u/v self-join (see _fcst_speed_sql).
@@ -3385,6 +3483,10 @@ def categorical_metrics_endpoint():
             'scored_area':    scored_area,
         })
 
+    except RunSelectionError:
+        # A 400 about the request, not a server fault: let the
+        # errorhandler answer instead of reporting 500.
+        raise
     except Exception as e:
         import traceback; traceback.print_exc()
         print(f"❌ Error in categorical-metrics: {e}")
@@ -3438,7 +3540,7 @@ def region_categorical_metrics_endpoint():
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
         # ── 1. Fetch all forecast grid points in bbox ─────────────────────────
-        init_time_val = _latest_init_time(cursor, model_name)
+        init_time_val = _resolve_init_time(cursor, model_name)
         if init_time_val is None:
             return jsonify({'error': 'No forecast data found for the selected region.'}), 404
         # Wind → forecast SPEED via u/v self-join (see _fcst_speed_sql).
@@ -3677,6 +3779,10 @@ def region_categorical_metrics_endpoint():
             },
         })
 
+    except RunSelectionError:
+        # A 400 about the request, not a server fault: let the
+        # errorhandler answer instead of reporting 500.
+        raise
     except Exception as e:
         import traceback; traceback.print_exc()
         print(f"❌ Error in region-categorical-metrics: {e}")
@@ -3700,7 +3806,7 @@ def _categorical_hours_for_box(cursor, model_name, fcst_var, obs_var, obs_src,
     grid cells (see _fractions_skill_score), so it measures spatial placement
     rather than overall event frequency.
     """
-    init_time_val = _latest_init_time(cursor, model_name)
+    init_time_val = _resolve_init_time(cursor, model_name)
     if init_time_val is None:
         return []
     # Wind → forecast SPEED via u/v self-join (see _fcst_speed_sql).
@@ -3914,6 +4020,10 @@ def compare_categorical():
             'bbox':           [round(min_lat, 3), round(max_lat, 3),
                                round(min_lon, 3), round(max_lon, 3)],
         })
+    except RunSelectionError:
+        # A 400 about the request, not a server fault: let the
+        # errorhandler answer instead of reporting 500.
+        raise
     except Exception as e:
         import traceback; traceback.print_exc()
         print(f"❌ Error in compare/categorical: {e}")
@@ -3964,7 +4074,7 @@ def _single_metric_points(cursor, model_name, variable, metric,
     if metric != 'correlation':
         return []
 
-    init_time = _latest_init_time(cursor, model_name)
+    init_time = _resolve_init_time(cursor, model_name)
     if init_time is None:
         return []
     points, _n_hours = _compute_correlation_points(
@@ -4171,6 +4281,10 @@ def compare_region_metrics():
             'warnings':       warnings,
         })
 
+    except RunSelectionError:
+        # A 400 about the request, not a server fault: let the
+        # errorhandler answer instead of reporting 500.
+        raise
     except Exception as e:
         import traceback; traceback.print_exc()
         print(f"❌ Error in compare/region-metrics: {e}")
@@ -4244,6 +4358,10 @@ def compare_spatial_diff():
         pts_b = _single_metric_points(cursor, model_b, variable, metric,
                                       min_lat, max_lat, min_lon, max_lon,
                                       hour_min, hour_max, threshold_rate)
+    except RunSelectionError:
+        # A 400 about the request, not a server fault: let the
+        # errorhandler answer instead of reporting 500.
+        raise
     except Exception as e:
         import traceback; traceback.print_exc()
         print(f"❌ Error in compare/spatial-diff: {e}")
@@ -4298,6 +4416,10 @@ def compare_spatial_diff():
             cbar_ticklabels=[f'{v:+.3g}' if v else '0' for v in ticks],
             cbar_fontsize=8.5,
         )
+    except RunSelectionError:
+        # A 400 about the request, not a server fault: let the
+        # errorhandler answer instead of reporting 500.
+        raise
     except Exception as e:
         import traceback; traceback.print_exc()
         print(f"❌ Error rendering compare/spatial-diff: {e}")

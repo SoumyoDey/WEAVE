@@ -1,3 +1,5 @@
+import { withRun, whenRunReady } from './run';
+
 const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
 /**
@@ -40,6 +42,7 @@ export async function fetchCategoricalMetrics({
   boxCells,
   fssWindow,
 }) {
+  await whenRunReady();
   const thresholdField = variable === 'wind'
     ? { threshold_ms: thresholdMm6h }
     : { threshold_mm_6h: thresholdMm6h };
@@ -47,7 +50,7 @@ export async function fetchCategoricalMetrics({
   const response = await fetch(`${API_BASE}/categorical-metrics`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+    body: JSON.stringify(withRun({
       model, variable, lat, lon,
       hour_min: hourMin, hour_max: hourMax,
       // box_cells 1 keeps this a true point (FSS undefined). Above 1 it gives
@@ -55,7 +58,7 @@ export async function fetchCategoricalMetrics({
       ...(boxCells  != null ? { box_cells:  boxCells }  : {}),
       ...(fssWindow != null ? { fss_window: fssWindow } : {}),
       ...thresholdField,
-    }),
+    })),
   });
 
   if (!response.ok) {
@@ -87,6 +90,7 @@ export async function fetchRegionCategoricalMetrics({
   minLat, maxLat, minLon, maxLon,
   thresholdMm6h, hourMin, hourMax, fssWindow,
 }) {
+  await whenRunReady();
   const thresholdField = variable === 'wind'
     ? { threshold_ms: thresholdMm6h }
     : { threshold_mm_6h: thresholdMm6h };
@@ -94,14 +98,14 @@ export async function fetchRegionCategoricalMetrics({
   const response = await fetch(`${API_BASE}/region-categorical-metrics`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+    body: JSON.stringify(withRun({
       model, variable,
       min_lat: minLat, max_lat: maxLat,
       min_lon: minLon, max_lon: maxLon,
       hour_min: hourMin, hour_max: hourMax,
       ...(fssWindow != null ? { fss_window: fssWindow } : {}),
       ...thresholdField,
-    }),
+    })),
   });
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
