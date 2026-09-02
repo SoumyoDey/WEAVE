@@ -48,6 +48,28 @@ Both scripts create their own tables, so nothing needs adding to `schema.sql`.
 `regridded_forecast_ens`; `regrid_observations.py` box-averages
 `observation_data` into `regridded_observation`.
 
+**A fresh install needs no migration for the column itself.**
+`regrid_members.py`'s DDL already includes `init_time` and the run-scoped
+indexes, so the tables come out right the first time — verified on a throwaway
+database. `Data/migrate_init_time.py` exists for the other case: a database
+loaded *before* 2026-09-02, whose regridded tables predate that column.
+
+**A fresh install should still run it once**, after 2b, to populate
+`forecast_run_registry` — the per-run record of member counts, hour ranges and
+export convention that `/api/runs` reads:
+
+```bash
+python Data/migrate_init_time.py --dry-run   # says what it would change
+python Data/migrate_init_time.py
+```
+
+It is idempotent, so this is safe whichever case you are in; on an
+already-migrated database it reports the column as present and refreshes the
+registry. Run it *after* the loaders, not before — with `forecast_runs` still
+empty it exits saying there is no run to attribute rows to, which is correct but
+unhelpful. Without the registry, `/api/runs` falls back to a `DISTINCT` over the
+ens table and still answers, just without the member counts and conventions.
+
 Two things to know:
 
 - **`regrid_observations.py` defaults to a `_rebuilt` table, not the live one**, so
