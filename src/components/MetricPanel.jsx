@@ -1,6 +1,6 @@
 import React from 'react';
 import { Square, Hexagon, X } from 'lucide-react';
-import { METRIC_CONFIG, withUnit } from '../constants';
+import { METRIC_CONFIG, withUnit, metricLegend } from '../constants';
 import { t } from '../theme';
 import { fmtLat, fmtLon } from '../utils/geoUtils';
 
@@ -196,22 +196,25 @@ export function MetricPanel({
               {(() => {
                 const cfg = METRIC_CONFIG.find(m => m.key === spatialData.metric);
                 if (!cfg) return null;
-                if (cfg.legend) {
-                  // A band edge quoted in a unit is one the variable supplies;
-                  // the same entry serves both, so it must not be spelled out.
-                  const unitful = cfg.legend.some(l => l.label.includes('{unit}'));
+                // Unit-sensitive metrics carry a separate wind scale; the
+                // dimensionless ones (CSI, POD, FAR, SSR, correlation) fall back
+                // to the single set of bands, which is correct for them.
+                const legend = metricLegend(cfg, selectedVariable);
+                if (legend.length) {
+                  const unitful = legend.some(l => l.label.includes('{unit}'));
                   return (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      {cfg.legend.map(({ color, label }) => (
+                      {legend.map(({ color, label }) => (
                         <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.65)' }}>
                           <div style={{ width: '12px', height: '12px', background: color, borderRadius: '2px', flexShrink: 0 }} />
                           {withUnit(label, selectedVariable)}
                         </div>
                       ))}
-                      {/* The edges and their verdicts were picked for mm/h. The
-                          map still colours wind by them, so say whose scale it
-                          is rather than let "Poor" read as a wind judgement. */}
-                      {unitful && isWind && (
+                      {/* The warning that used to sit here — that the edges were
+                          calibrated for precipitation — is gone because it is no
+                          longer true: wind has its own bands. A dimensionless
+                          metric quoting no unit needs no note either way. */}
+                      {unitful && isWind && !cfg.windLegend && (
                         <div style={{ fontSize: t.fontSize.nano, color: 'rgba(243,156,18,0.55)', marginTop: '2px', lineHeight: 1.35 }}>
                           Band edges and verdicts are calibrated for precipitation, not for wind.
                         </div>

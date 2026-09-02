@@ -1842,6 +1842,56 @@ PLOT_STYLE_REGISTRY = {
 }
 
 
+# Wind overrides for the error-magnitude styles. The registry's limits above are
+# precipitation ranges in mm/h, and a wind field in m/s runs several times
+# larger: measured per cell over the full domain and all three models on the
+# loaded run, MAE has a median of 1.79 and a p90 of 4.65, so `Normalize(0, 2)`
+# saturated most of the map at its top colour and the PNG carried no gradient
+# where the interesting variation was. The frontend's band edges are the
+# discrete version of the same fix — see WIND_BAND_BASIS in src/constants.js.
+#
+# Each vmax sits near the observed p90 rather than the maximum, which leaves
+# about 10% of cells clipped on purpose: stretching to the maximum would
+# compress the range where nearly every cell actually falls.
+#
+# Only these four appear here. CSI, POD, FAR, Brier, SSR and correlation are
+# dimensionless, so their limits mean the same thing in any unit.
+WIND_PLOT_STYLE_OVERRIDES = {
+    'bias': {
+        'norm': mcolors.TwoSlopeNorm(vmin=-5.0, vcenter=0.0, vmax=5.0),
+        'cbar_ticks':      [-5, -2.5, 0, 2.5, 5],
+        'cbar_ticklabels': ['-5', '-2.5', '0', '+2.5', '+5'],
+    },
+    'mae': {
+        'norm': mcolors.Normalize(vmin=0, vmax=5.0),
+        'cbar_ticks':      [0, 1.25, 2.5, 3.75, 5.0],
+        'cbar_ticklabels': ['0', '1.25', '2.5', '3.75', '5'],
+    },
+    'rmse': {
+        'norm': mcolors.Normalize(vmin=0, vmax=5.5),
+        'cbar_ticks':      [0, 1.375, 2.75, 4.125, 5.5],
+        'cbar_ticklabels': ['0', '1.4', '2.75', '4.1', '5.5'],
+    },
+    'crps': {
+        'norm': mcolors.Normalize(vmin=0, vmax=4.0),
+        'cbar_ticks':      [0, 1.0, 2.0, 3.0, 4.0],
+        'cbar_ticklabels': ['0', '1', '2', '3', '4'],
+    },
+}
+
+
+def _plot_style(metric, variable):
+    """The plot style for a metric, with the wind scale applied when it applies.
+
+    Falls back to the registry entry untouched for precipitation and for every
+    dimensionless metric, so a metric with no override renders exactly as before.
+    """
+    style = PLOT_STYLE_REGISTRY[metric]
+    if variable == 'wind' and metric in WIND_PLOT_STYLE_OVERRIDES:
+        return {**style, **WIND_PLOT_STYLE_OVERRIDES[metric]}
+    return style
+
+
 
 
 def _render_metric_map_png(points, cmap, norm, cbar_label, title,
@@ -2043,7 +2093,7 @@ def spatial_metric_plot():
 
         if metric not in PLOT_STYLE_REGISTRY:
             return jsonify({'error': f'No plot style for metric: {metric}'}), 400
-        style = PLOT_STYLE_REGISTRY[metric]
+        style = _plot_style(metric, variable)
 
         # ── Title ─────────────────────────────────────────────────────────
         var_label    = VAR_LABELS.get(variable, variable)
