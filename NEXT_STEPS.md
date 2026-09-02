@@ -1,18 +1,31 @@
 # Next steps
 
-State as of 2026-08-27. Branch `p0-reliability`, PR #2 on `SoumyoDey/WEAVE`.
+State as of 2026-09-02. Branch `p0-reliability`, PR #2 on `SoumyoDey/WEAVE`.
 
 **Read this, then `REVIEW_GUIDE.md`.** Items 3, 3b and 4 below are done, all seven
 defects the fixture layer found are fixed, and **the consistency audit is closed —
 all six phases** (`CONSISTENCY_AUDIT.md`). **The only thing left that needs someone
 other than whoever is reading this is the review — item 1.**
 
-Two things changed on 2026-08-27 that the rest of this document assumes: the
-target grid became a constant, so `regrid_members.py` can run on a fresh database
-for the first time (§2), and `regridded_forecast` on `weave_weather` was **renamed
-to `regridded_forecast_deprecated`** — which means `main`, `WEAVE_v2` and
-`WEAVE_presentation` now fail against that database until it is renamed back. If
-you check out `main` and hit a missing-relation error, that is this, not a bug.
+**Changes the rest of this document assumes**, newest first:
+
+- **2026-09-02 — the `init_time` migration is done** (§8). The regridded tables
+  carry a run identity, every query filters on it, the frontend names the run on
+  every request, and an ambiguous request gets a 400 instead of a guess.
+  `DATA_EXPANSION_DESIGN.md` phases 1–2 are closed and its "do not load a second
+  run" rule is retired.
+- **2026-09-02 — wind has its own metric colour bands** (see the ownerless-items
+  list). The precipitation edges are unchanged.
+- **2026-09-02 — the observation regrid exists** (§7), and it found a
+  checkerboard artifact in the *current* truth field. The live
+  `regridded_observation` is untouched pending a decision.
+- **2026-08-27 — the target grid is a constant**, so `regrid_members.py` can run
+  on a fresh database for the first time (§2).
+- **2026-08-27 — `regridded_forecast` was renamed to
+  `regridded_forecast_deprecated`** on `weave_weather`, which means `main`,
+  `WEAVE_v2` and `WEAVE_presentation` fail against that database until it is
+  renamed back. If you check out `main` and hit a missing-relation error, that is
+  this, not a bug.
 
 ## Where things stand
 
@@ -100,11 +113,21 @@ In priority order. Everything here is unstarted; nothing is half-done.
    "nothing reads it" and was twice wrong. `observation_data` is *also* unread
    now, but it is raw ingested data no script in this repo can regenerate —
    leave it.
-3. **Item 6, the lower-priority list.** Vite (CRA is EOL), caching the
+3. **The `observation_data` ingest — the largest real piece of work left**, and
+   the only thing now standing between a fresh clone and a working *verified*
+   deployment. Nothing in this repository writes that table; the native point
+   observations were ingested off-repo and the IMERG/ERA5 source files are not on
+   the development machine. `regrid_observations.py` handles everything above it
+   (§7), and `DEPLOY.md` §2b says plainly that a fresh install gets forecasts and
+   no truth until this exists. It is also what blocks
+   `DATA_EXPANSION_DESIGN.md` phase 4 and therefore a second run.
+4. **Item 6, the lower-priority list.** Vite (CRA is EOL), caching the
    deterministic metric endpoints, row caps on point-list queries.
-4. **`DATA_EXPANSION_DESIGN.md`.** Still blocked on the missing `init_time`
-   column. One trap was removed: `Timeline.jsx` no longer hard-codes the
-   initialisation date.
+5. **`DATA_EXPANSION_DESIGN.md` phases 3–5.** No longer blocked on the schema —
+   phases 1–2 are done (§8). What remains is the run-selector UI, which has no
+   user-visible value while one run is loaded, and the ingest above. Read that
+   document's status table first; three of its instructions were superseded by
+   what actually shipped and are marked as such.
 
 ### Open items with no owner
 
@@ -668,10 +691,14 @@ fallback. That is one less thing for DATA_EXPANSION_DESIGN.md to trip over.
   scale that already existed, and its holdout list predates several components),
   and its phase-5 exit grep passes while a literal is still on screen. The audit
   document is the live record; the plan is what was believed beforehand.
-- **`DATA_EXPANSION_DESIGN.md`** — selecting date and initialisation. Blocked on
-  one thing: the regridded tables have **no `init_time` column**, and the API
-  resolves valid time from "the latest run". Loading a second run before that is
-  fixed makes every score wrong in a way that looks plausible.
+- **`DATA_EXPANSION_DESIGN.md`** — selecting date and initialisation. **Phases
+  1–2 are done as of 2026-09-02 (§8)**, so the blocker this entry used to name —
+  no `init_time` column, valid time resolved from "the latest run" — is gone, and
+  that document's "do not load a second run" rule is retired. What remains is the
+  ingest (`observation_data` has no loader here) and the selector UI, which has
+  no user-visible value while one run is loaded. Like the audit plan above, treat
+  its phase text as what was believed beforehand: three of its instructions were
+  superseded by what shipped and are marked against each phase.
 
 ## 6. Lower priority
 
@@ -745,6 +772,68 @@ merges so the review is not aimed at a moving target (my preference); or keep th
 current field and treat this as documentation of a known artifact. What should not
 happen is a silent switch — the numbers change materially and a reader comparing
 against the audit would have no way to know why.
+
+---
+
+## 8. The `init_time` migration — DONE 2026-09-02
+
+`DATA_EXPANSION_DESIGN.md` called this the single blocking issue for loading more
+than one forecast run, and said it had to be fixed *before* a second run arrived
+rather than after. It is fixed; that document's phases 1–2 are closed and its
+"do not load a second run" rule is retired. Read it for the detail — this is the
+short version and the parts a reader of *this* document needs.
+
+**The defect.** The regridded tables carried no run identity, and
+`_latest_init_time` resolved the newest run in `forecast_runs` and added
+`forecast_hour` to get a valid time. Correct with one run; with two it silently
+attributes every regridded row to the newest initialisation and every score
+becomes wrong in a way that looks entirely plausible.
+
+**What shipped.** `Data/migrate_init_time.py` (idempotent, `--dry-run`,
+`--rollback`) added `init_time NOT NULL` to both regridded tables plus
+`forecast_run_registry`; ten query sites filter on it; `/api/runs` reports what
+is loaded; `src/api/run.js` makes the frontend name the run on every request.
+Applied to `weave_weather`: 42,550,480 member rows and 1,497,294 ens rows all
+carry `2025-09-08 00:00:00`.
+
+**Every published number is unchanged** — `compare/skill` still returns AIFS
+0.0628/0.0918/0.1013, GEFS 1.9413/1.9413/2.2455, UKMO 0.0276/0.0831/0.0954, and
+`/api/health` still reads `ok` with an inferred divisor of 3.0.
+
+### The four things worth knowing before touching this
+
+- **Refusal is gated on ambiguity, not on the parameter being absent.** The
+  design document says require `init_time` always and 400 when missing. What
+  shipped resolves the sole run when there is one and raises when there are
+  several, because the danger in a default is ambiguity and with one run there is
+  nothing to pick between. It becomes strict automatically when a second run
+  lands. The blanket rule is the `len(rows) > 1` test in `_resolve_init_time`.
+- **`ADD COLUMN NOT NULL DEFAULT` is catalogue-only on PG 11+**, so the 6.5 GB
+  member table was not rewritten. The design document's add-nullable-then-UPDATE
+  recipe would have rewritten 42M rows. The default is dropped afterwards so new
+  inserts must state their run — leaving it would move the silent
+  mis-attribution from the query layer into the schema.
+- **A helper that raises for the caller's benefit must survive the caller's error
+  handling.** Every endpoint wraps its body in `except Exception -> 500`, which
+  turned the 400 into a server error. All 19 re-raise `RunSelectionError` now.
+- **`src/api/run.js` owns both the value and the fetch that finds it**, because
+  separating them is a race and was one: requests went out before an App-level
+  effect resolved, with no `init_time`. Harmless on one run, but with two every
+  first-paint request would 400. Its module state is documented as unsuitable for
+  a real selector — switching runs needs React state, or a stale request will
+  resolve after the switch and paint one run's numbers under another's label.
+
+### The trap that generalises
+
+**Replacing a resolver means finding every copy of it.** The first pass through
+phase 2 left an inline "latest run" query inside
+`_fetch_fcst_obs_pairs_spatial`, so `/api/spatial-metric` ignored a requested
+`init_time` entirely and answered from whichever run was newest — a full,
+plausible map for a run nobody asked for, which is exactly the failure the
+migration existed to remove, hiding inside the fix. Neither 649 unit tests nor
+the source-reading guard caught it; an end-to-end request with a deliberately
+wrong `init_time` did, in one line. When you centralise a lookup, grep for the
+*query* as well as the function name.
 
 ---
 
