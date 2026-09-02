@@ -118,9 +118,44 @@ export const withUnit = (text, variable) =>
     ? text.replaceAll('{unit}', VALUE_UNITS[variable] ?? '')
     : text;
 
+// ── Where the wind bands come from ────────────────────────────────────────────
+// The error-magnitude bands below were calibrated for precipitation in mm/h and
+// were being applied unchanged to wind in m/s. Measured per cell over the whole
+// domain and all three models on the loaded run (4,883 scored cells per metric),
+// that put nearly everything in the worst band:
+//
+//   metric  mm/h bands        -> share "Poor"      m/s bands        -> share "Poor"
+//   MAE     0.2 / 0.5 / 1.0      79.1%             1.0 / 2.0 / 3.5     22.8%
+//   RMSE    0.3 / 0.7 / 1.2      78.4%             1.2 / 2.5 / 4.0     21.6%
+//   CRPS    0.15 / 0.35 / 0.6    85.6%             0.7 / 1.5 / 2.8     22.0%
+//
+// Observed distribution, pooled: MAE median 1.79 m/s (p90 4.65), RMSE median
+// 2.05 (p90 5.00), CRPS median 1.38 (p90 3.80). The three models are nearly
+// identical, so the bands are shared.
+//
+// **These are absolute judgements, not quantiles.** Exact quartiles would give a
+// perfect 25/25/25/25 split, and were deliberately not used: a quantile band
+// means "worse than three quarters of this run" while the label says "Poor", so
+// every run would report 25% Poor cells however good the forecast was. The edges
+// are round numbers anchored on ~1 m/s being a good short-range 10 m wind
+// forecast and 3.5+ m/s being genuinely poor; they merely happen to read well
+// here, with no band under 19%.
+//
+// Caveat worth keeping: this run's errors are on the high side, verification
+// reaches only +23 h, and the domain is mostly ocean and coastline. Re-deriving
+// the edges from a different run would be re-calibrating to its difficulty —
+// change them because the meteorology says so, not because a percentage moved.
+export const WIND_BAND_BASIS =
+  'per-cell, all models, full domain, loaded run 2025-09-08 00Z (n=4883/metric)';
+
 // ── Spatial metric registry ───────────────────────────────────────────────────
 // To add a metric: append one entry here. Selector, overlay, legend, and plot
 // all read from this array automatically — no other file needs to change.
+//
+// `colorFn`/`legend` are the precipitation scale. A metric whose bands are
+// unit-sensitive also carries `windColorFn`/`windLegend`; read them through
+// `metricColorFn` and `metricLegend` below rather than reaching for the keys, so
+// a metric without a wind variant falls back instead of rendering nothing.
 export const METRIC_CONFIG = [
   {
     key:          'ssr',
@@ -221,6 +256,24 @@ export const METRIC_CONFIG = [
       { color: 'rgba(241,148,138,0.85)',  label: '0.3 – 1 {unit} — Slight over-forecast' },
       { color: 'rgba(192,57,43,0.85)',    label: '> 1 {unit}  —  Strong over-forecast' },
     ],
+    // ±1 m/s is not a "strong" wind bias: measured over the loaded run, 42% of
+    // cells fell in the strongest under-forecast band and only 12% read as
+    // near-unbiased. |bias| has a median of 1.47 m/s.
+    windColorFn: (v) => {
+      if (v == null) return null;
+      if (v < -2.5)  return 'rgba(41,128,185,0.85)';
+      if (v < -0.75) return 'rgba(133,193,233,0.85)';
+      if (v <=  0.75) return 'rgba(200,200,200,0.75)';
+      if (v <=  2.5)  return 'rgba(241,148,138,0.85)';
+      return 'rgba(192,57,43,0.85)';
+    },
+    windLegend: [
+      { color: 'rgba(41,128,185,0.85)',   label: '< −2.5 {unit}  —  Strong under-forecast' },
+      { color: 'rgba(133,193,233,0.85)',  label: '−2.5 – −0.75  —  Slight under-forecast' },
+      { color: 'rgba(200,200,200,0.75)',  label: '−0.75 – 0.75 —  Near-unbiased ✓' },
+      { color: 'rgba(241,148,138,0.85)',  label: '0.75 – 2.5 {unit} — Slight over-forecast' },
+      { color: 'rgba(192,57,43,0.85)',    label: '> 2.5 {unit}  —  Strong over-forecast' },
+    ],
     legendGradient: null,
   },
   {
@@ -242,6 +295,21 @@ export const METRIC_CONFIG = [
       { color: 'rgba(241,196,15,0.82)', label: '0.2 – 0.5  —  Good' },
       { color: 'rgba(230,126,34,0.82)', label: '0.5 – 1.0  —  Moderate' },
       { color: 'rgba(192,57,43,0.82)',  label: '> 1.0 {unit}  —  Poor' },
+    ],
+    // Wind. Measured over the loaded run, the mm/h edges above put 79% of
+    // cells in "Poor" — one colour over most of the map. See WIND_BAND_BASIS.
+    windColorFn: (v) => {
+      if (v == null) return null;
+      if (v < 1.0) return 'rgba(39,174,96,0.82)';
+      if (v < 2.0) return 'rgba(241,196,15,0.82)';
+      if (v < 3.5) return 'rgba(230,126,34,0.82)';
+      return 'rgba(192,57,43,0.82)';
+    },
+    windLegend: [
+      { color: 'rgba(39,174,96,0.82)',  label: '< 1.0 {unit}  —  Excellent' },
+      { color: 'rgba(241,196,15,0.82)', label: '1.0 – 2.0  —  Good' },
+      { color: 'rgba(230,126,34,0.82)', label: '2.0 – 3.5  —  Moderate' },
+      { color: 'rgba(192,57,43,0.82)',  label: '> 3.5 {unit}  —  Poor' },
     ],
     legendGradient: null,
   },
@@ -265,6 +333,19 @@ export const METRIC_CONFIG = [
       { color: 'rgba(230,126,34,0.82)', label: '0.7 – 1.2  —  Moderate' },
       { color: 'rgba(192,57,43,0.82)',  label: '> 1.2 {unit}  —  Poor' },
     ],
+    windColorFn: (v) => {
+      if (v == null) return null;
+      if (v < 1.2) return 'rgba(39,174,96,0.82)';
+      if (v < 2.5) return 'rgba(241,196,15,0.82)';
+      if (v < 4.0) return 'rgba(230,126,34,0.82)';
+      return 'rgba(192,57,43,0.82)';
+    },
+    windLegend: [
+      { color: 'rgba(39,174,96,0.82)',  label: '< 1.2 {unit}  —  Excellent' },
+      { color: 'rgba(241,196,15,0.82)', label: '1.2 – 2.5  —  Good' },
+      { color: 'rgba(230,126,34,0.82)', label: '2.5 – 4.0  —  Moderate' },
+      { color: 'rgba(192,57,43,0.82)',  label: '> 4.0 {unit}  —  Poor' },
+    ],
     legendGradient: null,
   },
   {
@@ -286,6 +367,19 @@ export const METRIC_CONFIG = [
       { color: 'rgba(241,196,15,0.82)', label: '0.15 – 0.35  —  Good' },
       { color: 'rgba(230,126,34,0.82)', label: '0.35 – 0.6   —  Moderate' },
       { color: 'rgba(192,57,43,0.82)',  label: '> 0.6 {unit}   —  Poor' },
+    ],
+    windColorFn: (v) => {
+      if (v == null) return null;
+      if (v < 0.7) return 'rgba(39,174,96,0.82)';
+      if (v < 1.5) return 'rgba(241,196,15,0.82)';
+      if (v < 2.8) return 'rgba(230,126,34,0.82)';
+      return 'rgba(192,57,43,0.82)';
+    },
+    windLegend: [
+      { color: 'rgba(39,174,96,0.82)',  label: '< 0.7 {unit}  —  Excellent' },
+      { color: 'rgba(241,196,15,0.82)', label: '0.7 – 1.5  —  Good' },
+      { color: 'rgba(230,126,34,0.82)', label: '1.5 – 2.8  —  Moderate' },
+      { color: 'rgba(192,57,43,0.82)',  label: '> 2.8 {unit}  —  Poor' },
     ],
     legendGradient: null,
   },
@@ -378,3 +472,19 @@ export const METRIC_CONFIG = [
     legendGradient: null,
   },
 ];
+
+// ── Reading a metric's scale for a variable ───────────────────────────────────
+// Both fall back to the precipitation scale when a metric has no wind variant,
+// which is correct for the dimensionless ones: CSI, POD, FAR, SSR and
+// correlation are ratios, so their bands mean the same thing in any unit and
+// deliberately have no override.
+
+export const metricColorFn = (cfg, variable) => {
+  if (!cfg) return () => null;
+  return (variable === 'wind' && cfg.windColorFn) ? cfg.windColorFn : cfg.colorFn;
+};
+
+export const metricLegend = (cfg, variable) => {
+  if (!cfg) return [];
+  return ((variable === 'wind' && cfg.windLegend) ? cfg.windLegend : cfg.legend) ?? [];
+};

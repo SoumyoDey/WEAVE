@@ -12,7 +12,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 
 import { MetricPanel } from './MetricPanel';
-import { VALUE_UNITS } from '../constants';
+import { VALUE_UNITS, METRIC_CONFIG } from '../constants';
 
 const REGION = {
   type: 'rectangle',
@@ -119,15 +119,52 @@ describe('units follow the variable', () => {
     expect(wind).not.toContain(VALUE_UNITS.precipitation);
   });
 
-  it('says whose scale the quality bands are, in wind mode only', () => {
-    // The bands (< 0.2 Excellent … > 1.0 Poor) are mm/h judgements applied to
-    // m/s. Until someone sets wind bands, the panel has to say so.
+  it('uses a different set of band edges for wind than for precipitation', () => {
+    // This replaces a test that asserted the panel *warned* the bands were
+    // calibrated for precipitation. That warning was true when written and this
+    // change made it false, so the assertion went with it. Asserting the
+    // invariant instead — the two variables get genuinely different edges —
+    // survives a re-calibration of either scale, where asserting the sentence
+    // would have to be rewritten by the same change that breaks it.
     const spatialData = { metric: 'mae', points: [{ lat: 36, lon: -75, value: 1 }] };
     const w = setup({ selectedVariable: 'wind', spatialData });
-    expect(w.container.textContent).toMatch(/calibrated for precipitation, not for wind/);
+    const wind = w.container.textContent;
     w.unmount();
     const p = setup({ selectedVariable: 'precipitation', spatialData });
-    expect(p.container.textContent).not.toMatch(/calibrated for precipitation/);
+    const precip = p.container.textContent;
+    p.unmount();
+
+    // Both label the same four verdicts...
+    for (const verdict of ['Excellent', 'Good', 'Moderate', 'Poor']) {
+      expect(wind).toContain(verdict);
+      expect(precip).toContain(verdict);
+    }
+    // ...but the numbers differ, and each quotes its own unit.
+    expect(wind).toContain('1.0 – 2.0');
+    expect(precip).toContain('0.2 – 0.5');
+    expect(wind).not.toContain('0.2 – 0.5');
+    expect(wind).toContain(VALUE_UNITS.wind);
+    expect(precip).toContain(VALUE_UNITS.precipitation);
+    // The old warning is not merely absent in one mode — it is gone, because a
+    // wind band edge is no longer a precipitation judgement.
+    expect(wind).not.toMatch(/calibrated for precipitation/);
+  });
+
+  it('still warns for a unitful metric that has no wind bands of its own', () => {
+    // The fallback path. If a future unit-sensitive metric arrives without a
+    // wind scale, the panel must go back to naming whose scale it is rather
+    // than silently presenting mm/h verdicts for m/s.
+    const cfg = METRIC_CONFIG.find(m => m.key === 'mae');
+    const saved = cfg.windLegend;
+    try {
+      delete cfg.windLegend;
+      const spatialData = { metric: 'mae', points: [{ lat: 36, lon: -75, value: 1 }] };
+      const w = setup({ selectedVariable: 'wind', spatialData });
+      expect(w.container.textContent).toMatch(/calibrated for precipitation, not for wind/);
+      w.unmount();
+    } finally {
+      cfg.windLegend = saved;
+    }
   });
 
   it('shows the threshold in its own unit, with the rate it becomes', () => {

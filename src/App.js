@@ -134,6 +134,11 @@ function App() {
   const suppressMapClickRef   = useRef(false);
   const spatialDataRef        = useRef(null);
   const metricTypeRef         = useRef('ssr');
+  // The metric overlay's colour bands depend on the variable's unit, and the
+  // pan/zoom redraw below reads through refs rather than closing over state.
+  // Without this mirror that redraw would fall back to the precipitation scale
+  // and recolour a wind map on the first drag.
+  const selectedVariableRef   = useRef('precipitation');
   const isDraggingPanelRef    = useRef(false);
   const dragStartRef          = useRef({ mouseX: 0, mouseY: 0, panelX: 0, panelY: 0 });
   const uncertaintyModeRef      = useRef(null);
@@ -155,6 +160,7 @@ function App() {
   useEffect(() => { selectionModeRef.current = selectionMode; }, [selectionMode]);
   useEffect(() => { spatialDataRef.current   = spatialData;   }, [spatialData]);
   useEffect(() => { metricTypeRef.current    = metricType;    }, [metricType]);
+  useEffect(() => { selectedVariableRef.current = selectedVariable; }, [selectedVariable]);
   useEffect(() => { showWindLinesRef.current = showWindLines; }, [showWindLines]);
   useEffect(() => {
     uncertaintyModeRef.current = uncertaintyMode;
@@ -435,7 +441,7 @@ function App() {
         pts = pts.filter(p => pointInPolygon(p.lat, p.lon, selectedRegion.polygon));
       data = { ...data, points: pts };
       setSpatialData(data);
-      renderMetricCanvas(mapInstanceRef.current, pts, metricType, METRIC_CONFIG);
+      renderMetricCanvas(mapInstanceRef.current, pts, metricType, METRIC_CONFIG, selectedVariable);
     } catch (err) {
       console.error('Spatial metric error:', err);
     }
@@ -581,7 +587,8 @@ function App() {
     if (!map) return;
     const redraw = () => {
       if (spatialDataRef.current?.points)
-        renderMetricCanvas(map, spatialDataRef.current.points, metricTypeRef.current, METRIC_CONFIG);
+        renderMetricCanvas(map, spatialDataRef.current.points, metricTypeRef.current,
+                           METRIC_CONFIG, selectedVariableRef.current);
     };
     map.on('moveend', redraw); map.on('zoomend', redraw);
     return () => { map.off('moveend', redraw); map.off('zoomend', redraw); };

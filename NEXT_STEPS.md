@@ -106,9 +106,10 @@ In priority order. Everything here is unstarted; nothing is half-done.
    column. One trap was removed: `Timeline.jsx` no longer hard-codes the
    initialisation date.
 
-### Four open items with no owner
+### Open items with no owner
 
-The first two are old; the last two came out of phase 6.
+Three still open; the fourth is struck through, fixed 2026-09-02. The first two
+are old, the last two came out of phase 6.
 
 - **`fbi` and `composite_confidence` are Analysis-only and nobody decided that.**
   Recorded as undecided in `categorical_metrics_endpoint`'s docstring rather than
@@ -124,12 +125,26 @@ The first two are old; the last two came out of phase 6.
   because its matrix asked what is *available*, not which estimator produced it —
   the same blind spot as `METRICS_AUDIT.md` finding 8. A cross-reference now makes
   it visible; deciding which one is right is the actual work.
-- **The metric colour bands are precipitation-calibrated and wind uses them.**
-  `< 0.2 — Excellent` is an mm/h judgement applied to m/s, and the backend norms
-  cap MAE/RMSE at 2, which a real wind MAE exceeds (2.18 m/s over 35–37 N,
-  77–74 W), so most of the map saturates to one colour. Setting wind bands needs
-  someone who can say what a good wind MAE is; the panel says whose scale it is
-  in the meantime.
+- ~~**The metric colour bands are precipitation-calibrated and wind uses them.**~~
+  **Fixed 2026-09-02.** Measured first, per cell over the full domain and all
+  three models (4,883 cells per metric): the mm/h edges put **79% of MAE cells,
+  78% of RMSE and 86% of CRPS in "Poor"**, and the backend's `Normalize(0, 2)`
+  clipped **45.5%** of cells at the top colour, so the PNG showed no structure
+  where the variation was. Wind now has its own edges — MAE `1.0/2.0/3.5`, RMSE
+  `1.2/2.5/4.0`, CRPS `0.7/1.5/2.8`, bias `±0.75/±2.5`, and plot norms out to
+  5.0/5.5/4.0/±5.0 — giving no band under 19% and 6.8% clipping.
+
+  Two things to know before touching them. **They are absolute, not quantiles**:
+  exact quartiles were computed and deliberately rejected, because a quantile
+  band reads "worse than three quarters of this run" while the label says
+  "Poor", so every run would report 25% Poor cells however good it was. And the
+  numbers are anchored on the meteorology (~1 m/s good, 3.5+ poor), not on this
+  run — whose errors are on the high side, whose verification reaches only +23 h,
+  and whose domain is mostly ocean. Re-deriving the edges from another run would
+  be re-calibrating to its difficulty. `WIND_BAND_BASIS` in `src/constants.js`
+  carries the measurement; `WIND_PLOT_STYLE_OVERRIDES` in `flask_api.py` is the
+  server-rendered half. Dimensionless metrics (CSI, POD, FAR, SSR, correlation)
+  deliberately have no override and a test pins that they fall back.
 
 ### Traps
 

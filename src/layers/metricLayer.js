@@ -1,11 +1,14 @@
+import { metricColorFn } from '../constants';
+
 /**
  * Renders the spatial-metric colour overlay on the Leaflet map container.
  * @param {L.Map}   map
  * @param {Array}   points     - [{ lat, lon, value }]
  * @param {string}  metricKey  - key into METRIC_CONFIG
  * @param {Array}   metricConfig - the METRIC_CONFIG array
+ * @param {string}  variable   - 'precipitation' | 'wind'; selects the band scale
  */
-export const renderMetricCanvas = (map, points, metricKey, metricConfig) => {
+export const renderMetricCanvas = (map, points, metricKey, metricConfig, variable) => {
   if (!map) return;
   const container = map.getContainer();
   let canvas = container.querySelector('#metric-overlay-canvas');
@@ -38,7 +41,10 @@ export const renderMetricCanvas = (map, points, metricKey, metricConfig) => {
   const tileH = Math.max(3, Math.abs(p2.y - p1.y));
 
   const metricCfg = metricConfig.find(m => m.key === metricKey);
-  const colorFn   = metricCfg ? metricCfg.colorFn : () => null;
+  // The bands for an error magnitude depend on the unit, so the overlay has to
+  // know which variable it is drawing. Without `variable` this fell back to the
+  // precipitation scale and painted a wind map almost entirely one colour.
+  const colorFn   = metricColorFn(metricCfg, variable);
 
   for (const pt of points) {
     const color = colorFn(pt.value);
