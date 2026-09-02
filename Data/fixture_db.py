@@ -349,6 +349,18 @@ def stored_precip_std(model, hour, spread=PRECIP_SPREAD):
     return spread
 
 
+def _with_run(rows):
+    """Splice the fixture's single `init_time` in after (model, variable).
+
+    The generators below describe a *field*, not a run. The regridded forecast
+    tables gained `init_time NOT NULL` in `migrate_init_time.py`, and the fixture
+    holds exactly one run, so stamping it in one place here beats threading a
+    constant through four generators — and means a second fixture run would be
+    added by changing this function rather than all of them.
+    """
+    return [(model, variable, INIT_TIME, *rest) for model, variable, *rest in rows]
+
+
 def _rows_precip_ens(model):
     for hour in PRECIP_HOURS[model]:
         for lat in LATS:
@@ -527,17 +539,18 @@ def seed(conn):
             rows = list(_rows_precip_ens(model)) + list(_rows_wind_ens(model))
             execute_values(cur, """
                 INSERT INTO regridded_forecast_ens
-                    (model_name, variable_name, forecast_hour, latitude, longitude,
+                    (model_name, variable_name, init_time, forecast_hour,
+                     latitude, longitude,
                      mean_value, std_dev, n_members, resolution) VALUES %s
-            """, rows)
+            """, _with_run(rows))
             ens += len(rows)
 
             rows = list(_rows_precip_member(model)) + list(_rows_wind_member(model))
             execute_values(cur, """
                 INSERT INTO regridded_forecast_member
-                    (model_name, variable_name, forecast_hour, ensemble_member,
-                     latitude, longitude, value) VALUES %s
-            """, rows)
+                    (model_name, variable_name, init_time, forecast_hour,
+                     ensemble_member, latitude, longitude, value) VALUES %s
+            """, _with_run(rows))
             mem += len(rows)
 
         execute_values(cur, """

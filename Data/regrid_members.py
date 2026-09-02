@@ -83,21 +83,23 @@ TARGET_RESOLUTION = 0.5
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS regridded_forecast_member (
-    model_name      TEXT    NOT NULL,
-    variable_name   TEXT    NOT NULL,
-    forecast_hour   INTEGER NOT NULL,
-    ensemble_member INTEGER NOT NULL,
-    latitude        REAL    NOT NULL,
-    longitude       REAL    NOT NULL,
-    value           REAL    NOT NULL
+    model_name      TEXT      NOT NULL,
+    variable_name   TEXT      NOT NULL,
+    init_time       TIMESTAMP NOT NULL,
+    forecast_hour   INTEGER   NOT NULL,
+    ensemble_member INTEGER   NOT NULL,
+    latitude        REAL      NOT NULL,
+    longitude       REAL      NOT NULL,
+    value           REAL      NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS regridded_forecast_ens (
-    model_name      TEXT    NOT NULL,
-    variable_name   TEXT    NOT NULL,
-    forecast_hour   INTEGER NOT NULL,
-    latitude        REAL    NOT NULL,
-    longitude       REAL    NOT NULL,
+    model_name      TEXT      NOT NULL,
+    variable_name   TEXT      NOT NULL,
+    init_time       TIMESTAMP NOT NULL,
+    forecast_hour   INTEGER   NOT NULL,
+    latitude        REAL      NOT NULL,
+    longitude       REAL      NOT NULL,
     mean_value      REAL,
     std_dev         REAL,
     n_members       INTEGER,
@@ -114,6 +116,10 @@ CREATE INDEX IF NOT EXISTS idx_rfe_lookup
     ON regridded_forecast_ens(model_name, variable_name, forecast_hour, latitude, longitude);
 CREATE INDEX IF NOT EXISTS idx_rfe_cell
     ON regridded_forecast_ens(latitude, longitude);
+CREATE INDEX IF NOT EXISTS idx_rfm_run
+    ON regridded_forecast_member(model_name, variable_name, init_time, forecast_hour, latitude, longitude);
+CREATE INDEX IF NOT EXISTS idx_rfe_run
+    ON regridded_forecast_ens(model_name, variable_name, init_time, forecast_hour, latitude, longitude);
 """
 
 
@@ -192,6 +198,37 @@ def verify_grid(cursor, tgt_lats, tgt_lons):
                   f"all on the grid")
 
 
+def run_init_time(cursor, model):
+    """The initialisation time this model's `forecast_data` belongs to.
+
+    Written into every regridded row so the output carries its run identity.
+    Before `migrate_init_time.py` the regridded tables had no such column and
+    the API resolved "the latest run" at query time — which is correct with one
+    run loaded and silently wrong with two.
+
+    Fails rather than defaulting when a model has more than one run, because the
+    native rows this reads are keyed by `run_id` and picking one of several here
+    would attribute a regrid to the wrong initialisation.
+    """
+    cursor.execute("""
+        SELECT DISTINCT fr.initialization_time
+        FROM forecast_data fd
+        JOIN forecast_runs fr ON fr.run_id = fd.run_id
+        JOIN models m         ON m.model_id = fr.model_id
+        WHERE m.model_name = %s
+    """, (model,))
+    times = [r[0] for r in cursor.fetchall()]
+    if not times:
+        raise SystemExit(f"{model}: no forecast_data, so no run to attribute a "
+                         f"regrid to")
+    if len(times) > 1:
+        raise SystemExit(
+            f"{model}: forecast_data spans {len(times)} initialisation times "
+            f"({sorted(str(t) for t in times)}). Regrid one run at a time — pass "
+            f"the run explicitly rather than letting this guess.")
+    return times[0]
+
+
 def fetch_hour(cursor, model, variable, hour):
     """{member: {(lat, lon): value}} for one model/variable/forecast hour."""
     cursor.execute("""
@@ -258,6 +295,9 @@ def regrid(conn, model, variable, hours, tgt_lats, tgt_lons, verify=False):
     verify_stats = []
 
     with conn.cursor() as cur:
+        # Resolved once per model/variable and written into every row, so the
+        # output says which run it came from instead of leaving the API to guess.
+        init_time = run_init_time(cur, model)
         for hour in hours:
             by_member = fetch_hour(cur, model, variable, hour)
             if not by_member:
@@ -308,19 +348,21 @@ def regrid(conn, model, variable, hours, tgt_lats, tgt_lons, verify=False):
                     for k, m in enumerate(members):
                         value = stack[k, i, j]
                         if not np.isnan(value):
-                            member_rows.append((model, variable, hour, m,
+                            member_rows.append((model, variable, init_time, hour, m,
                                                 float(lat), float(lon), float(value)))
-                    ens_rows.append((model, variable, hour, float(lat), float(lon),
+                    ens_rows.append((model, variable, init_time, hour,
+                                     float(lat), float(lon),
                                      float(mean[i, j]), float(std[i, j]),
                                      len(members), '0.5deg'))
 
             total_member_rows += copy_rows(
                 conn, 'regridded_forecast_member',
-                ('model_name', 'variable_name', 'forecast_hour', 'ensemble_member',
-                 'latitude', 'longitude', 'value'), member_rows)
+                ('model_name', 'variable_name', 'init_time', 'forecast_hour',
+                 'ensemble_member', 'latitude', 'longitude', 'value'), member_rows)
             total_ens_rows += copy_rows(
                 conn, 'regridded_forecast_ens',
-                ('model_name', 'variable_name', 'forecast_hour', 'latitude', 'longitude',
+                ('model_name', 'variable_name', 'init_time', 'forecast_hour',
+                 'latitude', 'longitude',
                  'mean_value', 'std_dev', 'n_members', 'resolution'), ens_rows)
             conn.commit()
             print(f"    {model} {variable} fh={hour:3d}: {len(members):2d} members, "
