@@ -23,12 +23,13 @@ in this repository.
   `regridded_observation` is untouched pending a decision.
 - **2026-08-27 — the target grid is a constant**, so `regrid_members.py` can run
   on a fresh database for the first time (§2).
-- **2026-08-27 — `regridded_forecast` was renamed to
-  `regridded_forecast_deprecated`** on `weave_weather`. `main` was broken by this
-  and the merge fixed it; **`WEAVE_v2` and `WEAVE_presentation` are still broken**
-  and no version of them is not. If one of those errors about a missing relation,
-  that is this, not a bug. And restart any long-running server after a schema
-  change — see the trap in §1, which cost an hour.
+- **2026-09-02 — `regridded_forecast` is DROPPED** from `weave_weather` (§2),
+  after six days renamed. A gzipped dump is the only remaining copy and it lives
+  outside the repo. **`WEAVE_v2` and `WEAVE_presentation` can no longer serve
+  from this database, permanently** — they query the old name and no version of
+  them does not. If one of those errors about a missing relation, that is this,
+  not a bug. And restart any long-running server after a schema change — see the
+  trap in §1, which cost an hour.
 
 ## Where things stand
 
@@ -107,14 +108,10 @@ In priority order. Nothing here is half-done.
 1. **Nothing is blocked on a person any more.** PR #2 is merged (§1). What is
    left is either work, a decision that is yours, or blocked on data that is not
    in this repository — and each says which below.
-2. **Item 2, drop `regridded_forecast_deprecated`** (245 MB). `main` no longer
-   reads it, as of the merge, so the remaining consumers are the `WEAVE_v2` and
-   `WEAVE_presentation` app copies — both pointed at this same `weave_weather`
-   database, and both already failing against it since the rename. Dropping is
-   safe for this repo and final for those two, so it is a decision about whether
-   they are still wanted rather than a cleanup. See §2, which twice claimed
-   "nothing reads it" and was twice wrong. `observation_data` is *also* unread by
-   the API, but it is raw ingested data no script here can regenerate — leave it.
+2. ~~**Item 2, drop `regridded_forecast`**~~ **done 2026-09-02** (§2). 245 MB
+   reclaimed; a 19 MB dump outside the repo is the only copy left.
+   `observation_data` is *also* unread by the API, but it is raw ingested data no
+   script here can regenerate — leave that one alone.
 3. **The `observation_data` ingest — the largest real piece of work left**, and
    the only thing now standing between a fresh clone and a working *verified*
    deployment. Nothing in this repository writes that table; the native point
@@ -245,37 +242,46 @@ change.** A stale webpack cache did the same thing to the dev server after a
 branch checkout swapped 78 files under it — `rm -rf node_modules/.cache`. In both
 cases the code was fine and only a process disagreed.
 
-## 2. Drop the superseded table — RENAMED 2026-08-27, drop still pending
+## 2. Drop the superseded table — DROPPED 2026-09-02
 
-245 MB, superseded by `regridded_forecast_ens`, which carries a true ensemble
-spread derived from `regridded_forecast_member`. It was kept only so the old and
-new numbers could be compared, and that comparison is done and written up.
+245 MB and 1,499,977 rows, superseded by `regridded_forecast_ens`, which carries
+a true ensemble spread derived from `regridded_forecast_member`. It was kept only
+so the old and new numbers could be compared, and that comparison is done and
+written up.
 
-> **State: renamed, not dropped.** On 2026-08-27 the table on `weave_weather`
-> became `regridded_forecast_deprecated` — 245 MB and all 1,499,977 rows intact,
-> reversible in one statement:
+> **State: dropped.** Sequence, over six days: its last reader in this repo
+> became a constant (2026-08-27), `schema.sql` stopped creating it (2026-08-27),
+> it was renamed to `regridded_forecast_deprecated` rather than dropped
+> (2026-08-27), the rename sat for six days to flush out a reader no search could
+> reach, PR #2 merged so `main` stopped reading it (2026-09-02), and then
+> `DROP TABLE` (2026-09-02).
 >
-> ```sql
-> ALTER TABLE regridded_forecast_deprecated RENAME TO regridded_forecast;
+> **A dump was taken first**, because unlike `_ens` and `_member` this table had
+> **no writer anywhere in the repository** — it was produced off-repo, so nothing
+> here could rebuild it. 19 MB gzipped, all 1,499,977 rows plus the DDL:
+>
+> ```
+> ~/Documents/AFW/regridded_forecast_deprecated_2026-09-02.sql.gz
 > ```
 >
-> **What this means in practice: `main`, `WEAVE_v2` and `WEAVE_presentation` will
-> now fail against this database** until that rename-back is run. That was the
-> accepted trade — the point of renaming rather than dropping is that a
-> consumer nobody remembered fails loudly and recoverably. If something breaks
-> and you want it working again immediately, run the statement above; the data
-> never left.
+> That file is the only copy. It is outside the repo deliberately — 19 MB of
+> superseded data does not belong in git — which also means nothing backs *it*
+> up. If the old numbers ever matter again, restore with
+> `gunzip -c <file> | psql -d weave_weather`.
 >
-> Checked before renaming: two Flask servers were live on `weave_weather`, both
-> from `WEAVE_v3` (pids 9244 and 45818), so neither reads this table. Verified
-> after: `/api/compare/skill` and `/api/categorical-metrics` returned
-> byte-identical responses to the pre-rename baseline, `/api/health` stayed
-> healthy, 615 tests passed, and `regrid_members.py --verify-grid` degraded to
-> `regridded_forecast: absent, skipped` as designed.
+> **`WEAVE_v2` and `WEAVE_presentation` can no longer serve from this database,
+> permanently.** They query the old name, no version of them does not, and they
+> were already failing since the rename. That was the accepted trade, made
+> knowingly.
 >
-> **The `DROP` is still pending**, and still wants PR #2 merged plus a decision
-> about the two older app copies. Give the rename time to flush out an unknown
-> reader first — that is what it is for.
+> Verified after dropping: `/api/health` healthy with convention `ok`,
+> `compare/skill` still returning AIFS 0.0918 / GEFS 1.9413 / UKMO 0.0831,
+> `/api/runs` answering, `regrid_members.py --verify-grid` degrading to
+> `regridded_forecast: absent, skipped` as designed, and 649 tests passing.
+>
+> The consumer table below is kept as the record of why this was never a
+> one-line cleanup — and of this section having twice claimed "nothing reads it"
+> and been wrong twice.
 >
 > The consumers that made this more than a cleanup, all pointed at the same
 > `weave_weather` database (checked in each one's `.env`):

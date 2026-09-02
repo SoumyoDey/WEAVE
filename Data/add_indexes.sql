@@ -14,9 +14,10 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_observation_data_time_latlon
 
 -- The two idx_rgf_* indexes on `regridded_forecast` were removed from this file
 -- along with the table's CREATE (see schema.sql). An existing database still
--- holds table and indexes under the name `regridded_forecast_deprecated`, as of
--- the 2026-08-27 rename — the indexes came along with it, so a rename back
--- restores a fully indexed table and this file needs no part in that.
+-- held both under the name `regridded_forecast_deprecated` after the 2026-08-27
+-- rename, and both went with the table when it was dropped on 2026-09-02. The
+-- dump referenced in schema.sql carries the indexes too, so a restore needs no
+-- part of this file.
 -- The replacement tables are indexed by `regrid_members.py`'s own INDEXES block,
 -- which runs every time the script does, so nothing is needed for them here.
 
