@@ -1,3 +1,5 @@
+import { withRun, whenRunReady } from './run';
+
 const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
 /**
@@ -7,17 +9,18 @@ const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
  * @returns {Promise<Object>} e.g. { AIFS: [{hour, mean, std}, ...], GEFS: [...] }
  */
 export async function fetchComparisonTimeseries({ models, lat, lon, hourMin, hourMax, variable }) {
+  await whenRunReady();
   const response = await fetch(`${API_BASE}/compare/timeseries`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+    body: JSON.stringify(withRun({
       models,
       lat,
       lon,
       hour_min: hourMin,
       hour_max: hourMax,
       variable,
-    }),
+    })),
   });
 
   if (!response.ok) {
@@ -36,17 +39,18 @@ export async function fetchComparisonTimeseries({ models, lat, lon, hourMin, hou
  * @returns {Promise<{ models: Object, obs_hours: number[], obs_warning: string }>}
  */
 export async function fetchComparisonSkill({ models, lat, lon, hourMin, hourMax, variable }) {
+  await whenRunReady();
   const response = await fetch(`${API_BASE}/compare/skill`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+    body: JSON.stringify(withRun({
       models,
       lat,
       lon,
       hour_min: hourMin,
       hour_max: hourMax,
       variable,
-    }),
+    })),
   });
 
   if (!response.ok) {
@@ -66,6 +70,7 @@ export async function fetchComparisonSkill({ models, lat, lon, hourMin, hourMax,
  *   models is e.g. { AIFS: [{hour, csi, pod, far, fss, n_pts}], ... }
  */
 export async function fetchComparisonCategorical({ models, lat, lon, hourMin, hourMax, variable, threshold, fssWindow, boxCells }) {
+  await whenRunReady();
   const body = {
     models,
     lat,
@@ -85,7 +90,7 @@ export async function fetchComparisonCategorical({ models, lat, lon, hourMin, ho
   const response = await fetch(`${API_BASE}/compare/categorical`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(withRun(body)),
   });
 
   if (!response.ok) {
@@ -107,6 +112,7 @@ export async function fetchComparisonCategorical({ models, lat, lon, hourMin, ho
  *   models is e.g. { AIFS: { mae: 2.1, bias: -0.3, ... }, GEFS: {...} }
  */
 export async function fetchComparisonRegionMetrics({ models, variable, bounds, hourMin, hourMax, threshold, metrics, fssWindow }) {
+  await whenRunReady();
   const body = {
     models,
     variable,
@@ -129,7 +135,7 @@ export async function fetchComparisonRegionMetrics({ models, variable, bounds, h
   const response = await fetch(`${API_BASE}/compare/region-metrics`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(withRun(body)),
   });
 
   if (!response.ok) {
@@ -151,6 +157,7 @@ export async function fetchComparisonRegionMetrics({ models, variable, bounds, h
  *   `error` (with n_common 0) means the two models share no grid cells.
  */
 export async function fetchComparisonSpatialDiff({ modelA, modelB, metric, variable, bounds, hourMin, hourMax, threshold }) {
+  await whenRunReady();
   const body = {
     model_a: modelA,
     model_b: modelB,
@@ -171,7 +178,7 @@ export async function fetchComparisonSpatialDiff({ modelA, modelB, metric, varia
   const response = await fetch(`${API_BASE}/compare/spatial-diff`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(withRun(body)),
   });
 
   const data = await response.json().catch(() => ({}));
@@ -189,10 +196,11 @@ export async function fetchComparisonSpatialDiff({ modelA, modelB, metric, varia
  * @returns {Promise<{ image: string, hour: number, n_models: number, n_points: number }>}
  */
 export async function fetchSpatialAgreement({ models, minLat, maxLat, minLon, maxLon, hour, variable }) {
+  await whenRunReady();
   const response = await fetch(`${API_BASE}/compare/spatial-agreement`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+    body: JSON.stringify(withRun({
       models,
       min_lat: minLat,
       max_lat: maxLat,
@@ -200,7 +208,7 @@ export async function fetchSpatialAgreement({ models, minLat, maxLat, minLon, ma
       max_lon: maxLon,
       hour,
       variable,
-    }),
+    })),
   });
 
   if (!response.ok) {

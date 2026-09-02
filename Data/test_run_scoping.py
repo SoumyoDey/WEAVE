@@ -16,6 +16,7 @@ predicate.
 """
 import inspect
 import re
+from datetime import datetime
 
 import pytest
 
@@ -111,25 +112,116 @@ class TestRunPairsSql:
         assert resolved == {'AIFS': 'T1'}
         assert params == [['AIFS'], ['T1']]
 
-    def test_the_model_list_is_never_interpolated_into_sql(self):
+    def test_the_model_list_is_never_interpolated_into_sql(self, monkeypatch):
         # Models reach here as allowlisted identifiers, but the predicate should
-        # not have to rely on that a second time.
-        pred, _params, _r = api._run_pairs_sql.__wrapped__(None, []) \
-            if hasattr(api._run_pairs_sql, '__wrapped__') else (None, None, None)
-        # The predicate is a constant string with placeholders only.
-        src = inspect.getsource(api._run_pairs_sql)
-        assert 'unnest(%s::text[], %s::timestamp[])' in src
+        # not have to rely on that a second time. A name that would be hostile if
+        # interpolated must come back as a bound parameter, not as SQL.
+        monkeypatch.setattr(api, '_resolve_init_time',
+                            lambda cur, model, requested: 'T1')
+        hostile = "AIFS'; DROP TABLE regridded_forecast_ens; --"
+        pred, params, _r = api._run_pairs_sql(None, [hostile])
+        assert hostile not in pred
+        assert params[0] == [hostile]
+        assert 'unnest(%s::text[], %s::timestamp[])' in pred
+
+
+class RunsCursor:
+    """A cursor that reports a fixed set of runs for any model."""
+
+    def __init__(self, runs):
+        self._runs = runs
+        self._rows = []
+
+    def execute(self, sql, params=None):
+        if 'SELECT 1 FROM forecast_runs' in sql:          # existence check
+            wanted = params[1]
+            self._rows = [{'x': 1}] if wanted in self._runs else []
+        else:                                             # enumerate runs
+            self._rows = [{'initialization_time': t}
+                          for t in sorted(self._runs, reverse=True)]
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return self._rows
 
 
 class TestResolveInitTime:
     def test_a_malformed_timestamp_is_rejected(self):
-        with pytest.raises(ValueError, match='not an ISO timestamp'):
+        with pytest.raises(api.RunSelectionError, match='not an ISO timestamp'):
             api._resolve_init_time(None, 'AIFS', 'not-a-date')
 
-    def test_it_still_falls_back_to_the_latest_run_for_now(self, monkeypatch):
-        # Documented, temporary, and the reason the frontend keeps working while
-        # the schema moves ahead of it. DATA_EXPANSION_DESIGN phase 2 says this
-        # becomes a 400; this test is what will have to change when it does.
-        monkeypatch.setattr(api, '_latest_init_time', lambda cur, model: 'LATEST')
-        assert api._resolve_init_time(None, 'AIFS', None) == 'LATEST'
-        assert api._resolve_init_time(None, 'AIFS', '') == 'LATEST'
+    def test_a_run_that_is_not_loaded_is_rejected(self):
+        cur = RunsCursor([datetime(2025, 9, 8)])
+        with pytest.raises(api.RunSelectionError, match='no AIFS run at init_time'):
+            api._resolve_init_time(cur, 'AIFS', '2025-09-09T00:00:00')
+
+    def test_a_loaded_run_is_honoured_exactly(self):
+        cur = RunsCursor([datetime(2025, 9, 8)])
+        assert api._resolve_init_time(
+            cur, 'AIFS', '2025-09-08T00:00:00') == datetime(2025, 9, 8)
+
+    def test_one_loaded_run_needs_no_parameter(self):
+        # Not a guess: with a single run there is nothing to pick between, so
+        # defaulting states a fact. This is the deliberate departure from
+        # DATA_EXPANSION_DESIGN phase 2's unconditional requirement.
+        cur = RunsCursor([datetime(2025, 9, 8)])
+        assert api._resolve_init_time(cur, 'AIFS', None) == datetime(2025, 9, 8)
+
+    def test_several_loaded_runs_make_the_parameter_mandatory(self):
+        # The point of the whole migration. The moment ambiguity exists the API
+        # refuses rather than silently choosing the newest.
+        cur = RunsCursor([datetime(2025, 9, 8), datetime(2025, 9, 9)])
+        with pytest.raises(api.RunSelectionError, match='2 loaded runs'):
+            api._resolve_init_time(cur, 'AIFS', None)
+
+    def test_the_refusal_names_where_to_look(self):
+        cur = RunsCursor([datetime(2025, 9, 8), datetime(2025, 9, 9)])
+        with pytest.raises(api.RunSelectionError) as e:
+            api._resolve_init_time(cur, 'AIFS', None)
+        # A caller that gets this has to be able to act on it.
+        assert 'init_time is required' in str(e.value)
+        assert '2025-09-09' in str(e.value)
+
+    def test_a_model_with_no_runs_resolves_to_none(self):
+        # Endpoints already handle "no data for this model"; raising here would
+        # turn an empty result into a 400.
+        assert api._resolve_init_time(RunsCursor([]), 'AIFS', None) is None
+
+
+class TestTheHttpContract:
+    """What a caller sees. Two of these were 200-with-data and 500 until the
+    end-to-end check ran, so they are pinned rather than assumed."""
+
+    BOX = 'min_lat=35&max_lat=37&min_lon=-77&max_lon=-74'
+    LOADED = '2025-09-08T00:00:00'
+
+    @pytest.fixture
+    def client(self):
+        api.app.config['TESTING'] = True
+        return api.app.test_client()
+
+    def _spatial(self, client, init_time=None):
+        q = f'/api/spatial-metric?metric=mae&model=AIFS&variable=wind&{self.BOX}'
+        if init_time is not None:
+            q += f'&init_time={init_time}'
+        return client.get(q)
+
+    def test_a_malformed_init_time_is_a_400_not_a_500(self, client):
+        # The endpoints wrap their bodies in `except Exception -> 500`, which
+        # swallowed this into a server error. A bad parameter is the caller's to
+        # fix, and a 500 tells them nothing.
+        r = self._spatial(client, 'yesterday')
+        assert r.status_code == 400
+        assert 'not an ISO timestamp' in r.get_json()['error']
+
+    def test_the_error_says_where_to_find_valid_values(self, client):
+        r = self._spatial(client, 'yesterday')
+        assert '/api/runs' in r.get_json()['hint']
+
+    def test_a_malformed_init_time_on_a_post_is_also_400(self, client):
+        r = client.post('/api/compare/skill', json={
+            'models': ['AIFS'], 'lat': 36.0, 'lon': -75.5,
+            'variable': 'precipitation', 'init_time': 'yesterday'})
+        assert r.status_code == 400

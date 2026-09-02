@@ -190,9 +190,13 @@ class TestCachingShortCircuits:
             assert api.get_model_run_id(cur, "AIFS") == 1
             assert len(cur.executed) == n, "the cached run id was re-queried"
 
-            assert api._latest_init_time(cur, "AIFS") == INIT
+            # _latest_init_time is gone: every query path resolves through
+            # _resolve_init_time now, which caches on (model, requested) so a
+            # request that names a run and one that does not cannot share an
+            # entry. Passing requested=None exercises the no-parameter path.
+            assert api._resolve_init_time(cur, "AIFS", None) == INIT
             n = len(cur.executed)
-            assert api._latest_init_time(cur, "AIFS") == INIT
+            assert api._resolve_init_time(cur, "AIFS", None) == INIT
             assert len(cur.executed) == n, "the cached init time was re-queried"
 
 
