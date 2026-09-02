@@ -9,7 +9,7 @@ import os
 import json
 import hashlib
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 import scipy.stats
 
 # ── Load .env (if present) before anything else ───────────────────────────────
@@ -387,6 +387,97 @@ def _latest_init_time(cursor, model_name):
     return init_time
 
 
+def available_runs(cursor):
+    """[(model, variable, init_time, ...)] from the run registry, newest first.
+
+    Reads `forecast_run_registry`, which `migrate_init_time.py` populates at load
+    time. Falls back to a DISTINCT over the ens table when the registry is absent
+    so a database migrated only part-way still answers, rather than making
+    `/api/runs` the one endpoint that needs the newest schema.
+    """
+    cursor.execute("SELECT to_regclass('forecast_run_registry') IS NOT NULL AS ok")
+    if cursor.fetchone()['ok']:
+        cursor.execute("""
+            SELECT model_name, variable_name, init_time,
+                   n_members, hour_min, hour_max, export_divisor_h
+            FROM forecast_run_registry
+            ORDER BY init_time DESC, model_name, variable_name
+        """)
+        return [dict(r) for r in cursor.fetchall()]
+    cursor.execute("""
+        SELECT model_name, variable_name, init_time,
+               MAX(n_members) AS n_members,
+               MIN(forecast_hour) AS hour_min, MAX(forecast_hour) AS hour_max,
+               NULL::real AS export_divisor_h
+        FROM regridded_forecast_ens
+        GROUP BY model_name, variable_name, init_time
+        ORDER BY init_time DESC, model_name, variable_name
+    """)
+    return [dict(r) for r in cursor.fetchall()]
+
+
+def _resolve_init_time(cursor, model_name, requested):
+    """The initialisation time a request is about, as a datetime.
+
+    `requested` comes from the caller (an ISO string, or None). When it is given
+    it is honoured exactly and validated against what is loaded, so a typo gets
+    a 400 rather than an empty map that reads as "no data here".
+
+    When it is absent this still falls back to the model's newest run, which is
+    what the API did unconditionally before `init_time` existed as a column. The
+    fallback is deliberately kept for now — the frontend does not send the
+    parameter yet, and breaking it in the same change as the schema would leave
+    nothing working in between. What has changed underneath is that the answer is
+    now *used as a filter* rather than only for valid-time arithmetic, so a
+    second run returns one run's rows instead of a blend of both.
+
+    DATA_EXPANSION_DESIGN.md phase 2 says to drop the fallback and return 400.
+    That is a one-line change here once the frontend sends the parameter, and it
+    should be made then: a default is how this becomes quietly wrong again.
+    """
+    if requested:
+        try:
+            wanted = (datetime.fromisoformat(str(requested).replace('Z', '+00:00'))
+                      .replace(tzinfo=None))
+        except ValueError:
+            raise ValueError(f"init_time is not an ISO timestamp: {requested!r}")
+        cursor.execute("""
+            SELECT 1 FROM forecast_runs fr
+            JOIN models m ON m.model_id = fr.model_id
+            WHERE m.model_name = %s AND fr.initialization_time = %s
+        """, (model_name, wanted))
+        if not cursor.fetchone():
+            raise ValueError(
+                f"no {model_name} run at init_time {wanted.isoformat()}")
+        return wanted
+    return _latest_init_time(cursor, model_name)
+
+
+def _run_pairs_sql(cursor, models, alias='u', requested=None):
+    """(predicate, params, resolved) restricting a multi-model query to one run each.
+
+    The comparison endpoints select `model_name = ANY(...)`, and models are not
+    required to share an initialisation time — so a single `init_time = %s` would
+    be wrong for all but one of them, and omitting the filter entirely lets a
+    model's rows be compared against another model's run. Both are the silent
+    mis-attribution this migration exists to remove.
+
+    Expressed as a tuple-membership test over two unnested arrays so it stays one
+    parameterised statement: no SQL is interpolated from the model list, which
+    reaches this as an allowlisted identifier but should not have to be trusted
+    twice.
+    """
+    resolved = {}
+    for m in models:
+        t = _resolve_init_time(cursor, m, requested)
+        if t is not None:
+            resolved[m] = t
+    predicate = (f" AND ({alias}.model_name, {alias}.init_time) IN "
+                 f"(SELECT * FROM unnest(%s::text[], %s::timestamp[]))")
+    params = [list(resolved.keys()), list(resolved.values())]
+    return predicate, params, resolved
+
+
 def _fcst_speed_sql(is_wind, base_cols):
     """SQL fragments to select forecast mean/std from regridded_forecast_ens (aliased
     `u`), deriving wind SPEED from the u/v component rows for wind.
@@ -411,6 +502,12 @@ def _fcst_speed_sql(is_wind, base_cols):
         from_clause = ("regridded_forecast_ens u "
                        "JOIN regridded_forecast_ens v "
                        "ON v.model_name = u.model_name AND v.forecast_hour = u.forecast_hour "
+                       # Same run on both sides. Without this the u/v pairing
+                       # would cross initialisations once a second run is loaded,
+                       # composing a wind speed from two different forecasts —
+                       # and the caller's own init_time filter on `u` would not
+                       # catch it, because it says nothing about `v`.
+                       "AND v.init_time = u.init_time "
                        "AND v.latitude = u.latitude AND v.longitude = u.longitude "
                        "AND v.variable_name = 'wind_v_10m'")
         return (select_cols, from_clause, "u.variable_name = 'wind_u_10m'",
@@ -617,9 +714,11 @@ def _member_cases_by_cell(cursor, model_name, variable, init_time,
                    u.value
             FROM regridded_forecast_member u
             WHERE u.model_name = %s AND u.variable_name = %s
+              AND u.init_time = %s
               AND u.latitude BETWEEN %s AND %s AND u.longitude BETWEEN %s AND %s
               {hour_pred}
-        """, (model_name, var_name, min_lat, max_lat, min_lon, max_lon, *hour_param))
+        """, (model_name, var_name, init_time,
+              min_lat, max_lat, min_lon, max_lon, *hour_param))
         return cursor.fetchall()
 
     # Cells are keyed at 2 dp, the same key the regridded pairs path uses — NOT a
@@ -828,12 +927,13 @@ def _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
         SELECT {_sel}
         FROM {_frm}
         WHERE u.model_name = %s AND {_varw}
+          AND u.init_time = %s
           AND u.forecast_hour BETWEEN %s AND %s
           AND u.latitude  BETWEEN %s AND %s
           AND u.longitude BETWEEN %s AND %s
           AND u.mean_value IS NOT NULL AND u.std_dev IS NOT NULL {_vnn}
         ORDER BY u.latitude, u.longitude, u.forecast_hour
-    """, (model_name, *(() if is_wind else (fcst_var,)),
+    """, (model_name, *(() if is_wind else (fcst_var,)), init_time_val,
           max(0, hour_min - lookback), hour_max, min_lat, max_lat, min_lon, max_lon))
     fcst_rows = cursor.fetchall()
     if not fcst_rows:
@@ -2166,6 +2266,56 @@ def get_variables():
         return_db_connection(conn)
 
 
+@app.route('/api/runs', methods=['GET'])
+def get_runs():
+    """What forecast data is actually loaded, per model, variable and run.
+
+    DATA_EXPANSION_DESIGN.md phase 2 asks for this so the UI can populate a run
+    selector from the data rather than a hard-coded list. It is also the honest
+    answer to "what do you have?", which nothing previously answered — a caller
+    had to infer the loaded run from a scoring endpoint's valid times.
+
+    `runs` is the distinct initialisation times, newest first, which is what a
+    selector needs; `entries` is the per-(model, variable) detail behind them.
+    """
+    conn   = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        entries = available_runs(cursor)
+        runs = []
+        for e in entries:
+            t = e['init_time'].isoformat()
+            if t not in runs:
+                runs.append(t)
+        by_run = {}
+        for e in entries:
+            t = e['init_time'].isoformat()
+            by_run.setdefault(t, {'init_time': t, 'models': {}, 'variables': []})
+            by_run[t]['models'].setdefault(e['model_name'], {
+                'n_members': e['n_members'],
+                'variables': [],
+            })
+            m = by_run[t]['models'][e['model_name']]
+            m['variables'].append({
+                'variable': e['variable_name'],
+                'hour_min': e['hour_min'],
+                'hour_max': e['hour_max'],
+                'export_divisor_h': e['export_divisor_h'],
+            })
+            if e['variable_name'] not in by_run[t]['variables']:
+                by_run[t]['variables'].append(e['variable_name'])
+        return jsonify({
+            'runs':    runs,
+            'latest':  runs[0] if runs else None,
+            'detail':  [by_run[t] for t in runs],
+            'entries': [{**e, 'init_time': e['init_time'].isoformat()}
+                        for e in entries],
+        })
+    finally:
+        cursor.close()
+        return_db_connection(conn)
+
+
 @app.route('/api/observation-coverage', methods=['GET'])
 def observation_coverage():
     """How far the observation record reaches, in lead-time terms.
@@ -2234,7 +2384,7 @@ def observation_coverage():
         return_db_connection(conn)
 
 
-def _check_export_convention(cursor, model_name='GEFS'):
+def _check_export_convention(cursor, model_name='GEFS', init_time=None):
     """Does the loaded data still match the export convention we assume?
 
     SCALED_EXPORT_DIVISOR_HOURS describes how the JSON export converted each
@@ -2248,18 +2398,30 @@ def _check_export_convention(cursor, model_name='GEFS'):
     declared = SCALED_EXPORT_DIVISOR_HOURS.get(model_name)
     result = {'model': model_name, 'declared_divisor_h': declared}
     try:
+        # Scoped to one run, because the export convention is a property of a
+        # run rather than of a model — which is why `forecast_run_registry`
+        # records `export_divisor_h` per (model, variable, init_time). Pooling
+        # ratios across two runs exported under different conventions would
+        # average them into a number matching neither, and the check would read
+        # `MISMATCH` (or worse, `ok`) for reasons nothing in the output explains.
+        #
+        # `init_time` arrives from the caller rather than being resolved here:
+        # this function takes a cursor and does one query, and giving it a second
+        # one would make it need a Flask request context for the resolver's cache.
         cursor.execute("""
             SELECT a.mean_value / b.mean_value
             FROM regridded_forecast_ens a
             JOIN regridded_forecast_ens b
               ON b.model_name = a.model_name AND b.variable_name = a.variable_name
+             AND b.init_time = a.init_time
              AND b.forecast_hour = a.forecast_hour - 3
              AND b.latitude = a.latitude AND b.longitude = a.longitude
             WHERE a.model_name = %s AND a.variable_name = 'precipitation'
+              AND a.init_time = %s
               AND a.forecast_hour %% 6 = 0 AND a.forecast_hour > 0
               AND a.mean_value > 0.01 AND b.mean_value > 0.01
             LIMIT 20000
-        """, (model_name,))
+        """, (model_name, init_time))
         ratios = [float(r[0]) for r in cursor.fetchall()]
     except Exception as e:                      # a missing table is not fatal here
         print(f"⚠️  export-convention check could not run: {e}")
@@ -2295,6 +2457,18 @@ def health_check():
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM forecast_data")
         count = cursor.fetchone()[0]
+        # This handler uses a plain tuple cursor, so the run is resolved
+        # positionally here rather than through `_latest_init_time`, which
+        # indexes its row by name. Getting that wrong is not loud: the broad
+        # `except` below would report the whole database as unhealthy over a
+        # KeyError in the convention check.
+        cursor.execute("""
+            SELECT MAX(fr.initialization_time)
+            FROM forecast_runs fr
+            JOIN models m ON m.model_id = fr.model_id
+            WHERE m.model_name = %s
+        """, ('GEFS',))
+        gefs_init = cursor.fetchone()[0]
         return jsonify({
             "status": "healthy",
             "database": "connected",
@@ -2302,7 +2476,8 @@ def health_check():
             # Whether the loaded data still matches what the metric layer assumes
             # about the export. Re-exporting without updating the constant would
             # otherwise correct twice, silently and invisibly.
-            "precip_export_convention": _check_export_convention(cursor),
+            "precip_export_convention": _check_export_convention(
+                cursor, init_time=gefs_init),
         })
     except Exception as e:
         # Log the detail server-side but don't leak the raw exception string
@@ -2374,16 +2549,18 @@ def compare_timeseries():
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
         _sel, _frm, _varw, _vnn = _fcst_speed_sql(is_wind, "u.model_name, u.forecast_hour")
+        _runw, _runp, _runs = _run_pairs_sql(cursor, models)
         cursor.execute(f"""
             SELECT {_sel}
             FROM {_frm}
             WHERE u.model_name = ANY(%s) AND {_varw}
+              {_runw}
               AND u.forecast_hour BETWEEN %s AND %s
               AND u.latitude  BETWEEN %s AND %s
               AND u.longitude BETWEEN %s AND %s
             ORDER BY u.model_name, u.forecast_hour
         """, (
-            models, *(() if is_wind else (var_name,)),
+            models, *(() if is_wind else (var_name,)), *_runp,
             max(0, hour_min - (0 if is_wind else max(
                 (_precip_lookback_hours(m) for m in models), default=0))),
             hour_max,
@@ -2493,11 +2670,13 @@ def compare_skill():
                 SELECT latitude, longitude
                 FROM regridded_forecast_ens
                 WHERE model_name = %s AND variable_name = %s
+                  AND init_time = %s
                   AND latitude  BETWEEN %s AND %s
                   AND longitude BETWEEN %s AND %s
                 ORDER BY POWER(latitude - %s, 2) + POWER(longitude - %s, 2)
                 LIMIT 1
-            """, (m, fcst_var, lat - 1.0, lat + 1.0, lon - 1.0, lon + 1.0, lat, lon))
+            """, (m, fcst_var, init_times[m],
+                  lat - 1.0, lat + 1.0, lon - 1.0, lon + 1.0, lat, lon))
             row = cursor.fetchone()
             if row:
                 cell_of[m] = (float(row['latitude']), float(row['longitude']))
@@ -2660,10 +2839,15 @@ def compare_spatial_agreement():
     conn   = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
+        # One run per model on both sides of the comparison. Agreement between
+        # models is only meaningful when they are the same forecast: pairing one
+        # model's rows with another model's initialisation would report
+        # disagreement that is really a difference in start time.
+        _runw, _runp, _runs = _run_pairs_sql(cursor, models)
         if is_wind:
             # Inter-model disagreement of forecast wind SPEED. Derive per-model
             # speed √(mean_u²+mean_v²) in a subquery, then aggregate across models.
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT latitude, longitude,
                        STDDEV(speed)              AS disagreement,
                        AVG(speed)                 AS avg_mean,
@@ -2674,9 +2858,11 @@ def compare_spatial_agreement():
                     FROM regridded_forecast_ens u
                     JOIN regridded_forecast_ens v
                       ON v.model_name = u.model_name AND v.forecast_hour = u.forecast_hour
+                     AND v.init_time = u.init_time
                      AND v.latitude = u.latitude AND v.longitude = u.longitude
                      AND v.variable_name = 'wind_v_10m'
                     WHERE u.model_name = ANY(%s) AND u.variable_name = 'wind_u_10m'
+                      {_runw}
                       AND u.forecast_hour = %s
                       AND u.latitude  BETWEEN %s AND %s
                       AND u.longitude BETWEEN %s AND %s
@@ -2685,25 +2871,26 @@ def compare_spatial_agreement():
                 GROUP BY latitude, longitude
                 HAVING COUNT(DISTINCT model_name) >= 2
                 ORDER BY latitude, longitude
-            """, (models, hour, min_lat, max_lat, min_lon, max_lon))
+            """, (models, *_runp, hour, min_lat, max_lat, min_lon, max_lon))
         else:
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT
-                    latitude,
-                    longitude,
-                    STDDEV(mean_value)          AS disagreement,
-                    AVG(mean_value)             AS avg_mean,
-                    COUNT(DISTINCT model_name)  AS n_models
-                FROM regridded_forecast_ens
-                WHERE model_name    = ANY(%s)
-                  AND variable_name = %s
-                  AND forecast_hour = %s
-                  AND latitude  BETWEEN %s AND %s
-                  AND longitude BETWEEN %s AND %s
-                GROUP BY latitude, longitude
-                HAVING COUNT(DISTINCT model_name) >= 2
-                ORDER BY latitude, longitude
-            """, (models, var_name, hour, min_lat, max_lat, min_lon, max_lon))
+                    u.latitude,
+                    u.longitude,
+                    STDDEV(u.mean_value)          AS disagreement,
+                    AVG(u.mean_value)             AS avg_mean,
+                    COUNT(DISTINCT u.model_name)  AS n_models
+                FROM regridded_forecast_ens u
+                WHERE u.model_name    = ANY(%s)
+                  AND u.variable_name = %s
+                  {_runw}
+                  AND u.forecast_hour = %s
+                  AND u.latitude  BETWEEN %s AND %s
+                  AND u.longitude BETWEEN %s AND %s
+                GROUP BY u.latitude, u.longitude
+                HAVING COUNT(DISTINCT u.model_name) >= 2
+                ORDER BY u.latitude, u.longitude
+            """, (models, var_name, *_runp, hour, min_lat, max_lat, min_lon, max_lon))
 
         rows = cursor.fetchall()
         # All DB access is complete — release the pooled connection BEFORE the
@@ -2956,10 +3143,12 @@ def categorical_metrics_endpoint():
         cursor.execute("""
             SELECT latitude, longitude FROM regridded_forecast_ens
             WHERE model_name = %s AND variable_name = %s
+              AND init_time = %s
               AND latitude BETWEEN %s AND %s AND longitude BETWEEN %s AND %s
             ORDER BY POWER(latitude - %s, 2) + POWER(longitude - %s, 2)
             LIMIT 1
-        """, (model_name, fcst_var, lat - 1.0, lat + 1.0, lon - 1.0, lon + 1.0, lat, lon))
+        """, (model_name, fcst_var, init_time_val,
+              lat - 1.0, lat + 1.0, lon - 1.0, lon + 1.0, lat, lon))
         centre_row = cursor.fetchone()
         if not centre_row:
             return jsonify({'error': 'No forecast data found for the selected parameters.'}), 404
@@ -2974,12 +3163,13 @@ def categorical_metrics_endpoint():
             SELECT {_sel}
             FROM {_frm}
             WHERE u.model_name = %s AND {_varw}
+              AND u.init_time = %s
               AND u.forecast_hour BETWEEN %s AND %s
               AND u.latitude  BETWEEN %s AND %s
               AND u.longitude BETWEEN %s AND %s
               AND u.mean_value IS NOT NULL AND u.std_dev IS NOT NULL {_vnn}
             ORDER BY u.forecast_hour
-        """, (model_name, *(() if is_wind else (fcst_var,)),
+        """, (model_name, *(() if is_wind else (fcst_var,)), init_time_val,
               max(0, hour_min - lookback), hour_max,
               min_lat, max_lat, min_lon, max_lon))
         fcst_rows = cursor.fetchall()
@@ -3259,12 +3449,13 @@ def region_categorical_metrics_endpoint():
             SELECT {_sel}
             FROM {_frm}
             WHERE u.model_name = %s AND {_varw}
+              AND u.init_time = %s
               AND u.forecast_hour BETWEEN %s AND %s
               AND u.latitude  BETWEEN %s AND %s
               AND u.longitude BETWEEN %s AND %s
               AND u.mean_value IS NOT NULL AND u.std_dev IS NOT NULL {_vnn}
             ORDER BY u.forecast_hour, u.latitude, u.longitude
-        """, (model_name, *(() if is_wind else (fcst_var,)),
+        """, (model_name, *(() if is_wind else (fcst_var,)), init_time_val,
               max(0, hour_min - lookback), hour_max,
               min_lat, max_lat, min_lon, max_lon))
         fcst_rows = cursor.fetchall()
@@ -3520,12 +3711,13 @@ def _categorical_hours_for_box(cursor, model_name, fcst_var, obs_var, obs_src,
         SELECT {_sel}
         FROM {_frm}
         WHERE u.model_name = %s AND {_varw}
+          AND u.init_time = %s
           AND u.forecast_hour BETWEEN %s AND %s
           AND u.latitude  BETWEEN %s AND %s
           AND u.longitude BETWEEN %s AND %s
           AND u.mean_value IS NOT NULL AND u.std_dev IS NOT NULL {_vnn}
         ORDER BY u.forecast_hour, u.latitude, u.longitude
-    """, (model_name, *(() if is_wind else (fcst_var,)),
+    """, (model_name, *(() if is_wind else (fcst_var,)), init_time_val,
           max(0, hour_min - lookback), hour_max, min_lat, max_lat, min_lon, max_lon))
     fcst_rows = cursor.fetchall()
     if not fcst_rows:
