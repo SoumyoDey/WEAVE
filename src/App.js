@@ -9,12 +9,12 @@ import { getLegendGradient }  from './utils/colorUtils';
 import { pointInPolygon }     from './utils/geoUtils';
 
 // ── API ───────────────────────────────────────────────────────────────────────
-import { fetchForecastData, fetchTimeseries as apiFetchTimeseries, fetchSpreadSkill as apiFetchSpreadSkill } from './api/forecastApi';
+import { fetchForecastData, fetchTimeseries as apiFetchTimeseries, fetchSpreadSkill as apiFetchSpreadSkill, fetchObservationCoverage } from './api/forecastApi';
 import { fetchSpatialMetric } from './api/spatialApi';
 
 // ── Layer renderers ───────────────────────────────────────────────────────────
 import { drawOnMap }            from './layers/idwLayer';
-import { drawWindArrows, startStreamlines, stopStreamlines } from './layers/windLayer';
+import { drawWindArrows, stopWindArrows, startStreamlines, stopStreamlines } from './layers/windLayer';
 import { drawUncertaintyBoxes, stopUncertainty } from './layers/vsupLayer';
 import { drawBivariateLayer, stopBivariate } from './layers/bivariateLayer';
 import { drawTextureLayer, stopTexture }         from './layers/textureLayer';
@@ -55,6 +55,10 @@ function App() {
   const [selectedColormap, setSelectedColormap] = useState('Viridis');  // CVD-safe, perceptually-uniform default
   const [showWindArrows, setShowWindArrows]     = useState(false);
   const [showWindLines, setShowWindLines]       = useState(false);
+  // Reactive flag set once the Leaflet map exists. Effects that attach map
+  // handlers key off this instead of the non-reactive mapInstanceRef.current,
+  // which is null on first render and never triggers a re-run.
+  const [mapReady, setMapReady]                 = useState(false);
 
   // ── Uncertainty overlay state (mutually exclusive) ───────────────────────────
   const [uncertaintyMode, setUncertaintyMode]   = useState(null);  // null | 'vsup' | 'bivariate' | 'fan' | 'texture'
@@ -80,18 +84,32 @@ function App() {
   const [timeseriesLoading, setTimeseriesLoading]   = useState(false);
   const [ssrData, setSsrData]                       = useState(null);
   const [ssrLoading, setSsrLoading]                 = useState(false);
+  // How far the observation record reaches — see the effect below.
+  const [obsCoverage, setObsCoverage]               = useState(null);
 
   // ── Spatial metric / region selection state ──────────────────────────────────
   const [selectionMode, setSelectionMode]       = useState(null);
   const [selectedRegion, setSelectedRegion]     = useState(null);
   const [metricType, setMetricType]             = useState('ssr');
   const [metricHour, setMetricHour]             = useState(6);
+  // 25 mm/6h for precipitation, 10 m/s for wind — the same defaults the
+  // Analysis and Comparison tabs use.
   const [metricThreshold, setMetricThreshold]   = useState(25);
   const [spatialData, setSpatialData]           = useState(null);
   const [spatialLoading, setSpatialLoading]     = useState(false);
   const [showMetricPanel, setShowMetricPanel]   = useState(false);
   const [panelPos, setPanelPos]                 = useState({ x: 16, y: 120 });
   const [panelMinimized, setPanelMinimized]     = useState(false);
+
+  // A threshold is meaningless across a variable change — 25 mm/6h carried into
+  // wind mode reads as 25 m/s, a storm-force bar that scores everything a miss.
+  // Reset to the variable's own default and drop the now-stale map, matching
+  // what the Analysis and Comparison tabs do.
+  useEffect(() => {
+    setMetricThreshold(selectedVariable === 'wind' ? 10 : 25);
+    setSpatialData(null);
+  }, [selectedVariable]);
+
 
   // ── Analysis tab state ────────────────────────────────────────────────────────
 
@@ -112,12 +130,24 @@ function App() {
   const clickMarkerRef        = useRef(null);
   const selectionLayerRef     = useRef(null);
   const selectionModeRef      = useRef(null);
+  // Set when a rectangle drag completes, to swallow the click Leaflet
+  // synthesises from that same mouseup. See the map click handler.
+  const suppressMapClickRef   = useRef(false);
   const spatialDataRef        = useRef(null);
   const metricTypeRef         = useRef('ssr');
+  // The metric overlay's colour bands depend on the variable's unit, and the
+  // pan/zoom redraw below reads through refs rather than closing over state.
+  // Without this mirror that redraw would fall back to the precipitation scale
+  // and recolour a wind map on the first drag.
+  const selectedVariableRef   = useRef('precipitation');
   const isDraggingPanelRef    = useRef(false);
   const dragStartRef          = useRef({ mouseX: 0, mouseY: 0, panelX: 0, panelY: 0 });
   const uncertaintyModeRef      = useRef(null);
   const invertUncertaintyRef    = useRef(false);
+  // Monotonic id for the main map fetch. Rapid model/hour/member changes fire
+  // overlapping fetches; without this guard a slow earlier response can resolve
+  // last and overwrite newer data + repaint the map with stale values.
+  const loadSeqRef              = useRef(0);
 
   const currentModel = MODELS[selectedModel];
 
@@ -131,6 +161,7 @@ function App() {
   useEffect(() => { selectionModeRef.current = selectionMode; }, [selectionMode]);
   useEffect(() => { spatialDataRef.current   = spatialData;   }, [spatialData]);
   useEffect(() => { metricTypeRef.current    = metricType;    }, [metricType]);
+  useEffect(() => { selectedVariableRef.current = selectedVariable; }, [selectedVariable]);
   useEffect(() => { showWindLinesRef.current = showWindLines; }, [showWindLines]);
   useEffect(() => {
     uncertaintyModeRef.current = uncertaintyMode;
@@ -151,6 +182,7 @@ function App() {
       L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap, &copy; CartoDB' }).addTo(map);
       L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png',   { attribution: '' }).addTo(map);
       mapInstanceRef.current = map;
+      setMapReady(true);
       setTimeout(() => { map.invalidateSize(); loadDataForHour(); }, 100);
     }, 100);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -179,8 +211,8 @@ function App() {
   // 300 ms debounce so rapid timeline scrubbing fires only one request.
   useEffect(() => {
     if (!mapInstanceRef.current) return;
-    const t = setTimeout(loadDataForHour, 300);
-    return () => clearTimeout(t);
+    const id = setTimeout(loadDataForHour, 300);
+    return () => clearTimeout(id);
   }, [selectedHour, selectedModel, selectedMember, selectedVariable]); // eslint-disable-line
 
   // ── Redraw IDW / VSup when colormap or invert changes ────────────────────────
@@ -210,12 +242,11 @@ function App() {
     const map = mapInstanceRef.current;
     if (selectedVariable === 'wind' && dataRef.current?.length && map) {
       if (showWindArrows) drawWindArrows(map, dataRef.current, arrowsCanvasRef);
-      else { arrowsCanvasRef.current?.remove(); arrowsCanvasRef.current = null; }
+      else stopWindArrows(map, arrowsCanvasRef);
       if (showWindLines) startStreamlines(map, dataRef.current, animationFrameRef, showWindLinesRef);
       else stopStreamlines(animationFrameRef);
     } else {
-      arrowsCanvasRef.current?.remove();
-      arrowsCanvasRef.current = null;
+      stopWindArrows(map, arrowsCanvasRef);
       stopStreamlines(animationFrameRef);
     }
   }, [showWindArrows, showWindLines, selectedVariable, selectedHour, selectedModel, selectedMember]); // eslint-disable-line
@@ -239,7 +270,7 @@ function App() {
       if (canvasRef.current) canvasRef.current.style.display = 'none';
       drawBivariateLayer(
         map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour,
-        buildColorMatrix(selectedColormap, showFanChart, invertUncertainty, numBuckets || 4),
+        null,  // colorMatrix is unused downstream — color comes from continuousColor()
         setBivariateRanges, numBuckets, selectedColormap, showFanChart,
         invertUncertainty, flipColormap, gridOpacity,
       );
@@ -264,9 +295,11 @@ function App() {
   // ── Data fetch ────────────────────────────────────────────────────────────────
   const loadDataForHour = async () => {
     if (!mapInstanceRef.current) return;
+    const seq = ++loadSeqRef.current;      // this call's ticket
     setLoading(true); setError('');
     try {
       const data = await fetchForecastData(currentModel.name, selectedVariable, selectedHour, selectedMember);
+      if (seq !== loadSeqRef.current) return;   // a newer load started — drop this stale response
       dataRef.current = data;
 
       // Single pass — avoids spreading a large array into Math.min/max (RangeError
@@ -290,6 +323,7 @@ function App() {
       setLoading(false);
 
       setTimeout(() => {
+        if (seq !== loadSeqRef.current) return;   // superseded before the deferred draw ran
         const map = mapInstanceRef.current;
         drawOnMap(map, data, selectedColormap, selectedMember === 'std', { min: minVal, max: maxVal }, { canvasRef, drawFnRef, uncertaintyModeRef }, { flipColormap, gridOpacity, numBuckets });
         if (selectedVariable === 'wind') {
@@ -299,11 +333,12 @@ function App() {
         if (uncertaintyModeRef.current === 'vsup')
           drawUncertaintyBoxes(map, uncertaintyLayerRef, uncertaintyCanvasRef, currentModel.name, selectedVariable, selectedHour, selectedColormap, invertUncertaintyRef.current, numBuckets, flipColormap, gridOpacity, setBivariateRanges);
         if (uncertaintyModeRef.current === 'bivariate')
-          drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, false, invertUncertaintyRef.current, numBuckets > 1 ? numBuckets : 4), setBivariateRanges, numBuckets, selectedColormap, false, invertUncertaintyRef.current, flipColormap, gridOpacity);
+          drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, null, setBivariateRanges, numBuckets, selectedColormap, false, invertUncertaintyRef.current, flipColormap, gridOpacity);
         if (uncertaintyModeRef.current === 'fan')
-          drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, buildColorMatrix(selectedColormap, true, invertUncertaintyRef.current, numBuckets > 1 ? numBuckets : 4), setBivariateRanges, numBuckets, selectedColormap, true, invertUncertaintyRef.current, flipColormap, gridOpacity);
+          drawBivariateLayer(map, bivariateLayerRef, currentModel.name, selectedVariable, selectedHour, null, setBivariateRanges, numBuckets, selectedColormap, true, invertUncertaintyRef.current, flipColormap, gridOpacity);
       }, 300);
     } catch (err) {
+      if (seq !== loadSeqRef.current) return;   // stale failure from a superseded load
       console.error('Load error:', err);
       setError(`Could not load: ${err.message}`);
       setLoading(false);
@@ -317,6 +352,15 @@ function App() {
     const map = mapInstanceRef.current;
     const handleClick = (e) => {
       if (selectionModeRef.current) return;
+      // Finishing a rectangle drag clears selectionMode, and React has already
+      // flushed that through to selectionModeRef by the time the browser
+      // dispatches the click for the very same mouseup — so the guard above
+      // lets it through and the drag's far corner silently replaces whatever
+      // point the user had chosen. Swallow exactly that one click.
+      if (suppressMapClickRef.current) {
+        suppressMapClickRef.current = false;
+        return;
+      }
       const { lat, lng } = e.latlng;
       setClickedPoint({ lat: lat.toFixed(3), lon: lng.toFixed(3) });
       if (clickMarkerRef.current) map.removeLayer(clickMarkerRef.current);
@@ -324,15 +368,21 @@ function App() {
     };
     map.on('click', handleClick);
     return () => map.off('click', handleClick);
-  }, [mapInstanceRef.current]); // eslint-disable-line
+  }, [mapReady]); // eslint-disable-line
 
   useEffect(() => {
     if (!clickedPoint) return;
     const { lat, lon } = clickedPoint;
+    // Guard against out-of-order responses and setState-after-unmount: the
+    // cleanup flips `cancelled`, so a superseded (or unmounted) fetch's
+    // handlers become no-ops. Clicking points quickly no longer lets a slow
+    // earlier response overwrite the newer point's charts.
+    let cancelled = false;
 
     setTimeseriesLoading(true); setTimeseriesData(null);
     apiFetchTimeseries(currentModel.name, selectedVariable, lat, lon)
       .then(data => {
+        if (cancelled) return;
         if (Array.isArray(data) && data.length) {
           setTimeseriesData(data.map(d => ({
             hour:    d.hour,
@@ -345,15 +395,33 @@ function App() {
           })));
         }
       })
-      .catch(err => console.error('Timeseries error:', err))
-      .finally(() => setTimeseriesLoading(false));
+      .catch(err => { if (!cancelled) console.error('Timeseries error:', err); })
+      .finally(() => { if (!cancelled) setTimeseriesLoading(false); });
 
     setSsrLoading(true); setSsrData(null);
     apiFetchSpreadSkill(currentModel.name, selectedVariable, lat, lon)
-      .then(data => { if (data?.hours) setSsrData(data); })
-      .catch(err => console.error('Spread-skill error:', err))
-      .finally(() => setSsrLoading(false));
+      .then(data => { if (!cancelled && data?.hours) setSsrData(data); })
+      .catch(err => { if (!cancelled) console.error('Spread-skill error:', err); })
+      .finally(() => { if (!cancelled) setSsrLoading(false); });
+
+    return () => { cancelled = true; };
   }, [clickedPoint, selectedModel, selectedVariable]); // eslint-disable-line
+
+  // ── Observation coverage ──────────────────────────────────────────────────────
+  // How far the truth reaches. Verification correctly returns nothing past the
+  // end of the observation record, which looked identical to a bug — so the
+  // extent is fetched up front and shown on the timeline, before anything is
+  // clicked. Depends on the run and the variable, not on the selected hour.
+  useEffect(() => {
+    let cancelled = false;
+    fetchObservationCoverage(currentModel.name, selectedVariable)
+      .then(data => { if (!cancelled) setObsCoverage(data); })
+      .catch(err => {
+        // Non-fatal: the timeline just omits the marker.
+        if (!cancelled) { console.error('Observation coverage error:', err); setObsCoverage(null); }
+      });
+    return () => { cancelled = true; };
+  }, [currentModel.name, selectedVariable]);
 
   // ── Spatial metric computation ────────────────────────────────────────────────
   const computeSpatialMetric = async () => {
@@ -374,7 +442,7 @@ function App() {
         pts = pts.filter(p => pointInPolygon(p.lat, p.lon, selectedRegion.polygon));
       data = { ...data, points: pts };
       setSpatialData(data);
-      renderMetricCanvas(mapInstanceRef.current, pts, metricType, METRIC_CONFIG);
+      renderMetricCanvas(mapInstanceRef.current, pts, metricType, METRIC_CONFIG, selectedVariable);
     } catch (err) {
       console.error('Spatial metric error:', err);
     }
@@ -393,40 +461,91 @@ function App() {
     const map = mapInstanceRef.current;
     if (!map || selectionMode !== 'rectangle') return;
     map.dragging.disable(); map.scrollWheelZoom.disable(); map.doubleClickZoom.disable();
-    map.getContainer().style.cursor = 'crosshair';
-    let startLL = null, previewRect = null;
-    const onMouseDown = (e) => { startLL = e.latlng; };
-    const onMouseMove = (e) => {
-      if (!startLL) return;
-      if (previewRect) map.removeLayer(previewRect);
-      previewRect = L.rectangle(L.latLngBounds(startLL, e.latlng), { color: '#3498db', weight: 2, dashArray: '5 4', fillOpacity: 0.08, fillColor: '#3498db', interactive: false }).addTo(map);
+    const container = map.getContainer();
+    const prevCursor = container.style.cursor;
+    const prevTouchAction = container.style.touchAction;
+    container.style.cursor = 'crosshair';
+    // Pointer events rather than Leaflet's mouse events: Leaflet derives
+    // 'mousedown'/'mousemove'/'mouseup' from DOM mouse events only, so on a
+    // touchscreen none of them fire and the rectangle could never be drawn.
+    // touch-action:none is required too — without it the browser claims the
+    // gesture as a pan and no pointermove ever reaches us.
+    container.style.touchAction = 'none';
+
+    let startLL = null, previewRect = null, activePointer = null;
+    const toLatLng = (e) => {
+      const r = container.getBoundingClientRect();
+      return map.containerPointToLatLng(L.point(e.clientX - r.left, e.clientY - r.top));
     };
-    const onMouseUp = (e) => {
-      if (!startLL) return;
+    const clearPreview = () => {
       if (previewRect) { map.removeLayer(previewRect); previewRect = null; }
-      const bounds = L.latLngBounds(startLL, e.latlng);
+    };
+    const onPointerDown = (e) => {
+      if (!e.isPrimary || activePointer !== null) return;
+      activePointer = e.pointerId;
+      // Capture so a drag that leaves the map still delivers move/up to us.
+      try { container.setPointerCapture(e.pointerId); } catch { /* non-fatal */ }
+      startLL = toLatLng(e);
+      e.preventDefault();
+    };
+    const onPointerMove = (e) => {
+      if (!startLL || e.pointerId !== activePointer) return;
+      clearPreview();
+      previewRect = L.rectangle(L.latLngBounds(startLL, toLatLng(e)), { color: '#3498db', weight: 2, dashArray: '5 4', fillOpacity: 0.08, fillColor: '#3498db', interactive: false }).addTo(map);
+      e.preventDefault();
+    };
+    const onPointerUp = (e) => {
+      if (!startLL || e.pointerId !== activePointer) return;
+      clearPreview();
+      const bounds = L.latLngBounds(startLL, toLatLng(e));
       const sw = bounds.getSouthWest(), ne = bounds.getNorthEast();
-      if (Math.abs(ne.lat - sw.lat) < 0.1 || Math.abs(ne.lng - sw.lng) < 0.1) { startLL = null; return; }
+      startLL = null; activePointer = null;
+      try { container.releasePointerCapture(e.pointerId); } catch { /* non-fatal */ }
+      // A tap is a zero-area drag: ignore it rather than selecting a sliver.
+      // selectionMode stays 'rectangle' here, so the click that follows is
+      // still guarded and must not be suppressed.
+      if (Math.abs(ne.lat - sw.lat) < 0.1 || Math.abs(ne.lng - sw.lng) < 0.1) return;
+      // This mouseup will also produce a click; don't let it move the point.
+      // Cleared on a timer too, so a drag that never yields one (pointer
+      // released off-window) can't leave the next real click swallowed.
+      suppressMapClickRef.current = true;
+      setTimeout(() => { suppressMapClickRef.current = false; }, 0);
       if (selectionLayerRef.current) map.removeLayer(selectionLayerRef.current);
       selectionLayerRef.current = L.rectangle(bounds, { color: '#e67e22', weight: 2, dashArray: '6 4', fillOpacity: 0.06, fillColor: '#e67e22', interactive: false }).addTo(map);
       setSelectedRegion({ type: 'rectangle', bounds: { min_lat: sw.lat, max_lat: ne.lat, min_lon: sw.lng, max_lon: ne.lng } });
-      setSelectionMode(null); setShowMetricPanel(true); startLL = null;
+      setSelectionMode(null); setShowMetricPanel(true);
     };
-    map.on('mousedown', onMouseDown); map.on('mousemove', onMouseMove); map.on('mouseup', onMouseUp);
+    const onPointerCancel = () => { clearPreview(); startLL = null; activePointer = null; };
+
+    container.addEventListener('pointerdown', onPointerDown);
+    container.addEventListener('pointermove', onPointerMove);
+    container.addEventListener('pointerup', onPointerUp);
+    container.addEventListener('pointercancel', onPointerCancel);
     return () => {
-      map.off('mousedown', onMouseDown); map.off('mousemove', onMouseMove); map.off('mouseup', onMouseUp);
-      if (previewRect) map.removeLayer(previewRect);
+      container.removeEventListener('pointerdown', onPointerDown);
+      container.removeEventListener('pointermove', onPointerMove);
+      container.removeEventListener('pointerup', onPointerUp);
+      container.removeEventListener('pointercancel', onPointerCancel);
+      clearPreview();
       map.dragging.enable(); map.scrollWheelZoom.enable(); map.doubleClickZoom.enable();
-      map.getContainer().style.cursor = '';
+      container.style.cursor = prevCursor;
+      container.style.touchAction = prevTouchAction;
     };
-  }, [selectionMode, mapInstanceRef.current]); // eslint-disable-line
+  }, [selectionMode, mapReady]); // eslint-disable-line
 
   // ── Polygon selection ─────────────────────────────────────────────────────────
   useEffect(() => { // eslint-disable-line react-hooks/exhaustive-deps
     const map = mapInstanceRef.current;
     if (!map || selectionMode !== 'polygon') return;
     map.dragging.disable(); map.scrollWheelZoom.disable(); map.doubleClickZoom.disable();
-    map.getContainer().style.cursor = 'crosshair';
+    const polyContainer = map.getContainer();
+    const prevPolyCursor = polyContainer.style.cursor;
+    const prevPolyTouchAction = polyContainer.style.touchAction;
+    polyContainer.style.cursor = 'crosshair';
+    // Vertices come from Leaflet 'click', which browsers do synthesise from a
+    // tap, so the event model is left alone here. touch-action still has to be
+    // pinned so the tap is not consumed as a page pan first.
+    polyContainer.style.touchAction = 'none';
     const vertices = [], markers = [];
     let polyline = null;
     const updatePolyline = () => {
@@ -458,9 +577,10 @@ function App() {
       if (polyline) map.removeLayer(polyline);
       markers.forEach(m => map.removeLayer(m));
       map.dragging.enable(); map.scrollWheelZoom.enable(); map.doubleClickZoom.enable();
-      map.getContainer().style.cursor = '';
+      polyContainer.style.cursor = prevPolyCursor;
+      polyContainer.style.touchAction = prevPolyTouchAction;
     };
-  }, [selectionMode, mapInstanceRef.current]); // eslint-disable-line
+  }, [selectionMode, mapReady]); // eslint-disable-line
 
   // ── Redraw metric canvas on map move/zoom ─────────────────────────────────────
   useEffect(() => { // eslint-disable-line react-hooks/exhaustive-deps
@@ -468,11 +588,12 @@ function App() {
     if (!map) return;
     const redraw = () => {
       if (spatialDataRef.current?.points)
-        renderMetricCanvas(map, spatialDataRef.current.points, metricTypeRef.current, METRIC_CONFIG);
+        renderMetricCanvas(map, spatialDataRef.current.points, metricTypeRef.current,
+                           METRIC_CONFIG, selectedVariableRef.current);
     };
     map.on('moveend', redraw); map.on('zoomend', redraw);
     return () => { map.off('moveend', redraw); map.off('zoomend', redraw); };
-  }, [mapInstanceRef.current]); // eslint-disable-line
+  }, [mapReady]); // eslint-disable-line
 
   // ── Draggable panel (window-level mouse handlers) ────────────────────────────
   useEffect(() => {
@@ -505,10 +626,10 @@ function App() {
 
       {/* Tab bar */}
       <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: TAB_BAR_H, background: 'rgba(22,33,44,0.98)', display: 'flex', alignItems: 'center', zIndex: 1100, boxShadow: '0 2px 8px rgba(0,0,0,0.35)', paddingLeft: '16px', gap: '4px' }}>
-        <span style={{ color: 'white', fontWeight: '700', fontSize: t.fontSize.lg, marginRight: isNarrow ? '8px' : '16px', letterSpacing: '1px', display: 'inline-flex', alignItems: 'center', gap: '7px' }}><CloudRain size={18} style={{ color: '#3aa0ff' }} />{!isNarrow && 'WEAVE'}</span>
+        <span style={{ color: 'white', fontWeight: t.fontWeight.bold, fontSize: t.fontSize.lg, marginRight: isNarrow ? '8px' : '16px', letterSpacing: '1px', display: 'inline-flex', alignItems: 'center', gap: '7px' }}><CloudRain size={18} style={{ color: '#3aa0ff' }} />{!isNarrow && 'WEAVE'}</span>
         {[['visualization', MapIcon, 'Visualization'], ['analysis', BarChart3, 'Analysis'], ['comparison', Scale, 'Comparison']].map(([id, Icon, label]) => (
           <button key={id} onClick={() => setActiveTab(id)} title={label} aria-label={label}
-            style={{ padding: isNarrow ? '6px 12px' : '6px 20px', fontSize: t.fontSize.base, fontWeight: '600', border: 'none', borderRadius: '6px', cursor: 'pointer', transition: 'all 0.2s', background: activeTab === id ? 'rgba(255,255,255,0.15)' : 'transparent', color: activeTab === id ? 'white' : t.textMuted, borderBottom: activeTab === id ? '2px solid #3498db' : '2px solid transparent', display: 'inline-flex', alignItems: 'center', gap: '7px' }}>
+            style={{ padding: isNarrow ? '6px 12px' : '6px 20px', fontSize: t.fontSize.base, fontWeight: t.fontWeight.semibold, border: 'none', borderRadius: '6px', cursor: 'pointer', transition: 'all 0.2s', background: activeTab === id ? 'rgba(255,255,255,0.15)' : 'transparent', color: activeTab === id ? 'white' : t.textMuted, borderBottom: activeTab === id ? '2px solid #3498db' : '2px solid transparent', display: 'inline-flex', alignItems: 'center', gap: '7px' }}>
             <Icon size={15} />{!isNarrow && label}
           </button>
         ))}
@@ -585,6 +706,7 @@ function App() {
           currentModel={currentModel}
           selectedHour={selectedHour} setSelectedHour={setSelectedHour}
           selectedVariable={selectedVariable}
+          obsCoverage={obsCoverage}
           isNarrow={isNarrow}
         />
 
@@ -654,6 +776,7 @@ function App() {
         {showMetricPanel && selectedRegion && !selectionMode && (
           <MetricPanel
             selectedRegion={selectedRegion}
+            selectedVariable={selectedVariable}
             panelPos={panelPos} setPanelPos={setPanelPos}
             panelMinimized={panelMinimized} setPanelMinimized={setPanelMinimized}
             metricType={metricType} setMetricType={setMetricType}
@@ -671,9 +794,6 @@ function App() {
         {showAbout && (
           <AboutModal
             onClose={() => setShowAbout(false)}
-            stats={stats}
-            selectedVariable={selectedVariable}
-            currentModel={currentModel}
             onReplayTour={() => { setShowAbout(false); setShowTour(true); }}
           />
         )}
@@ -690,6 +810,7 @@ function App() {
           selectedVariable={selectedVariable}
           timeseriesLoading={timeseriesLoading} timeseriesData={timeseriesData}
           ssrLoading={ssrLoading} ssrData={ssrData}
+          obsCoverage={obsCoverage}
           onCompare={() => setActiveTab('comparison')}
           selectedRegion={selectedRegion}
           active={activeTab === 'analysis'}

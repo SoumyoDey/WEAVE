@@ -1,11 +1,12 @@
 import React from 'react';
+import { t } from '../../theme';
 
 export function IDWLegend({ selectedColormap, stats, selectedVariable, selectedMember, getLegendGradient, flipColormap = false, numBuckets = 0 }) {
   const isWind = selectedVariable === 'wind';
   const isStd = selectedMember === 'std';
 
   const varLabel = isWind ? 'Wind Speed' : isStd ? 'Uncertainty' : 'Precipitation';
-  const unit = isWind ? 'm/s' : 'mm/hr';
+  const unit = isWind ? 'm/s' : 'mm/h';
 
   const maxVal = stats ? parseFloat(stats.max) : 5;
   const fracs = [0, 0.25, 0.5, 0.75, 1];
@@ -24,8 +25,8 @@ export function IDWLegend({ selectedColormap, stats, selectedVariable, selectedM
 
   return (
     <div style={cardStyle}>
-      <div style={{ color: 'white', fontSize: '12px', fontWeight: 600, marginBottom: '8px' }}>
-        {varLabel} <span style={{ fontWeight: 400, opacity: 0.7 }}>({unit})</span>
+      <div style={{ color: 'white', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, marginBottom: '8px' }}>
+        {varLabel} <span style={{ fontWeight: t.fontWeight.normal, opacity: 0.7 }}>({unit})</span>
       </div>
 
       {/* Gradient bar */}
@@ -55,13 +56,13 @@ export function IDWLegend({ selectedColormap, stats, selectedVariable, selectedM
       {/* Tick labels */}
       <div style={{ display: 'flex', justifyContent: 'space-between' }}>
         {tickLabels.map((label, i) => (
-          <div key={i} style={{ color: 'rgba(255,255,255,0.7)', fontSize: '10px', textAlign: 'center' }}>
+          <div key={i} style={{ color: 'rgba(255,255,255,0.7)', fontSize: t.fontSize.micro, textAlign: 'center' }}>
             {label}
           </div>
         ))}
       </div>
 
-      <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: '10px', marginTop: '8px' }}>
+      <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: t.fontSize.micro, marginTop: '8px' }}>
         Darker = {isWind ? 'faster wind' : isStd ? 'more uncertainty' : 'more rain'}.
       </div>
     </div>

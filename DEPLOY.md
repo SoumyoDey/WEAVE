@@ -17,6 +17,13 @@ Architecture: a **React single-page app** (static build) talking to a **Flask JS
 ---
 
 ## 2. Database
+
+**Two stages, and the second is not optional.** The loaders populate the *native*
+tables; every scored endpoint reads the *regridded* ones. Until 2026-08-27 this
+section stopped after the loaders, which produced a deployment whose maps and
+metric panels were all empty — the app looked installed and verified nothing.
+
+### 2a. Schema and native data
 ```bash
 createdb weave_weather
 psql -d weave_weather -f Data/schema.sql
@@ -27,6 +34,62 @@ python Data/load_wind.py
 python Data/load_gefs_ukmo_wind.py
 ```
 Verify: `psql -d weave_weather -c "SELECT count(*) FROM forecast_data;"` should be non-zero.
+
+### 2b. Regrid onto the common 0.5° grid
+```bash
+cd Data
+python regrid_members.py --variables precipitation          # forecasts
+python regrid_members.py --variables wind_u_10m,wind_v_10m
+python regrid_observations.py --table regridded_observation --truncate   # truth
+```
+
+Both scripts create their own tables, so nothing needs adding to `schema.sql`.
+`regrid_members.py` writes `regridded_forecast_member` and
+`regridded_forecast_ens`; `regrid_observations.py` box-averages
+`observation_data` into `regridded_observation`.
+
+**A fresh install needs no migration for the column itself.**
+`regrid_members.py`'s DDL already includes `init_time` and the run-scoped
+indexes, so the tables come out right the first time — verified on a throwaway
+database. `Data/migrate_init_time.py` exists for the other case: a database
+loaded *before* 2026-09-02, whose regridded tables predate that column.
+
+**A fresh install should still run it once**, after 2b, to populate
+`forecast_run_registry` — the per-run record of member counts, hour ranges and
+export convention that `/api/runs` reads:
+
+```bash
+python Data/migrate_init_time.py --dry-run   # says what it would change
+python Data/migrate_init_time.py
+```
+
+It is idempotent, so this is safe whichever case you are in; on an
+already-migrated database it reports the column as present and refreshes the
+registry. Run it *after* the loaders, not before — with `forecast_runs` still
+empty it exits saying there is no run to attribute rows to, which is correct but
+unhelpful. Without the registry, `/api/runs` falls back to a `DISTINCT` over the
+ens table and still answers, just without the member counts and conventions.
+
+Two things to know:
+
+- **`regrid_observations.py` defaults to a `_rebuilt` table, not the live one**, so
+  the `--table regridded_observation` above is deliberate and required on a fresh
+  install. On an *existing* database, run `--compare` first: the rule here is not
+  the one that produced the pre-2026-08-27 data, and the difference is material
+  (see `NEXT_STEPS.md` §7).
+- **`observation_data` still has no loader in this repo.** It is the one remaining
+  hole: the native point observations were ingested off-repo, and 2b can only
+  coarsen what 2a loaded. A fresh deployment therefore gets forecasts and no
+  truth until that table is populated by other means.
+
+Verify:
+```bash
+psql -d weave_weather -c "SELECT count(*) FROM regridded_forecast_ens;"
+psql -d weave_weather -c "SELECT count(*) FROM regridded_observation;"
+python Data/regrid_members.py --verify-grid --hours 0   # coordinates land on the grid
+```
+Both counts must be non-zero. If `regridded_observation` is empty, every metric
+panel will be correctly-but-confusingly blank.
 
 ---
 

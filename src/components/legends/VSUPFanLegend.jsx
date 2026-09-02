@@ -1,5 +1,6 @@
 import React from 'react';
 import { buildVsupLevels } from '../../constants';
+import { t } from '../../theme';
 
 export function VSUPFanLegend({ bivariateRanges, selectedColormap, colormaps, selectedVariable, invertUncertainty = false, numBuckets = 0, flipColormap = false }) {
   if (!bivariateRanges) return null;
@@ -31,10 +32,10 @@ export function VSUPFanLegend({ bivariateRanges, selectedColormap, colormaps, se
   const ringColor = (normVal, normStd) => {
     const cols = colormaps[selectedColormap].colors;
     const t0 = normVal * (1 - normStd * STRENGTH) + 0.5 * (normStd * STRENGTH);
-    const t  = flipColormap ? 1 - t0 : t0;
+    const pos = flipColormap ? 1 - t0 : t0;
     const seg = cols.length - 1;
-    const si  = Math.min(Math.floor(Math.min(t, 0.9999) * seg), seg - 1);
-    const st  = t * seg - si;
+    const si  = Math.min(Math.floor(Math.min(pos, 0.9999) * seg), seg - 1);
+    const st  = pos * seg - si;
     const lerp = (a, b) => Math.round(a + (b - a) * st);
     const c1 = cols[si], c2 = cols[si + 1];
     let r = lerp(parseInt(c1.slice(1,3),16), parseInt(c2.slice(1,3),16));
@@ -58,7 +59,7 @@ export function VSUPFanLegend({ bivariateRanges, selectedColormap, colormaps, se
   });
 
   const varLabel = selectedVariable === 'wind' ? 'Wind Speed' : 'Precipitation';
-  const unit     = selectedVariable === 'wind' ? 'm/s' : 'mm/hr';
+  const unit     = selectedVariable === 'wind' ? 'm/s' : 'mm/h';
 
   // 6 intervals → 7 ticks, 6 labels (skip last which lands on std dev axis)
   const VAL_SEGS = 6;
@@ -106,7 +107,7 @@ export function VSUPFanLegend({ bivariateRanges, selectedColormap, colormaps, se
 
   return (
     <div style={cardStyle}>
-      <div style={{ color: 'white', fontSize: '12px', fontWeight: 600, marginBottom: '8px' }}>
+      <div style={{ color: 'white', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, marginBottom: '8px' }}>
         Fan — {varLabel}
       </div>
 
@@ -132,20 +133,20 @@ export function VSUPFanLegend({ bivariateRanges, selectedColormap, colormaps, se
         })}
 
         {/* Value ticks */}
-        {valTicks.map((t, i) => (
+        {valTicks.map((tick, i) => (
           <g key={i}>
             <line
-              x1={t.tx.toFixed(1)} y1={t.ty.toFixed(1)}
-              x2={px(rOuter + 6, t.deg).toFixed(1)} y2={py(rOuter + 6, t.deg).toFixed(1)}
+              x1={tick.tx.toFixed(1)} y1={tick.ty.toFixed(1)}
+              x2={px(rOuter + 6, tick.deg).toFixed(1)} y2={py(rOuter + 6, tick.deg).toFixed(1)}
               stroke="rgba(255,255,255,0.4)" strokeWidth="1"
             />
-            {t.showLabel && (
+            {tick.showLabel && (
               <text
-                x={t.lx.toFixed(1)} y={t.ly.toFixed(1)}
-                fontSize="11" fill="rgba(255,255,255,0.92)"
-                textAnchor={t.anchor} dominantBaseline="middle"
+                x={tick.lx.toFixed(1)} y={tick.ly.toFixed(1)}
+                fontSize={t.fontSize.xs} fill="rgba(255,255,255,0.92)"
+                textAnchor={tick.anchor} dominantBaseline="middle"
               >
-                {t.val}
+                {tick.val}
               </text>
             )}
           </g>
@@ -154,27 +155,27 @@ export function VSUPFanLegend({ bivariateRanges, selectedColormap, colormaps, se
         {/* Value axis title */}
         <text
           x={cx} y={cy + 26}
-          fontSize="11" fill="rgba(255,255,255,0.78)"
-          textAnchor="middle" fontWeight="600"
+          fontSize={t.fontSize.xs} fill="rgba(255,255,255,0.78)"
+          textAnchor="middle" fontWeight={t.fontWeight.semibold}
         >
           ← {varLabel} ({unit}) →
         </text>
 
         {/* Uncertainty ticks */}
-        {stdTickData.map((t, j) => (
+        {stdTickData.map((tick, j) => (
           <g key={j}>
             <line
-              x1={t.bx.toFixed(1)} y1={t.by.toFixed(1)}
-              x2={t.lx.toFixed(1)} y2={t.ly.toFixed(1)}
+              x1={tick.bx.toFixed(1)} y1={tick.by.toFixed(1)}
+              x2={tick.lx.toFixed(1)} y2={tick.ly.toFixed(1)}
               stroke="rgba(255,255,255,0.4)" strokeWidth="1"
             />
-            {t.showLabel && (
+            {tick.showLabel && (
               <text
-                x={(t.lx + 4).toFixed(1)} y={t.ly.toFixed(1)}
-                fontSize="11" fill="rgba(255,255,255,0.92)"
+                x={(tick.lx + 4).toFixed(1)} y={tick.ly.toFixed(1)}
+                fontSize={t.fontSize.xs} fill="rgba(255,255,255,0.92)"
                 textAnchor="start" dominantBaseline="middle"
               >
-                {t.val}
+                {tick.val}
               </text>
             )}
           </g>
@@ -184,14 +185,14 @@ export function VSUPFanLegend({ bivariateRanges, selectedColormap, colormaps, se
         <text
           x={(stdTickData[0].lx + 4).toFixed(1)}
           y={((stdTickData[0].ly + stdTickData[ROWS].ly) / 2).toFixed(1)}
-          fontSize="10" fill="rgba(255,255,255,0.7)" fontWeight="600"
+          fontSize={t.fontSize.micro} fill="rgba(255,255,255,0.7)" fontWeight={t.fontWeight.semibold}
           textAnchor="start" dominantBaseline="middle"
         >
           Std. Dev. (σ)
         </text>
 
       </svg>
-      <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: '10px', textAlign: 'center', marginTop: '2px' }}>
+      <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.micro, textAlign: 'center', marginTop: '2px' }}>
         Fewer shades where the forecast is less certain.
       </div>
     </div>

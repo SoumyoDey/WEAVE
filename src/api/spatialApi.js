@@ -1,3 +1,5 @@
+import { withRun, withRunParam, whenRunReady } from './run';
+
 const BASE = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
 /**
@@ -13,6 +15,7 @@ const BASE = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
  * @param {object} p.bounds      - { min_lat, max_lat, min_lon, max_lon }
  */
 export const fetchSpatialMetric = async ({ metric, modelName, variable, hour, threshold, hourMin, hourMax, bounds }) => {
+  await whenRunReady();
   const params = new URLSearchParams({
     metric,
     model:    modelName,
@@ -28,7 +31,7 @@ export const fetchSpatialMetric = async ({ metric, modelName, variable, hour, th
   }
   if (hourMin  != null) params.set('hour_min', hourMin);
   if (hourMax  != null) params.set('hour_max',         hourMax);
-  const res  = await fetch(`${BASE}/spatial-metric?${params}`);
+  const res  = await fetch(`${BASE}/spatial-metric?${withRunParam(params)}`);
   const data = await res.json();
   if (data.error) throw new Error(data.error);
   return data;
@@ -39,10 +42,11 @@ export const fetchSpatialMetric = async ({ metric, modelName, variable, hour, th
  * Returns { image: '<base64>' } or { error: '...' }.
  */
 export const fetchSpatialMetricPlot = async (payload) => {
+  await whenRunReady();
   const res = await fetch(`${BASE}/spatial-metric-plot`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify(payload),
+    body:    JSON.stringify(withRun(payload)),
   });
   return res.json();
 };

@@ -1,0 +1,28 @@
+# Coverage configuration for the WEAVE backend.
+#
+# `core = sysmon` is the load-bearing line. NEXT_STEPS.md carried a standing
+# trap — "Cartopy drops coverage's tracer partway through both render
+# functions, so ~120 executed lines read as uncovered. Do not chase it." That
+# is true of coverage's default C tracer, which Cartopy's extension modules
+# disturb, and NOT true of the sys.monitoring backend added in Python 3.12.
+# Switching cores reclaims both render bodies with no change to the code and no
+# pragma: 308 uncovered lines became 250, and every line of
+# _render_metric_map_png and the spatial-agreement render is now traced for
+# real, rather than being taken on trust from the PNG assertions.
+#
+# If this project ever runs on Python < 3.12, coverage falls back to the C
+# tracer automatically and the old caveat applies again.
+[run]
+core = sysmon
+source = .
+omit =
+    test_*.py
+    conftest.py
+    fixture_db.py
+
+[report]
+exclude_also =
+    # The server entry point. Running it starts a process and binds a port, so
+    # it is excluded rather than faked — a test that "covered" it would be
+    # asserting nothing.
+    if __name__ == .__main__.:

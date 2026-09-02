@@ -57,7 +57,7 @@ export function ControlsSidebar({
 
   return (
     <div style={{ position: 'absolute', top: 0, left: open ? '0' : (isNarrow ? '-92vw' : '-330px'), width: isNarrow ? '86vw' : '300px', maxWidth: '360px', height: '100%', background: t.panel, color: t.text, boxShadow: '4px 0 20px rgba(0,0,0,0.4)', transition: t.transition, zIndex: 1000, display: 'flex', flexDirection: 'column' }}>
-      <div style={{ padding: `${t.space(3.5)} ${t.space(4)}`, borderBottom: `1px solid ${t.border}`, paddingTop: t.space(16), flexShrink: 0, display: 'flex', alignItems: 'center', gap: t.space(2), fontWeight: 500 }}>
+      <div style={{ padding: `${t.space(3.5)} ${t.space(4)}`, borderBottom: `1px solid ${t.border}`, paddingTop: t.space(16), flexShrink: 0, display: 'flex', alignItems: 'center', gap: t.space(2), fontWeight: t.fontWeight.medium }}>
         <SlidersHorizontal size={16} style={{ color: t.accent }} />Controls
       </div>
 
@@ -68,7 +68,7 @@ export function ControlsSidebar({
         <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
           {Object.entries(models).map(([key, model]) => (
             <button key={key} onClick={() => setSelectedModel(key)}
-              style={{ flex: 1, padding: '8px 4px', fontSize: t.fontSize.sm, fontWeight: '700', border: selectedModel === key ? `2px solid ${model.color}` : '2px solid rgba(255,255,255,0.08)', borderRadius: t.radius, background: selectedModel === key ? `${model.color}22` : 'rgba(255,255,255,0.04)', color: selectedModel === key ? model.color : t.textMuted, cursor: 'pointer', transition: 'all 0.15s' }}>
+              style={{ flex: 1, padding: '8px 4px', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.bold, border: selectedModel === key ? `2px solid ${model.color}` : '2px solid rgba(255,255,255,0.08)', borderRadius: t.radius, background: selectedModel === key ? `${model.color}22` : 'rgba(255,255,255,0.04)', color: selectedModel === key ? model.color : t.textMuted, cursor: 'pointer', transition: 'all 0.15s' }}>
               {model.name}<Hint text={`${model.ensembleCount} ensemble members`} />
             </button>
           ))}
@@ -78,7 +78,7 @@ export function ControlsSidebar({
             const active = selectedVariable === val;
             return (
               <button key={val} onClick={() => setSelectedVariable(val)}
-                style={{ flex: 1, padding: '8px', fontSize: t.fontSize.sm, fontWeight: '600', border: active ? '1.5px solid rgba(52,152,219,0.7)' : '1.5px solid rgba(255,255,255,0.07)', borderRadius: t.radius, background: active ? 'rgba(52,152,219,0.14)' : 'rgba(255,255,255,0.03)', color: active ? '#7ec8f7' : 'rgba(255,255,255,0.55)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                style={{ flex: 1, padding: '8px', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, border: active ? '1.5px solid rgba(52,152,219,0.7)' : '1.5px solid rgba(255,255,255,0.07)', borderRadius: t.radius, background: active ? 'rgba(52,152,219,0.14)' : 'rgba(255,255,255,0.03)', color: active ? '#7ec8f7' : 'rgba(255,255,255,0.55)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
                 <Icon size={14} />{label}
               </button>
             );
@@ -155,7 +155,7 @@ export function ControlsSidebar({
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <IconButton label="Decrease number of buckets" size={24} onClick={() => setNumBuckets(v => Math.max(0, v - 1))} style={{ boxShadow: 'none', borderRadius: '4px', fontSize: t.fontSize.lg }}>−</IconButton>
-                <span style={{ fontSize: t.fontSize.base, minWidth: '22px', textAlign: 'center', fontWeight: '600' }}>{numBuckets ?? 0}</span>
+                <span style={{ fontSize: t.fontSize.base, minWidth: '22px', textAlign: 'center', fontWeight: t.fontWeight.semibold }}>{numBuckets ?? 0}</span>
                 <IconButton label="Increase number of buckets" size={24} onClick={() => setNumBuckets(v => Math.min(20, v + 1))} style={{ boxShadow: 'none', borderRadius: '4px', fontSize: t.fontSize.lg }}>+</IconButton>
               </div>
             </div>
@@ -174,7 +174,7 @@ export function ControlsSidebar({
                   {['Lines', 'Squares'].map(s => {
                     const active = textureStyle === s;
                     return (
-                      <button key={s} onClick={() => setTextureStyle(s)} style={{ flex: 1, padding: '8px', fontSize: t.fontSize.sm, fontWeight: '600', border: active ? '1.5px solid rgba(52,152,219,0.8)' : '1.5px solid rgba(255,255,255,0.1)', borderRadius: '7px', background: active ? 'rgba(52,152,219,0.18)' : 'rgba(255,255,255,0.04)', color: active ? '#7ec8f7' : 'rgba(255,255,255,0.5)', cursor: 'pointer', display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: '3px' }}>
+                      <button key={s} onClick={() => setTextureStyle(s)} style={{ flex: 1, padding: '8px', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, border: active ? '1.5px solid rgba(52,152,219,0.8)' : '1.5px solid rgba(255,255,255,0.1)', borderRadius: '7px', background: active ? 'rgba(52,152,219,0.18)' : 'rgba(255,255,255,0.04)', color: active ? '#7ec8f7' : 'rgba(255,255,255,0.5)', cursor: 'pointer', display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: '3px' }}>
                         {s === 'Lines' ? <AlignJustify size={16} /> : <LayoutGrid size={16} />}{s}
                       </button>
                     );
@@ -191,7 +191,7 @@ export function ControlsSidebar({
                     { key: 'arrows', state: showWindArrows, setter: () => { setShowWindArrows(v => !v); if (showWindLines) setShowWindLines(false); }, icon: Navigation, label: 'Arrows' },
                     { key: 'streamlines', state: showWindLines, setter: () => { setShowWindLines(v => !v); if (showWindArrows) setShowWindArrows(false); }, icon: Waves, label: 'Streamlines' },
                   ].map(({ key, state, setter, icon: Icon, label }) => (
-                    <button key={key} onClick={setter} style={{ flex: 1, padding: '8px 6px', fontSize: t.fontSize.sm, fontWeight: '600', border: state ? '1.5px solid rgba(52,152,219,0.8)' : '1.5px solid rgba(255,255,255,0.1)', borderRadius: '7px', background: state ? 'rgba(52,152,219,0.18)' : 'rgba(255,255,255,0.04)', color: state ? '#7ec8f7' : 'rgba(255,255,255,0.5)', cursor: 'pointer', display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
+                    <button key={key} onClick={setter} style={{ flex: 1, padding: '8px 6px', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, border: state ? '1.5px solid rgba(52,152,219,0.8)' : '1.5px solid rgba(255,255,255,0.1)', borderRadius: '7px', background: state ? 'rgba(52,152,219,0.18)' : 'rgba(255,255,255,0.04)', color: state ? '#7ec8f7' : 'rgba(255,255,255,0.5)', cursor: 'pointer', display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
                       <Icon size={15} />{label}
                     </button>
                   ))}
