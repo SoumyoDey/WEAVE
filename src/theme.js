@@ -40,8 +40,12 @@ export const t = {
   transition:    'all 0.2s ease',
   space:         (n) => `${n * 4}px`,   // 4-pt spacing scale: space(2) => 8px
   // type scale — one source of truth in place of the ad-hoc literal sizes
-  // (10/10.5/11/12/13/14/15/16/18/22/24/28px) scattered across components.
+  // (9/10/10.5/11/12/13/14/15/16/18/22/24/28px) scattered across components.
   fontSize: {
+    nano:   '9px',    // the floor: axis ticks, footer, legend end-labels. Only
+                      // for text that is furniture rather than content — it sits
+                      // below a comfortable reading size, so nothing a user has
+                      // to read to use the app belongs here.
     micro:  '10px',   // chart tick labels, tiny captions
     xs:     '11px',   // hints, secondary captions
     sm:     '12px',   // default secondary label size
@@ -52,6 +56,16 @@ export const t = {
     stat:   '22px',   // stat-card numbers
     statLg: '24px',   // larger stat-card numbers
     hero:   '28px',   // largest number displays
+  },
+  // weights. Numbers, not strings: both work in React, and the codebase had
+  // both spellings of the same weight ('600' and 600) sitting next to each
+  // other, which made a grep for one of them lie.
+  fontWeight: {
+    normal:   400,
+    medium:   500,   // de-emphasised labels
+    semibold: 600,   // the default for anything emphasised
+    bold:     700,   // headings, stat values
+    heavy:    800,   // the lead-time readout, and nothing else
   },
   // subtle hover lift for interactive elements that don't have a bespoke
   // hover treatment — merge into a style object on mouse-enter.

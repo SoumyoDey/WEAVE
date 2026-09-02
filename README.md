@@ -15,7 +15,7 @@ The main map view for real-time forecast exploration. Controls live in a single 
 - **IDW interpolation** — Smooth spatial field rendering via inverse-distance weighting
 - **Wind overlays** — Arrow glyphs and animated streamlines
 - **Timeline** — Transport controls (step/play/pause), a scrubber from +0 h to +360 h (15 days), and a persistent valid-time + lead-time readout
-- **Spatial Metric overlay (MetricPanel)** — Live per-grid-point dot overlay for any of 10 verification metrics with configurable threshold and legend
+- **Spatial Metric overlay (MetricPanel)** — Live per-grid-point dot overlay for any of 11 verification metrics with configurable threshold and legend
 - **Onboarding tour** — First-run 3-step walkthrough (pick data → read the map → explore uncertainty), replayable any time from the About modal
 - **Accessibility** — Viridis (colorblind-safe, perceptually uniform) is the default colormap; keyboard-operable controls, visible focus rings, and `prefers-reduced-motion` support throughout
 - **Responsive** — Sidebar and tab bar reflow to a mobile-friendly layout below ~760px wide
@@ -42,8 +42,9 @@ Deep-dive analysis for a clicked point or a drawn region, with plain-language re
 | Section | Description |
 |---------|-------------|
 | **Cone of Uncertainty** | Ensemble mean ± 1σ / ± 2σ (or empirical P10–P90) shaded area chart across the full lead-time range |
-| **Spread-Skill Analysis** | Per-lead-time SSR bar chart, spread vs. \|error\| comparison chart, mean SSR and Pearson correlation badges, and a plain-language calibration readout (severely overconfident → overconfident → well calibrated → underconfident → severely underconfident) |
-| **Verification Metrics** | Run CSI, POD, FAR, FBI, Brier Score, and Composite Confidence at a configurable precipitation threshold and hour range; point or region sub-mode with charts |
+| **Spread-Skill Analysis** | Per-lead-time SSR bar chart, spread vs. \|error\| comparison chart, aggregated-SSR and Pearson-correlation badges, and a plain-language calibration readout (severely overconfident → overconfident → well calibrated → underconfident → severely underconfident) |
+| **Accuracy vs observations** | Bias, MAE, RMSE and CRPS at the clicked cell, pooled over the verified lead times. Same request and the same matched cases as the spread numbers above, so the two rows cannot disagree — and the same values the Comparison point panel reports for that cell |
+| **Verification Metrics** | Run CSI, POD, FAR, FBI, Brier Score, FSS and Composite Confidence at a configurable threshold and hour range; a "Score over: This cell | Drawn region" control chooses the scoring area. A **Scored area** control widens the box so FSS has a neighbourhood to work with, while the contingency table keeps reading the centre cell only — so the point metrics do not move |
 
 #### 🗺 Region Mode
 Computes all 10 spatial metrics in parallel for a drawn bounding box and renders each as a server-side Cartopy/Matplotlib PNG map. Controls: hour range, categorical threshold. Each card has individual ⬇ (download) and share buttons.
@@ -57,33 +58,66 @@ Computes all 10 spatial metrics in parallel for a drawn bounding box and renders
 ---
 
 ### ⚖️ Comparison Tab
-Side-by-side multi-model verification at a point or region. Location, model selection, and lead-time range sit in a responsive grid (side by side on wide screens, stacked on narrow ones).
+Side-by-side multi-model verification, with a **Point | Region** toggle. Location, model selection, and lead-time range sit in a responsive grid (side by side on wide screens, stacked on narrow ones).
 
-- **Time-series comparison** — Ensemble mean (± σ envelope) per model on a shared axis, with a friendly "Normalise" toggle when models report at very different magnitudes
-- **Skill score comparison** — MAE and RMSE per model per lead time as grouped bar/line charts
-- **Spatial agreement** — Per-grid-point agreement fraction map across selected models (requires ≥ 2 models)
-- Accumulation-period normalization (AIFS ÷ 6, GEFS ÷ 3, UKMO ÷ 1 → mm/h) applied before all cross-model comparisons
+#### 📍 Point Mode
+| Section | Description |
+|---------|-------------|
+| **Time series** | Ensemble mean (± σ envelope) per model on a shared axis, with a "Normalise" toggle when models report at very different magnitudes |
+| **Skill over lead time** | Bias, MAE, RMSE, CRPS and SSR per model per lead time, plus aggregate cards |
+| **Categorical skill** | CSI / POD / FAR / FSS per model at a configurable threshold, over a verification box whose size is set independently of the FSS neighbourhood |
+
+#### 🗺 Region Mode
+| Section | Description |
+|---------|-------------|
+| **Region metrics** | All 11 metrics per model over a drawn bbox, as grouped bars — pooled over samples, not averaged over per-cell ratios |
+| **Spatial small-multiples** | One Cartopy map per model for a chosen metric, on a shared colour scale so the panels are directly comparable |
+| **A − B difference map** | Per-cell difference between two models on a diverging scale centred at zero; swapping A/B flips sign and colour, leaving magnitude intact |
+| **Spatial agreement** | Per-grid-point agreement fraction across selected models (requires ≥ 2 models) |
+
+Both modes show a **scored-area badge** stating the cells and neighbourhood a number was computed over, because "point" means a box rather than a single cell.
+
+#### Verification conventions
+These matter for reading any cross-model number, and are the subject of `METRICS_AUDIT.md`:
+
+- **Everything is compared in mm/h.** The three models do not share a record convention — AIFS stores a running total since initialisation, GEFS alternates 3 h and 6 h accumulation buckets, UKMO is already an hourly rate — so each is converted with its own semantics rather than one divisor. AIFS and GEFS were additionally pre-scaled by the JSON export, which the metric layer accounts for; `/api/health` verifies that assumption against the loaded data and reports a mismatch.
+- **Every model is scored over a common 6-hour window.** A threshold only asks one question if the window means one thing: a 1 h mean keeps peaks a 6 h mean averages away, so an hourly model would otherwise cross a high bar more often for no reason but its cadence. Shorter records are combined only when they tile the window exactly.
+- **Observations are averaged over the same window a forecast record spans**, and a partially observed window is rejected rather than averaged — so lead times past the end of the observation record return no score instead of a misleading one.
+- **FSS needs more than one cell.** With a single cell an event fraction can only be 0 or 1, so FSS degenerates into CSI; it is reported as `null` and the UI says why.
 
 ---
 
 ## Spatial Verification Metrics
 
-All metrics are computed from `regridded_forecast` + `regridded_observation` tables and returned as `{lat, lon, value}` point lists, then rendered server-side by Cartopy.
+Metrics are returned as `{lat, lon, value}` point lists on the shared 0.5° grid and rendered server-side by Cartopy. Truth is always `regridded_observation`, averaged over the window each forecast record spans.
 
-| Key | Full name | Direction |
-|-----|-----------|-----------|
-| `ssr_agg` | Spread-Skill Ratio (time-aggregated) | Ideal ≈ 1 |
-| `correlation` | Spread-Skill Correlation | Higher = better |
-| `bias` | Bias / Mean Error | Ideal = 0 |
-| `mae` | Mean Absolute Error | Lower = better |
-| `rmse` | Root Mean Square Error | Lower = better |
-| `crps` | Continuous Ranked Probability Score | Lower = better |
-| `csi` | Critical Success Index | Higher = better |
-| `pod` | Probability of Detection | Higher = better |
-| `far` | False Alarm Ratio | Lower = better |
-| `brier` | Brier Score | Lower = better |
+Two forecast sources, by whether the metric needs the ensemble spread:
 
-> **Note:** `ssr` (single lead-time SSR) is also registered for use in the MetricPanel live overlay. Region mode uses `ssr_agg`, which aggregates across all verified lead times using the regridded tables.
+- **Spread-dependent** (`ssr`, `ssr_agg`, `correlation`, and the point panels) read `regridded_forecast_member` and pool the members in Python. A cumulative model's increment spread cannot be recovered from stored totals — the approximation √(σ(h)² − σ(h−p)²) assumes independent increments and goes negative for ~13% of AIFS records — and re-binning onto the common verification window discards the spread outright, which left hourly models with no spread-dependent scores at all. Differencing each member first is exact and fixes both.
+- **Everything else** reads `regridded_forecast_ens` (ensemble mean and spread over the regridded members, sample `ddof=1`), which is enough when only the mean is needed.
+
+| Key | Full name | Direction | Map? |
+|-----|-----------|-----------|------|
+| `ssr` | Spread-Skill Ratio (single lead time) | Ideal ≈ 1 | ✓ |
+| `ssr_agg` | Spread-Skill Ratio (time-aggregated) | Ideal ≈ 1 | ✓ |
+| `correlation` | Spread-Skill Correlation | Higher = better | ✓ |
+| `bias` | Bias / Mean Error | Ideal = 0 | ✓ |
+| `mae` | Mean Absolute Error | Lower = better | ✓ |
+| `rmse` | Root Mean Square Error | Lower = better | ✓ |
+| `crps` | Continuous Ranked Probability Score | Lower = better | ✓ |
+| `csi` | Critical Success Index | Higher = better | ✓ |
+| `pod` | Probability of Detection | Higher = better | ✓ |
+| `far` | False Alarm Ratio | Lower = better | ✓ |
+| `brier` | Brier Score | Lower = better | ✓ |
+| `fss` | Fractions Skill Score | Higher = better | **no** |
+| `fbi` | Frequency Bias Index | Ideal = 1 | no |
+| `composite_confidence` | Weighted CSI/POD/FAR blend | Higher = better | no |
+
+> **`fss` has no map, on purpose.** It compares the *fraction* of exceedances in a neighbourhood against the observed fraction, so its value belongs to a whole field at a lead time rather than to a cell; drawing it per cell would map a number that is not a property of that cell. It is reported as a region number in both tabs and mapped in neither. In Analysis it arrives through the categorical panel rather than the region metric explorer, which is why it can look absent there.
+
+> **`fbi` and `composite_confidence` are Analysis-only.** No reason for that was recorded and it looks incidental; both are ordinary per-model scores. Worth noting before adding them to Comparison: a composite's weights are a judgement call, so ranking models by it is a different kind of claim from ranking them by CSI. See `CONSISTENCY_AUDIT.md` 1d.
+
+> **`ssr` vs `ssr_agg`:** `ssr` scores one lead time and drives the MetricPanel live overlay; region and point summaries use `ssr_agg`, which pools as **√(mean(σ²) / mean(ε²))** across verified lead times — deliberately *not* the mean of the per-case ratios, since E[X/Y] ≠ E[X]/E[Y] and one near-zero error drags a mean to the clamp. Note the square root: both are reported as spread over error (σ/RMSE), not as a variance ratio, because the calibration bands the colourbar and the UI use are the σ/RMSE ones (`METRICS_AUDIT.md` finding 7).
 
 ---
 
@@ -144,12 +178,20 @@ WEAVE_v3/
 │       └── geoUtils.js
 └── Data/
     ├── flask_api.py              # Flask REST API (all endpoints)
+    ├── metrics.py                # The science, as pure functions — units, windows, scores
     ├── schema.sql                # PostgreSQL schema
     ├── add_indexes.sql           # Index migrations
     ├── requirements.txt          # Python dependencies
+    ├── requirements-dev.txt      # Test-only dependencies
     ├── load_to_postgres.py       # Forecast data ingestion
     ├── load_wind.py              # Wind data ingestion
-    └── load_gefs_ukmo_wind.py    # GEFS/UKMO wind ingestion
+    ├── load_gefs_ukmo_wind.py    # GEFS/UKMO wind ingestion
+    ├── regrid_members.py         # Per-member regrid → regridded_forecast_ens / _member
+    ├── conftest.py               # Test setup: pool stub + fixture-database fixtures
+    ├── fixture_db.py             # Builds a throwaway PostgreSQL DB with a known answer
+    ├── test_metrics.py           # The science, against golden vectors (no DB)
+    ├── test_endpoints.py         # Request validation + response contract (fake cursor)
+    └── test_db_endpoints.py      # The endpoints against real SQL (fixture database)
 ```
 
 ---
@@ -165,6 +207,7 @@ WEAVE_v3/
 | `GET` | `/api/spread-skill` | Point-level SSR + correlation — `?model=&variable=&lat=&lon=` |
 | `GET` | `/api/models` | List available models |
 | `GET` | `/api/variables` | List available variables |
+| `GET` | `/api/observation-coverage` | How far the truth reaches — `?model=&variable=` → `{init_time, obs_end, record_end_lead_hours, last_verifiable_hour, window_hours}` |
 | `GET` | `/api/health` | Health check |
 
 ### Spatial metrics
@@ -183,7 +226,10 @@ WEAVE_v3/
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/compare/timeseries` | Ensemble mean/spread per model at a point — `{models, lat, lon, hour_min, hour_max, variable}` |
-| `POST` | `/api/compare/skill` | MAE/RMSE per model per lead time — `{models, lat, lon, hour_min, hour_max, variable}` |
+| `POST` | `/api/compare/skill` | Bias/MAE/RMSE/CRPS/SSR per model per lead time — `{models, lat, lon, hour_min, hour_max, variable}` |
+| `POST` | `/api/compare/categorical` | CSI/POD/FAR/FSS per model over a verification box — `{models, lat, lon, hour_min, hour_max, variable, threshold_mm_6h \| threshold_ms, box_cells, fss_window}` |
+| `POST` | `/api/compare/region-metrics` | All region metrics per model over a bbox — `{models, variable, min_lat, max_lat, min_lon, max_lon, hour_min, hour_max, metrics[], threshold_mm_6h \| threshold_ms, fss_window}` |
+| `POST` | `/api/compare/spatial-diff` | Per-cell A − B difference map for one metric — `{model_a, model_b, metric, variable, bbox, hour_min, hour_max, threshold}` |
 | `POST` | `/api/compare/spatial-agreement` | Model agreement fraction per grid point — `{models, min_lat, max_lat, min_lon, max_lon, hour, variable}` |
 
 ### Robustness
@@ -208,8 +254,11 @@ npm install
 npm start
 
 # Production build
-CI=false npm run build
+npm run build
 ```
+
+The build is warning-clean, so it needs no `CI=false` escape hatch; CI compiles it with
+`CI=true`, where react-scripts treats warnings as errors.
 
 ### Flask API
 
@@ -220,6 +269,105 @@ cd Data
 ```
 
 The API runs at `http://localhost:5000`. If port 5000 is occupied on macOS, disable **AirPlay Receiver** in System Settings → General → AirDrop & Handoff. Local dev enables the interactive debugger via `FLASK_DEBUG=true` in `Data/.env`; leave it unset (or `false`) for anything beyond local dev, since the debugger allows remote code execution.
+
+### Tests
+
+```bash
+cd Data
+pip install -r requirements.txt -r requirements-dev.txt
+python -m pytest -q                                    # everything
+python -m pytest -q --cov=flask_api --cov-report=term-missing
+```
+
+Three layers, deliberately separate:
+
+| File | What it covers | Database |
+|---|---|---|
+| `test_metrics.py` | The science as pure functions — unit conversions, verification windows, every score, against golden vectors | none |
+| `test_endpoints.py` | Request validation and the response keys the React components read, driven by a query-routing fake cursor | none |
+| `test_db_endpoints.py` | The endpoints against real SQL: joins, parameter order, `BETWEEN` boundaries, `GROUP BY`, and the Cartopy renders | a throwaway one, built by `fixture_db.py` |
+
+The third layer exists because a fake cursor returns whatever the test hands it, so it can never disagree with the SQL. `fixture_db.py` creates `weave_fixture_test`, loads the real schema, and seeds one 5×5 patch of grid whose answer is known by construction — **the same true field given to all three models in each one's own storage convention**, so any regression in the unit or window layer breaks exactly one model and the test names it. Read that module's docstring before changing an expected number; every one of them is derived there.
+
+Those tests skip themselves when PostgreSQL is unreachable (or with `WEAVE_SKIP_DB_TESTS=1`), so the suite still runs anywhere.
+
+### Frontend tests
+
+```bash
+npm test                  # Jest + Testing Library (jsdom), 128 tests
+npm run test:e2e          # Playwright, real Chromium — needs neither API nor DB
+npm run test:e2e:headed   # same, but watch it drive the browser
+npm run test:e2e:report   # open the HTML report after a failing run
+```
+
+`npm run test:e2e` starts its own dev server (or reuses one already on :3000) and
+needs no Flask API and no PostgreSQL — every assertion in it is client-side map
+behaviour, and the app degrades to "no forecast overlay" without a backend.
+
+| Layer | What it covers | Needs a browser |
+|---|---|---|
+| `src/**/*.test.js` | Component rendering, props, accessible names, pure helpers | no (jsdom) |
+| `e2e/*.spec.js` | Leaflet map interaction: point clicks, rectangle drags, and how the two interfere | yes (Chromium) |
+
+The e2e layer exists because jsdom has no layout, so Leaflet can never produce a
+real coordinate there and map input cannot be exercised at all. `e2e/mapSelection.spec.js`
+pins a bug that lived exactly in that blind spot: finishing a rectangle drag used to
+move the user's clicked point to the box's far corner, because the `click` Leaflet
+synthesises from the drag's mouseup arrives *after* React has already cleared
+`selectionMode`, defeating the guard in `App.js`. It presented as the Analysis tab
+scoring a point nobody chose — a data bug to look at, an input bug in fact. Removing
+the `suppressMapClickRef` lines in `App.js` fails two of those six specs and leaves
+the other four green.
+
+### Continuous integration
+
+`.github/workflows/tests.yml` runs all three layers on every pull request, and on
+pushes to `main`. Feature branches are deliberately absent from the push trigger —
+an open PR already covers them, and listing both ran every commit twice.
+
+| Job | Runs | Needs |
+|---|---|---|
+| `frontend · jest` | `npm test` | Node 24 |
+| `frontend · playwright` | `npm run test:e2e` | Node 24 + Chromium (cached) |
+| `frontend · build` | `npm run build` | Node 24 |
+| `backend · pytest` | `python -m pytest` | Python 3.13, GEOS/PROJ, PostgreSQL 15 service |
+
+The build job exists because nothing else compiles the production bundle — Jest and
+Playwright both exercise the dev pipeline. It runs with `CI=true` (which GitHub sets),
+so react-scripts treats webpack warnings as errors. The build is warning-clean today,
+and keeping the job strict is what stops that decaying.
+
+One thing there is load-bearing rather than incidental: **the backend job asserts
+PostgreSQL answers before running pytest.** `test_db_endpoints.py` skips itself when the
+database is unreachable, so a broken service container would otherwise quietly shrink the
+run to a green tick over untested SQL.
+
+### Why `yaml` is a devDependency
+
+**Do not remove it because nothing imports it.** No application code uses `yaml`; it is
+there to pin a transitive peer dependency, and dropping it breaks `npm ci` on npm 10.
+
+`react-scripts` depends on `tailwindcss` (inert here — there is no `tailwind.config.js`),
+which resolves `postcss-load-config@6`, which declares `yaml@^2.4.2` as an *optional* peer.
+npm 10 and npm 11 disagree about whether to materialise that optional peer: npm 11 omits it,
+so a lockfile written by npm 11 has no `yaml@2`, and npm 10 then refuses the tree with
+`Missing: yaml@2.9.0 from lock file`. Regenerating the lockfile under npm 10 fixes it only
+until the next `npm install` on npm 11, which strips the entry straight back out.
+
+Declaring `yaml` explicitly makes it a hard requirement no npm version prunes. The four
+cases that matter — `npm ci` and `npm install` under both npm 10 and npm 11 — all now
+succeed and leave the lockfile byte-identical. Overriding `postcss-load-config` down to v4
+was tried first and rejected: npm registers the override but installs v6 regardless and
+marks it `invalid`.
+
+The `yaml@1.x` consumers (`cssnano`, `cosmiconfig`, `fork-ts-checker-webpack-plugin`) get
+their own nested copies, so the production build and the CSS minifier are unaffected.
+
+To inspect the fixture by hand:
+
+```bash
+python fixture_db.py && psql -d weave_fixture_test
+```
 
 ---
 

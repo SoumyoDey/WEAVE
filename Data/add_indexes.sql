@@ -5,16 +5,20 @@
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_forecast_data_run_var_latlon
     ON forecast_data(run_id, variable_id, latitude, longitude);
 
--- observation_data: time + spatial lookups used by SSR / correlation
+-- observation_data: time + spatial lookups. These served the SSR / correlation
+-- paths, which now read regridded_observation instead, so the index no longer
+-- has a query behind it. Kept because the table is kept (see schema.sql) and a
+-- fresh install should not silently differ from the loaded database.
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_observation_data_time_latlon
     ON observation_data(obs_time, latitude, longitude);
 
--- regridded_forecast: run_id is now used directly (correlated subquery removed)
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_regridded_forecast_run_var_hour
-    ON regridded_forecast(run_id, variable_name, forecast_hour);
-
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_regridded_forecast_run_latlon
-    ON regridded_forecast(run_id, latitude, longitude);
+-- The two idx_rgf_* indexes on `regridded_forecast` were removed from this file
+-- along with the table's CREATE (see schema.sql). An existing database still
+-- holds table and indexes under the name `regridded_forecast_deprecated`, as of
+-- the 2026-08-27 rename — the indexes came along with it, so a rename back
+-- restores a fully indexed table and this file needs no part in that.
+-- The replacement tables are indexed by `regrid_members.py`'s own INDEXES block,
+-- which runs every time the script does, so nothing is needed for them here.
 
 -- regridded_observation: time + spatial + source lookups
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_regridded_obs_src_time_latlon

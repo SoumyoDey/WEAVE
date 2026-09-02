@@ -51,8 +51,11 @@ export const drawUncertaintyBoxes = async (
 
     const meanVals = Object.values(meanLookup).filter(v => !isNaN(v) && v > 0);
     const stdVals  = stdData.map(val).filter(v => !isNaN(v) && v >= 0);
-    const meanMax  = Math.max(...meanVals) || 1;
-    const stdMax   = Math.max(...stdVals)  || 1;
+    // Single-pass max — avoids spreading a large point array into Math.max
+    // (RangeError on fine grids), matching idwLayer / loadDataForHour.
+    const maxOf = (a) => a.reduce((m, v) => (v > m ? v : m), -Infinity);
+    const meanMax  = maxOf(meanVals) || 1;
+    const stdMax   = maxOf(stdVals)  || 1;
     onRanges?.({ meanMax, stdMax });
 
     const vsupColor = (meanVal, stdVal) => {

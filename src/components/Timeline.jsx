@@ -11,16 +11,44 @@ import { t } from '../theme';
  *   selectedHour     {number}
  *   setSelectedHour  {fn}
  *   selectedVariable {string}
+ *   obsCoverage      {object|null} — /api/observation-coverage, or null while
+ *                                    loading / if it failed
  *   isNarrow         {boolean} — compact, stacked layout for narrow viewports
  */
-export function Timeline({ currentModel, selectedHour, setSelectedHour, isNarrow }) {
+export function Timeline({ currentModel, selectedHour, setSelectedHour, obsCoverage, isNarrow }) {
   const hours      = currentModel.hours;
   const currentIdx = hours.indexOf(selectedHour);
   const maxIdx     = hours.length - 1;
   const pct        = maxIdx > 0 ? (currentIdx / maxIdx) * 100 : 0;
   const maxHour    = hours[maxIdx] || 360;
 
-  const baseDate  = new Date('2025-09-08T00:00:00Z');
+  // Verification stops where the observation record does. Past that point every
+  // scored panel is correctly empty, which used to be indistinguishable from a
+  // bug — so the boundary is drawn on the axis the lead time is chosen on.
+  const verifiedTo   = obsCoverage?.last_verifiable_hour ?? null;
+  const verifiedPct  = verifiedTo != null && maxHour > 0
+    ? Math.min(100, (verifiedTo / maxHour) * 100) : null;
+  const pastVerified = verifiedTo != null && selectedHour > verifiedTo;
+
+  // Observations can outlast the last hour that can be *scored*: precipitation
+  // needs its whole 6 h window observed, so a record ending at +19.5h verifies
+  // only to +18h. Wind is instantaneous and the two coincide. Saying "no
+  // observations beyond +18h" was the wrong statement in the first case and the
+  // window clause is meaningless in the second, so the two are worded apart.
+  const recordEnd    = obsCoverage?.record_end_lead_hours ?? null;
+  const verifiedNote =
+    recordEnd == null
+      ? `Nothing to verify against beyond +${verifiedTo}h`
+      : recordEnd > verifiedTo
+        ? `Nothing to verify against beyond +${verifiedTo}h — observations run to `
+          + `+${recordEnd}h, and a score needs its whole window observed`
+        : `Nothing to verify against beyond +${verifiedTo}h — the observation record ends there`;
+
+  // The initialisation time comes from the run, not a hard-coded date — the
+  // latter silently lied the moment a different run was loaded.
+  const baseDate  = obsCoverage?.init_time
+    ? new Date(`${obsCoverage.init_time}Z`)
+    : new Date('2025-09-08T00:00:00Z');
   const validDate = new Date(baseDate.getTime() + selectedHour * 3600000);
   const validStr  = validDate.toLocaleString('en-US', {
     weekday: 'short', month: 'short', day: 'numeric',
@@ -99,7 +127,27 @@ export function Timeline({ currentModel, selectedHour, setSelectedHour, isNarrow
               background: `linear-gradient(to right, ${t.accent} 0%, ${t.accent} ${pct}%, ${t.borderStrong} ${pct}%, ${t.borderStrong} 100%)`,
             }}
           />
+          {/* Where verification runs out. The track past this point is dimmed and
+              hatched, so "no score here" reads as a property of the data rather
+              than a failure of the app. */}
+          {verifiedPct != null && verifiedPct < 100 && (
+            <div style={{
+              position: 'absolute', top: 0, left: `${verifiedPct}%`, right: 0,
+              height: '4px', borderRadius: '0 2px 2px 0', pointerEvents: 'none',
+              background: 'repeating-linear-gradient(45deg, rgba(243,156,18,0.30) 0 3px, rgba(243,156,18,0.08) 3px 6px)',
+            }} title={verifiedNote} />
+          )}
           <div style={{ position: 'absolute', top: '10px', left: 0, right: 0, pointerEvents: 'none' }}>
+            {verifiedPct != null && verifiedPct < 100 && (
+              <div style={{ position: 'absolute', left: `${verifiedPct}%`, top: '-11px', display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                <div style={{ width: '1px', height: '17px', background: 'rgba(243,156,18,0.75)' }} />
+                {!isNarrow && (
+                  <span style={{ fontSize: t.fontSize.nano, color: 'rgba(243,156,18,0.8)', whiteSpace: 'nowrap', paddingLeft: '3px', marginTop: '-2px' }}>
+                    verified to +{verifiedTo}h
+                  </span>
+                )}
+              </div>
+            )}
             {dayTicks.map(h => {
               const pos    = maxHour > 0 ? (h / maxHour) * 100 : 0;
               const dayNum = h / 24;
@@ -110,7 +158,7 @@ export function Timeline({ currentModel, selectedHour, setSelectedHour, isNarrow
                 <div key={h} style={{ position: 'absolute', left: `${pos}%`, transform: 'translateX(-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
                   <div style={{ width: '1px', height: showLabel ? '6px' : '4px', background: showLabel ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.18)' }} />
                   {showLabel && (
-                    <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)', whiteSpace: 'nowrap' }}>
+                    <span style={{ fontSize: t.fontSize.nano, color: 'rgba(255,255,255,0.3)', whiteSpace: 'nowrap' }}>
                       {h === 0 ? 'Now' : `+${dayNum}d`}
                     </span>
                   )}
@@ -127,12 +175,20 @@ export function Timeline({ currentModel, selectedHour, setSelectedHour, isNarrow
           marginLeft: isNarrow ? 'auto' : 0,
         }}>
           <div>
-            <span style={{ fontSize: isNarrow ? '14px' : '17px', fontWeight: '800', color: 'white', letterSpacing: '-0.5px' }}>+{selectedHour}h</span>
-            <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.38)', marginLeft: '5px' }}>({(selectedHour / 24).toFixed(1)}d)</span>
+            <span style={{ fontSize: isNarrow ? t.fontSize.md : t.fontSize.lg, fontWeight: t.fontWeight.heavy, color: 'white', letterSpacing: '-0.5px' }}>+{selectedHour}h</span>
+            <span style={{ fontSize: t.fontSize.xs, color: 'rgba(255,255,255,0.38)', marginLeft: '5px' }}>({(selectedHour / 24).toFixed(1)}d)</span>
           </div>
           {!isNarrow && (
-            <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.5)' }}>
-              <span style={{ color: 'rgba(255,255,255,0.28)', fontSize: '9px', letterSpacing: '0.05em' }}>Valid </span>{validStr}
+            <div style={{ fontSize: t.fontSize.xs, color: 'rgba(255,255,255,0.5)' }}>
+              <span style={{ color: 'rgba(255,255,255,0.28)', fontSize: t.fontSize.nano, letterSpacing: '0.05em' }}>Valid </span>{validStr}
+            </div>
+          )}
+          {/* Say it at the lead time the user has actually chosen, not only on the
+              axis — this is the readout they are looking at when a panel is empty. */}
+          {pastVerified && (
+            <div style={{ fontSize: t.fontSize.micro, color: '#f39c12', marginTop: '1px' }}
+                 title={`Observations for ${obsCoverage.variable} end ${obsCoverage.record_end_lead_hours}h after initialisation`}>
+              beyond verification (+{verifiedTo}h)
             </div>
           )}
         </div>
@@ -141,9 +197,9 @@ export function Timeline({ currentModel, selectedHour, setSelectedHour, isNarrow
       {/* Copyright footer */}
       {!isNarrow && (
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', marginLeft: '-20px', marginRight: '-20px', padding: '3px 20px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', marginTop: '6px' }}>
-          <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.2)', letterSpacing: '0.03em' }}>© {new Date().getFullYear()} Northeastern University</span>
-          <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.1)' }}>·</span>
-          <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.15)', letterSpacing: '0.05em', fontWeight: 600 }}>WEAVE</span>
+          <span style={{ fontSize: t.fontSize.nano, color: 'rgba(255,255,255,0.2)', letterSpacing: '0.03em' }}>© {new Date().getFullYear()} Northeastern University</span>
+          <span style={{ fontSize: t.fontSize.nano, color: 'rgba(255,255,255,0.1)' }}>·</span>
+          <span style={{ fontSize: t.fontSize.nano, color: 'rgba(255,255,255,0.15)', letterSpacing: '0.05em', fontWeight: t.fontWeight.semibold }}>WEAVE</span>
         </div>
       )}
     </div>
