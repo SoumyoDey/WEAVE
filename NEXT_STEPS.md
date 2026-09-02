@@ -1,11 +1,13 @@
 # Next steps
 
-State as of 2026-09-02. Branch `p0-reliability`, PR #2 on `SoumyoDey/WEAVE`.
+State as of 2026-09-02. **PR #2 is merged** (`49ead8f`); `main` is the live
+branch and carries everything below.
 
-**Read this, then `REVIEW_GUIDE.md`.** Items 3, 3b and 4 below are done, all seven
+**Read this first.** Items 1, 3, 3b, 4, 7 and 8 below are done, all seven
 defects the fixture layer found are fixed, and **the consistency audit is closed —
-all six phases** (`CONSISTENCY_AUDIT.md`). **The only thing left that needs someone
-other than whoever is reading this is the review — item 1.**
+all six phases** (`CONSISTENCY_AUDIT.md`). **Nothing is blocked on another person
+any more**; what is left is work, a decision that is yours, or data that is not
+in this repository.
 
 **Changes the rest of this document assumes**, newest first:
 
@@ -22,17 +24,17 @@ other than whoever is reading this is the review — item 1.**
 - **2026-08-27 — the target grid is a constant**, so `regrid_members.py` can run
   on a fresh database for the first time (§2).
 - **2026-08-27 — `regridded_forecast` was renamed to
-  `regridded_forecast_deprecated`** on `weave_weather`, which means `main`,
-  `WEAVE_v2` and `WEAVE_presentation` fail against that database until it is
-  renamed back. If you check out `main` and hit a missing-relation error, that is
-  this, not a bug.
+  `regridded_forecast_deprecated`** on `weave_weather`. `main` was broken by this
+  and the merge fixed it; **`WEAVE_v2` and `WEAVE_presentation` are still broken**
+  and no version of them is not. If one of those errors about a missing relation,
+  that is this, not a bug. And restart any long-running server after a schema
+  change — see the trap in §1, which cost an hour.
 
 ## Where things stand
 
-PR #2 is **open and deliberately not merged** — roughly 70 commits and ~13k added
-lines, over half of it tests and documentation. `main` has not moved, so it is a
-clean fast-forward. Exact figures are deliberately not written down here: they go
-stale on every push. Run `git diff --shortstat main...p0-reliability`.
+PR #2 merged on 2026-09-02 as `49ead8f`, all 90 commits preserved — +19,279/−1,802
+across 78 files, over half of it tests and documentation. `main` is now 125
+commits. See §1 for how and why it went in without review.
 
 - **The backend and frontend suites pass with no xfails**, and `metrics.py` and
   `flask_api.py` are both at **100%** statement coverage. `python -m pytest -q` in
@@ -52,8 +54,11 @@ stale on every push. Run `git diff --shortstat main...p0-reliability`.
   previous one — that is the same rule this document applies to the PR size.
   Two branches are excluded with `# pragma: no cover`, each carrying the reason
   it cannot execute — they are dead code, not untested code, and a test asserts
-  the invariant that makes each one dead (`test_last_guards.py`). Removing both
-  pragmas leaves exactly those two lines uncovered and nothing else, which is
+  the invariant that makes each one dead (`test_last_guards.py`). They are
+  **`compare/skill`'s "no observations" warning** and **the region composite's
+  re-weighting when FSS is absent**; the point endpoint's version of that second
+  branch IS reachable and is tested, and only the region one cannot be. Removing
+  both pragmas leaves exactly those two lines uncovered and nothing else, which is
   worth re-checking rather than trusting if the number ever matters.
 - **CI exists and is green.** `.github/workflows/tests.yml`, added 2026-08-24,
   runs four jobs on every PR and on pushes to `main`: jest, playwright against
@@ -63,13 +68,10 @@ stale on every push. Run `git diff --shortstat main...p0-reliability`.
   `test_db_endpoints.py` skips itself when PostgreSQL is unreachable and would
   otherwise return a green tick over untested SQL; and the build job's
   warnings-as-errors is what stops a clean build from quietly decaying.
-- **Still 0 reviews**, but `SoumyoDey` is on `reviewRequests` as of 2026-08-27.
-  Worth knowing why it sat: nobody had ever been *asked*. The PR was not waiting
-  on a slow reviewer, it was waiting on a request that was never sent.
-- The four records, in the order to read them:
-  - `REVIEW_GUIDE.md` — what changed and how to check it. Delete after merge.
-    **Its header counts are stale** (57 commits, +12,111): the branch has moved
-    since. The body is still accurate; only the summary numbers drifted.
+- **It was never reviewed.** The request sat 6 days; before that it sat 3 weeks
+  with nobody having been *asked* at all. Worth knowing which of those two
+  applies before concluding anything about how carefully this was read.
+- The three records, in the order to read them:
   - `METRICS_AUDIT.md` — the metric audit. Read before re-deriving anything.
   - `CONSISTENCY_AUDIT.md` — all six phases, findings classified.
   - `Data/fixture_db.py` docstring — every expected test number, derived.
@@ -100,19 +102,19 @@ stale on every push. Run `git diff --shortstat main...p0-reliability`.
 
 ## If you are picking this up cold
 
-In priority order. Everything here is unstarted; nothing is half-done.
+In priority order. Nothing here is half-done.
 
-1. **Item 1, the review.** Blocked on a person, not on work. `REVIEW_GUIDE.md`
-   exists to make it tractable and lists every change that moves a published
-   number, with before/after values and the test that pins each one.
-2. **Item 2, drop `regridded_forecast`** (245 MB). The code side of *this branch*
-   is done as of 2026-08-27, but **DO NOT RUN THE DROP YET — `main` still reads
-   the table in six places, and so do the `WEAVE_v2` and `WEAVE_presentation`
-   app copies, all three against this same `weave_weather` database.** It is
-   blocked on PR #2 merging, not ready to run. See §2, which twice stated
-   "nothing reads it" and was twice wrong. `observation_data` is *also* unread
-   now, but it is raw ingested data no script in this repo can regenerate —
-   leave it.
+1. **Nothing is blocked on a person any more.** PR #2 is merged (§1). What is
+   left is either work, a decision that is yours, or blocked on data that is not
+   in this repository — and each says which below.
+2. **Item 2, drop `regridded_forecast_deprecated`** (245 MB). `main` no longer
+   reads it, as of the merge, so the remaining consumers are the `WEAVE_v2` and
+   `WEAVE_presentation` app copies — both pointed at this same `weave_weather`
+   database, and both already failing against it since the rename. Dropping is
+   safe for this repo and final for those two, so it is a decision about whether
+   they are still wanted rather than a cleanup. See §2, which twice claimed
+   "nothing reads it" and was twice wrong. `observation_data` is *also* unread by
+   the API, but it is raw ingested data no script here can regenerate — leave it.
 3. **The `observation_data` ingest — the largest real piece of work left**, and
    the only thing now standing between a fresh clone and a working *verified*
    deployment. Nothing in this repository writes that table; the native point
@@ -172,8 +174,8 @@ are old, the last two came out of phase 6.
 ### Traps
 
 - **Never trust a summary of the numbers — re-measure.** Writing
-  `REVIEW_GUIDE.md` found a live defect (`fss` alone returned nothing) purely by
-  re-running the figures. Two of my own conclusions in these documents were wrong
+  the (since deleted) reviewer's guide found a live defect (`fss` alone returned
+  nothing) purely by re-running the figures. Two of my own conclusions in these documents were wrong
   and are marked as retracted; do not quietly "clean up" a retraction.
 - **`regridded_forecast_ens.std_dev` is a true ensemble spread** (nanstd over
   regridded members, ddof=1). The "pooled member x native-cell, ~23% high" story
@@ -210,23 +212,38 @@ are old, the last two came out of phase 6.
 
 ---
 
-## 1. Merge PR #2
+## 1. Merge PR #2 — MERGED 2026-09-02
 
-**Blocked only on review, and this is now the only item on this page that needs
-someone other than whoever is reading it.**
+Merge commit `49ead8f`, with **all 90 commits preserved** (`--merge`, not
+`--squash`): the individual messages carry most of the reasoning, and several
+record why an approach was abandoned. `main` went from 35 to 125 commits.
 
-`REVIEW_GUIDE.md` exists to make that review tractable: 52% of the diff is tests
-and docs, and the guide lists every change that moves a number the app already
-published, each with its before/after value on the loaded run, the line to read,
-and the test that pins it. Start there, not with the diff.
+**Merged without review**, after the request sat 6 days unacted-on. The merge
+commit body says so, and records the pre-merge SHAs — `main` was `41e9dfa`, head
+`d7c03f0` — so a revert has something to aim at. CI was green on all four checks.
 
-```bash
-gh pr merge 2 --repo SoumyoDey/WEAVE --squash --delete-branch
-```
+`REVIEW_GUIDE.md` is **deleted**, as it always said it should be after merge. It
+was written to make one review tractable and its header figures were stale within
+days. Nothing durable was lost: everything in it was either already recorded
+elsewhere or is now, and the one genuinely unique item — which two branches carry
+`# pragma: no cover` — is in the list under "Where things stand" above.
 
-`--squash` given 57 commits, many iterating on one finding. Use `--merge` instead
-if the individual messages are worth keeping — they carry most of the reasoning,
-and several record why an approach was abandoned.
+Two side effects of merging worth knowing:
+
+- **It unbroke `main`.** `main` had been failing against `weave_weather` since the
+  2026-08-27 rename, because it read `regridded_forecast`. It no longer does.
+- **`WEAVE_v2` and `WEAVE_presentation` are still broken** the same way, and
+  merging did nothing for them. They read the renamed table and no version of
+  them does not. Retire them, repoint them, or rename the table back.
+
+**And the trap this cost an hour to find.** A long-running Flask process started
+2026-08-26 was still holding port 5000 with pre-rename code *loaded in memory*,
+returning 500 from `/api/spatial-metric` and 404 from `/api/runs` while the code
+on disk was correct. Checking a running server's `cwd` or its files tells you
+nothing about what it imported at startup: **restart every server after a schema
+change.** A stale webpack cache did the same thing to the dev server after a
+branch checkout swapped 78 files under it — `rm -rf node_modules/.cache`. In both
+cases the code was fine and only a process disagreed.
 
 ## 2. Drop the superseded table — RENAMED 2026-08-27, drop still pending
 
@@ -485,7 +502,7 @@ now, in `TestFormerDefects` and alongside the behaviour they cover.
    same false warning, since it comes from the member path and needs no pairs
    (fixed with `pairs_needed` at the warning).
 
-   Found while fact-checking `REVIEW_GUIDE.md` — a good argument for writing the
+   Found while fact-checking the reviewer's guide — a good argument for writing the
    numbers down and then re-measuring them. The existing FSS test co-requested
    `mae`, so it passed; the replacement asks for **each metric on its own**. Nine of
    the ten always worked and only the combination was broken, which is the kind of
@@ -762,7 +779,7 @@ to read.
 **The live `regridded_observation` is untouched.** The rebuild is in
 `regridded_observation_rebuilt` so the two can be compared without committing.
 Switching over is a judgement call, because **every published number in
-`METRICS_AUDIT.md` and `REVIEW_GUIDE.md` was computed against the current truth
+`METRICS_AUDIT.md` was computed against the current truth
 field**, and the table above says they would move — wind especially, where the
 current field is barely smoothed on half-degree cells.
 
