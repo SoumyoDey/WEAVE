@@ -26,6 +26,26 @@ REAL_THREADED_POOL = psycopg2.pool.ThreadedConnectionPool
 psycopg2.pool.ThreadedConnectionPool = MagicMock()
 
 
+# ── Caching off by default ─────────────────────────────────────────────────────
+# The metric endpoints cache deterministic results in a FileSystemCache that
+# survives a restart, and the key cannot distinguish one test's fake database
+# from another's: two tests that issue the same request shape against different
+# seeded data would otherwise get the first one's answer. That is not a flaw in
+# the cache — in production there is one database — but it makes tests share
+# state through the filesystem, which is exactly the kind of coupling that makes
+# a suite pass in one order and fail in another.
+#
+# So the cache is disabled for the whole suite. `_cache_get`/`_cache_set` are
+# already no-ops when `cache is None`, so every endpoint runs its real query.
+# The cache's own behaviour is tested explicitly in test_metric_cache.py rather
+# than incidentally here, and the one test that needs a hit monkeypatches
+# `_cache_get` directly.
+@pytest.fixture(autouse=True)
+def _no_metric_cache(monkeypatch):
+    import flask_api
+    monkeypatch.setattr(flask_api, 'cache', None)
+
+
 # ── Fixture database (real PostgreSQL) ────────────────────────────────────────
 
 @pytest.fixture(scope='session')

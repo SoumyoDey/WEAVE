@@ -128,6 +128,113 @@ def _cache_get(key):
         print(f"⚠️  Cache read failed: {_e}")
         return None
 
+def _data_version(cursor):
+    """A short token that changes whenever the loaded forecast data changes.
+
+    The metric endpoints are deterministic — a pure function of the request and
+    the database — so they are safe to cache. The hard part is invalidation, and
+    a TTL alone gets it wrong in both directions: too long and a re-run of
+    `regrid_members.py` serves numbers from the old data, too short and the
+    expensive queries this exists to avoid run anyway.
+
+    So the cache key carries a version derived from `forecast_run_registry`,
+    which records one row per (model, variable, init_time) with the load time,
+    member count and hour range. Reload or regrid anything and `loaded_at` moves,
+    the version changes, and every affected key is orphaned in the same instant —
+    no expiry to wait for and no flush to remember. Stale entries age out under
+    the TTL that is still applied as a backstop.
+
+    Returns 'noreg' when the registry is absent, which is honest rather than
+    silent: on a part-migrated database the version cannot see data changes, so
+    the TTL is doing all the work. Cached per request in `g` — this is read once
+    per endpoint and the query is over nine rows, but not free.
+    """
+    if not has_request_context():
+        return _data_version_uncached(cursor)
+    cached = g.get('data_version')
+    if cached is None:
+        cached = _data_version_uncached(cursor)
+        g.data_version = cached
+    return cached
+
+
+def _data_version_uncached(cursor):
+    try:
+        cursor.execute("SELECT to_regclass('forecast_run_registry') IS NOT NULL AS ok")
+        if not cursor.fetchone()['ok']:
+            return 'noreg'
+        cursor.execute("""
+            SELECT model_name, variable_name, init_time, loaded_at,
+                   n_members, hour_min, hour_max
+            FROM forecast_run_registry
+            ORDER BY model_name, variable_name, init_time
+        """)
+        rows = [tuple(str(v) for v in r.values()) for r in cursor.fetchall()]
+        return hashlib.sha256(repr(rows).encode()).hexdigest()[:12]
+    except Exception as _e:                                   # pragma: no cover
+        # A cache key is not worth failing a request over. An unstable version
+        # only costs cache misses.
+        print(f"⚠️  data version unavailable, caching by TTL alone: {_e}")
+        return 'nover'
+
+
+def _metric_cache_key(prefix, cursor, **parts):
+    """A cache key for a deterministic metric endpoint.
+
+    Everything that changes the answer has to be in here. Two are easy to
+    forget and both were, historically:
+
+    - **`init_time`.** Before the run identity existed there was one run and the
+      question did not arise; with two, a key without it serves one run's numbers
+      for another — the exact silent cross-run error `migrate_init_time.py` was
+      written to remove. Pass it in `parts`.
+    - **the data version**, above, so a reload invalidates rather than waiting.
+
+    Floats are rounded on the way in by the callers rather than here, because how
+    coarse is safe depends on the parameter: a bounding box tolerates 2 dp, a
+    threshold does not.
+    """
+    payload = json.dumps(parts, sort_keys=True, default=str)
+    digest = hashlib.sha256(payload.encode()).hexdigest()[:16]
+    return f"{prefix}:{_data_version(cursor)}:{digest}"
+
+
+# How long a cached metric result may outlive its data version. The version does
+# the real invalidation; this only bounds how long an orphaned entry occupies
+# space, so it can be generous.
+METRIC_CACHE_TTL = int(os.environ.get('METRIC_CACHE_TTL', 6 * 3600))
+
+# The query parameters a spatial metric's answer can depend on. Keying on the
+# whole of `request.args` would let an unrelated parameter — a cache-buster, an
+# analytics tag — fragment the cache into single-use entries; keying on too few
+# would serve one threshold's answer for another. This is the list the dispatch
+# functions actually read, minus the ones already named explicitly in the key.
+SPATIAL_METRIC_CACHE_ARGS = frozenset({
+    'hour', 'hour_min', 'hour_max', 'threshold_mm_6h', 'threshold_ms',
+    'radius', 'member',
+})
+
+
+def _body_cache_key(prefix, cursor, body, fields):
+    """Key a POST metric endpoint on the fields of its body that matter.
+
+    Named fields rather than the whole body, for the same reason the GET version
+    filters `request.args`: an extra key the endpoint ignores would fragment the
+    cache into single-use entries. `models` is sorted, since asking for
+    [AIFS, GEFS] and [GEFS, AIFS] is the same question — the endpoints already
+    sort it internally.
+
+    `init_time` is included whenever the caller sent one. When they did not, the
+    resolution depends on what is loaded, which the data version already covers.
+    """
+    parts = {k: body.get(k) for k in fields if k in body}
+    if isinstance(parts.get('models'), list):
+        parts['models'] = sorted(str(m) for m in parts['models'])
+    if isinstance(parts.get('metrics'), list):
+        parts['metrics'] = sorted(str(m) for m in parts['metrics'])
+    return _metric_cache_key(prefix, cursor, **parts)
+
+
 def _cache_set(key, value, timeout):
     if cache is None:
         return
@@ -1778,15 +1885,23 @@ def get_spread_skill():
         if not run_id:
             return jsonify({'error': f'No data found for model {model_name}'}), 404
 
-        cursor.execute("SELECT initialization_time FROM forecast_runs WHERE run_id = %s", (run_id,))
-        run_row = cursor.fetchone()
-        if not run_row:
-            # get_model_run_id caches per request and the ingest deletes and
-            # reloads runs, so the row can be gone between the two queries.
-            # Unguarded this indexed None and turned a missing run into a 500.
+        # Through the one resolver, like every other run-dependent path. This was
+        # a fourth copy of "the latest run" — the guard below existed because it
+        # read `run_id`'s row in a second query that the ingest could delete
+        # between the two. The resolver has no such window.
+        init_time = _resolve_init_time(cursor, model_name)
+        if init_time is None:
             return jsonify({'error': f'No data found for model {model_name}'}), 404
-        init_time = run_row['initialization_time']
         is_wind   = (variable == 'wind')
+
+        _key = _metric_cache_key(
+            'spread', cursor, model=model_name, variable=variable,
+            init_time=init_time, lat=round(lat, 4), lon=round(lon, 4),
+            radius=radius,
+        )
+        _cached = _cache_get(_key)
+        if _cached is not None:
+            return jsonify(_cached)
 
         # Verification runs on the shared 0.5 degree grid — the same truth path
         # every other scored endpoint uses, so Analysis and Comparison no longer
@@ -1808,7 +1923,7 @@ def get_spread_skill():
 
         print(f"\u2705 Spread-skill: {len(results)} hours matched, "
               f"corr={summary['correlation']} for ({lat},{lon}) at 0.5deg cell {cell}")
-        return jsonify({'hours': results,
+        result = {'hours': results,
                         # `correlation` stays at the top level for the callers that
                         # already read it; `summary` is the same shape
                         # /api/compare/skill returns, so the two point panels can
@@ -1819,7 +1934,9 @@ def get_spread_skill():
                         'units': 'm/s' if is_wind else 'mm/h',
                         'grid': '0.5deg',
                         # The shared-grid cell the ensemble was read from.
-                        'cell': list(cell)})
+                        'cell': list(cell)}
+        _cache_set(_key, result, timeout=METRIC_CACHE_TTL)
+        return jsonify(result)
 
     except RunSelectionError:
         # A 400 about the request, not a server fault: let the
@@ -1869,13 +1986,16 @@ def get_spatial_metric():
         if not run_id:
             return jsonify({'error': f'No data found for model {model_name}'}), 404
 
-        cursor.execute(
-            "SELECT initialization_time FROM forecast_runs WHERE run_id = %s", (run_id,)
-        )
-        run_row = cursor.fetchone()
-        if not run_row:
+        # Resolved through the one resolver, like every other run-dependent path.
+        # This used to read `initialization_time` for `run_id` directly — a third
+        # copy of "the latest run", after the two the init_time migration
+        # removed. It agreed with the rest while one run was loaded and would
+        # have diverged the moment a second arrived: the queries underneath
+        # filter on the *requested* run, so this would have handed them one run's
+        # valid times while they read another's rows.
+        init_time = _resolve_init_time(cursor, model_name)
+        if init_time is None:
             return jsonify({'error': f'No data found for model {model_name}'}), 404
-        init_time = run_row['initialization_time']
 
         cursor.execute(
             "SELECT variable_id FROM variables WHERE variable_name = %s", (var_lookup,)
@@ -1885,6 +2005,25 @@ def get_spatial_metric():
             return jsonify({'error': f'Variable {var_lookup} not found'}), 404
         variable_id = var_row['variable_id']
 
+        # Deterministic: the answer is a pure function of these parameters and
+        # the loaded data, and the loaded data is in the key via the version. The
+        # full-domain requests this serves take 1.0-6.1 s each, and the Analysis
+        # region view fires about ten of them at once.
+        _key = _metric_cache_key(
+            'metric', cursor,
+            metric=metric, model=model_name, variable=variable,
+            init_time=init_time,
+            bbox=[round(min_lat, 4), round(max_lat, 4),
+                  round(min_lon, 4), round(max_lon, 4)],
+            # Only the arguments this metric actually reads, so an unrelated
+            # query parameter cannot fragment the cache.
+            args={k: v for k, v in sorted(request.args.items())
+                  if k in SPATIAL_METRIC_CACHE_ARGS},
+        )
+        _cached = _cache_get(_key)
+        if _cached is not None:
+            return jsonify(_cached)
+
         dispatch = SPATIAL_METRIC_REGISTRY[metric]
         points, extra = dispatch(
             cursor, run_id, variable_id, init_time, request.args,
@@ -1892,7 +2031,10 @@ def get_spatial_metric():
         )
         print(f"✅ Spatial {metric}: {len(points)} pts — {model_name} "
               f"bbox [{min_lat},{max_lat}]×[{min_lon},{max_lon}]")
-        return jsonify({'metric': metric, 'points': points, **extra})
+        result = {'metric': metric, 'points': points, **extra}
+        # Only successes are cached; the error paths above return before this.
+        _cache_set(_key, result, timeout=METRIC_CACHE_TTL)
+        return jsonify(result)
 
     except RunSelectionError:
         # A 400 about the request, not a server fault: let the
@@ -2634,6 +2776,14 @@ def compare_timeseries():
     conn   = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
+        _key = _body_cache_key('cmp-ts', cursor, body, (
+            'models', 'variable', 'lat', 'lon', 'hour_min', 'hour_max',
+            'init_time',
+        ))
+        _cached = _cache_get(_key)
+        if _cached is not None:
+            return jsonify(_cached)
+
         _sel, _frm, _varw, _vnn = _fcst_speed_sql(is_wind, "u.model_name, u.forecast_hour")
         _runw, _runp, _runs = _run_pairs_sql(cursor, models)
         cursor.execute(f"""
@@ -2684,6 +2834,7 @@ def compare_timeseries():
 
         print(f"✅ compare/timeseries: {sum(len(v) for v in result.values())} pts "
               f"for models {models} at ({lat},{lon})")
+        _cache_set(_key, result, timeout=METRIC_CACHE_TTL)
         return jsonify(result)
 
     except RunSelectionError:
@@ -2740,6 +2891,17 @@ def compare_skill():
     conn   = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
+        # Deterministic, and 2.7 s for three models over the full lead-time
+        # range. The Comparison point panel re-requests it on every parameter
+        # change.
+        _key = _body_cache_key('cmp-skill', cursor, body, (
+            'models', 'variable', 'lat', 'lon', 'hour_min', 'hour_max',
+            'init_time',
+        ))
+        _cached = _cache_get(_key)
+        if _cached is not None:
+            return jsonify(_cached)
+
         # ------------------------------------------------------------------
         # 1. Resolve each model's nearest grid cell to the requested point
         # ------------------------------------------------------------------
@@ -2848,7 +3010,7 @@ def compare_skill():
         print(f"✅ compare/skill: {len(result_models)} models, "
               f"{len(obs_hours_sorted)} obs hours at ({lat},{lon}), "
               f"cells={ {m: cell_of.get(m) for m in result_models} }")
-        return jsonify({
+        result = {
             'models':             result_models,
             'obs_hours':          obs_hours_sorted,
             'obs_warning':        obs_warning,
@@ -2859,7 +3021,9 @@ def compare_skill():
             # Precipitation is normalised to a rate; wind is an instantaneous
             # speed and was never in mm/h. Same branch /api/spread-skill uses.
             'units':              'm/s' if is_wind else 'mm/h',
-        })
+        }
+        _cache_set(_key, result, timeout=METRIC_CACHE_TTL)
+        return jsonify(result)
 
     except RunSelectionError:
         # A 400 about the request, not a server fault: let the
@@ -2920,11 +3084,25 @@ def compare_spatial_agreement():
     # renders client-supplied points), so a content hash can't self-invalidate
     # on new data — key on the request shape and bound staleness with a TTL
     # instead, matched to how often a new forecast run actually lands.
+    #
+    # Deliberately NOT keyed on `_data_version` like the other metric endpoints,
+    # even though that would invalidate on a reload instead of waiting out the
+    # TTL: the version needs a cursor, and a hit here returns before the
+    # connection is taken. Cartopy plus the pool is the expensive half of this
+    # endpoint, so paying a query to build the key would give back much of what
+    # the cache is for. `test_a_cached_render_short_circuits_before_any_query`
+    # pins that, and it is why the TTL stays the invalidation mechanism here.
+    #
+    # `init_time` IS in the key. Without it, once two runs are loaded, the same
+    # models/hour/bbox for a *different* run would be served this run's cached
+    # answer — a silent cross-run error of exactly the kind the init_time
+    # migration removed, reintroduced by a cache key.
     _cache_key = 'agree:' + json.dumps({
-        'models':   sorted(models),
-        'variable': variable,
-        'hour':     hour,
-        'bbox':     [round(min_lat, 2), round(max_lat, 2), round(min_lon, 2), round(max_lon, 2)],
+        'models':    sorted(models),
+        'variable':  variable,
+        'hour':      hour,
+        'init_time': str(body.get('init_time')),
+        'bbox':      [round(min_lat, 2), round(max_lat, 2), round(min_lon, 2), round(max_lon, 2)],
     }, sort_keys=True)
     _cached = _cache_get(_cache_key)
     if _cached is not None:
@@ -4189,6 +4367,18 @@ def compare_region_metrics():
     conn   = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
+        # The most expensive endpoint in the app: 12.4 s for three models and two
+        # metrics over the full domain, and the Comparison tab requests it on
+        # every parameter change. Deterministic, so cacheable.
+        _key = _body_cache_key('cmp-region', cursor, body, (
+            'models', 'variable', 'metrics', 'min_lat', 'max_lat',
+            'min_lon', 'max_lon', 'hour_min', 'hour_max', 'fss_window',
+            'threshold_mm_6h', 'threshold_ms', 'init_time',
+        ))
+        _cached = _cache_get(_key)
+        if _cached is not None:
+            return jsonify(_cached)
+
         per_model     = {}
         per_counts    = {}
         per_cell_mean = {}
@@ -4266,7 +4456,7 @@ def compare_region_metrics():
               f"bbox [{min_lat},{max_lat}]×[{min_lon},{max_lon}] "
               f"{hour_min}-{hour_max}h, cells={n_cells}")
 
-        return jsonify({
+        result = {
             'models':         per_model,
             # Same metrics averaged per cell — what the corresponding MAP shows.
             'cell_means':     per_cell_mean,
@@ -4279,7 +4469,9 @@ def compare_region_metrics():
             'hour_min':       hour_min,
             'hour_max':       hour_max,
             'warnings':       warnings,
-        })
+        }
+        _cache_set(_key, result, timeout=METRIC_CACHE_TTL)
+        return jsonify(result)
 
     except RunSelectionError:
         # A 400 about the request, not a server fault: let the
