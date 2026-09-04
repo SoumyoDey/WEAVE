@@ -1,9 +1,29 @@
 # WEAVE_v3 — system, workflow & metric-correctness audit
 
+> ## ⚠️ The numbers in this document are stale as of 2026-09-04
+>
+> **The truth field was replaced.** `regridded_observation` used to assign
+> observations to grid cells with round-half-to-even, which starved every
+> half-degree cell — interior ERA5 wind cells averaged **1** native observation
+> where their whole-degree neighbours averaged 9. It now partitions cleanly and
+> every interior cell averages the same stencil.
+>
+> **Every score in this document was computed against the old field**, so the
+> figures below no longer match what the app returns. The new numbers are the
+> better ones; these are not wrong about the *reasoning*, only about the values.
+> Measured at 36.0/−75.5 over 0–36 h: precipitation MAE fell ~6%, wind bias rose
+> 11–29%. `NEXT_STEPS.md` §7 has the full comparison and how to revert.
+>
+> **Re-deriving this document is an open task.** Until it is done, treat a
+> disagreement between a figure here and the app as this, not as a regression.
+> The reasoning, the retracted findings, and the unit/window conventions all
+> stand — it is the arithmetic that moved.
+
 > 2026-08-12. Evidence-based review of the verification-metric pipeline:
 > physical/unit correctness, workflow logic, and system design.
-> Every "confirmed" claim below is backed by a query against the live
-> `weave_weather` DB or a live API call, quoted inline.
+> Every "confirmed" claim below was backed by a query against the live
+> `weave_weather` DB or a live API call, quoted inline — **as the database stood
+> on that date**; see the warning above.
 >
 > **Status:** findings **1–10 are fixed** across every endpoint (see "Fix
 > status" at the bottom), plus a spread-pooling bug (3b) found while fixing

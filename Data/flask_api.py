@@ -170,6 +170,35 @@ def _data_version_uncached(cursor):
             ORDER BY model_name, variable_name, init_time
         """)
         rows = [tuple(str(v) for v in r.values()) for r in cursor.fetchall()]
+
+        # The truth field, too. The registry describes the FORECASTS, and a score
+        # depends on both sides — so a registry-only version misses a change to
+        # the observations entirely. That is not hypothetical: on 2026-09-04 the
+        # truth field was replaced (`regridded_observation` swapped for the
+        # rebuilt one, §7) with the registry untouched, and every cached score
+        # would have kept serving pre-switch numbers indefinitely.
+        #
+        # The sum is the discriminating part — the swap preserved the row count
+        # and every timestamp and changed only the values, so a count-and-time
+        # fingerprint would have missed it. It caught the real swap:
+        # 193378.266 -> 192735.753 for wind. About 50 ms, once per request.
+        #
+        # `value::numeric`, NOT `SUM(value)` on the float. A float SUM is not
+        # deterministic here: PostgreSQL aggregates in parallel, so the addition
+        # order varies between identical queries and the last digits move
+        # (…83437, …83435, …83437 on three consecutive runs). That made the
+        # version — and therefore every cache key — different on every request,
+        # so the cache never hit once and the app paid this query for nothing.
+        # Measured, not assumed: three consecutive calls returned three different
+        # versions. Numeric addition is exact and order-independent.
+        cursor.execute("""
+            SELECT source, COUNT(*) AS n, MAX(obs_time) AS t,
+                   SUM(value::numeric) AS s
+            FROM regridded_observation
+            GROUP BY source ORDER BY source
+        """)
+        rows += [('obs',) + tuple(str(v) for v in r.values())
+                 for r in cursor.fetchall()]
         return hashlib.sha256(repr(rows).encode()).hexdigest()[:12]
     except Exception as _e:                                   # pragma: no cover
         # A cache key is not worth failing a request over. An unstable version

@@ -11,6 +11,13 @@ implementation instead of reproducing the old one:
 
 The pure tests need no database. The ones that check the SQL against real
 coordinates skip themselves without PostgreSQL, like `test_db_endpoints.py`.
+
+**These assert against the live `regridded_observation`.** They were written
+against a staging copy (`regridded_observation_rebuilt`) while the rebuild was
+being compared to the old field; that copy became the live field on 2026-09-04,
+so they now guard the truth field the app actually scores against — which is what
+you want, since the parity check below is the one that fails if the
+banker's-rounding checkerboard ever comes back.
 """
 import math
 import os
@@ -166,11 +173,11 @@ class TestThePartition:
                             WHERE source=%s AND {column} IS NOT NULL""", (source,))
             native = cur.fetchone()[0]
             cur.execute("""SELECT coalesce(sum(source_points), 0)
-                           FROM regridded_observation_rebuilt
+                           FROM regridded_observation
                            WHERE source=%s AND variable_name=%s""", (source, variable))
             pooled = cur.fetchone()[0]
             if pooled == 0:
-                pytest.skip('regridded_observation_rebuilt is not populated')
+                pytest.skip('regridded_observation is not populated')
             assert pooled == native, source
 
     def test_interior_stencils_are_uniform_regardless_of_parity(self, cur):
@@ -178,12 +185,12 @@ class TestThePartition:
         # distinct counts per source; a correct partition returns exactly one.
         cur.execute("""
             SELECT source, count(DISTINCT source_points)
-            FROM regridded_observation_rebuilt
+            FROM regridded_observation
             WHERE latitude BETWEEN 26 AND 44 AND longitude BETWEEN -84 AND -66
             GROUP BY 1""")
         rows = cur.fetchall()
         if not rows:
-            pytest.skip('regridded_observation_rebuilt is not populated')
+            pytest.skip('regridded_observation is not populated')
         for source, n_distinct in rows:
             assert n_distinct == 1, (
                 f'{source} interior has {n_distinct} different stencil sizes — '
@@ -198,7 +205,7 @@ class TestCoverage:
                        FROM regridded_forecast_ens""")
         forecast = {(round(float(a), 4), round(float(b), 4)) for a, b in cur.fetchall()}
         cur.execute("""SELECT DISTINCT latitude, longitude
-                       FROM regridded_observation_rebuilt""")
+                       FROM regridded_observation""")
         truth = {(round(float(a), 4), round(float(b), 4)) for a, b in cur.fetchall()}
         if not truth or not forecast:
             pytest.skip('tables are not populated')

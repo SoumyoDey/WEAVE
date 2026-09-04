@@ -1,6 +1,6 @@
 # Next steps
 
-State as of 2026-09-02. **PR #2 is merged** (`49ead8f`); `main` is the live
+State as of 2026-09-04. **PR #2 is merged** (`49ead8f`); `main` is the live
 branch and carries everything below.
 
 **Read this first.** Items 1, 3, 3b, 4, 7 and 8 below are done, all seven
@@ -18,9 +18,13 @@ in this repository.
   run" rule is retired.
 - **2026-09-02 — wind has its own metric colour bands** (see the ownerless-items
   list). The precipitation edges are unchanged.
-- **2026-09-02 — the observation regrid exists** (§7), and it found a
-  checkerboard artifact in the *current* truth field. The live
-  `regridded_observation` is untouched pending a decision.
+- **2026-09-04 — the truth field was replaced** (§7). The banker's-rounding
+  checkerboard is gone; every interior cell now averages the same number of
+  observations. Scores moved — wind bias by up to 29% at a point — so
+  `METRICS_AUDIT.md`'s figures no longer match the app and need re-deriving.
+- **2026-09-04 — the deterministic metric endpoints are cached** (§9), 382x on a
+  warm request. Note the cache key includes a fingerprint of the truth field, so
+  the switch above invalidated it automatically.
 - **2026-08-27 — the target grid is a constant**, so `regrid_members.py` can run
   on a fresh database for the first time (§2).
 - **2026-09-02 — `regridded_forecast` is DROPPED** from `weave_weather` (§2),
@@ -120,9 +124,12 @@ In priority order. Nothing here is half-done.
    (§7), and `DEPLOY.md` §2b says plainly that a fresh install gets forecasts and
    no truth until this exists. It is also what blocks
    `DATA_EXPANSION_DESIGN.md` phase 4 and therefore a second run.
-4. **Item 6, the lower-priority list.** Vite (CRA is EOL), caching the
-   deterministic metric endpoints, row caps on point-list queries.
-5. **`DATA_EXPANSION_DESIGN.md` phases 3–5.** No longer blocked on the schema —
+4. **Re-derive `METRICS_AUDIT.md`.** Its figures were all computed against the
+   pre-2026-09-04 truth field and no longer match the app (§7). Not small, and
+   nothing in that document currently warns a reader.
+5. **Item 6, the lower-priority list.** Vite (CRA is EOL) and row caps on
+   point-list queries. Endpoint caching is done (§9).
+6. **`DATA_EXPANSION_DESIGN.md` phases 3–5.** No longer blocked on the schema —
    phases 1–2 are done (§8). What remains is the run-selector UI, which has no
    user-visible value while one run is loaded, and the ingest above. Read that
    document's status table first; three of its instructions were superseded by
@@ -780,21 +787,42 @@ IMERG's "56.5% identical" is mostly cells that are zero under both rules, and it
 large relative figures are near-zero denominators; the absolute column is the one
 to read.
 
-### The decision nobody has made yet
+### SWITCHED 2026-09-04
 
-**The live `regridded_observation` is untouched.** The rebuild is in
-`regridded_observation_rebuilt` so the two can be compared without committing.
-Switching over is a judgement call, because **every published number in
-`METRICS_AUDIT.md` was computed against the current truth
-field**, and the table above says they would move — wind especially, where the
-current field is barely smoothed on half-degree cells.
+**The rebuilt field is now live.** `regridded_observation` is the partition-based
+field; the old banker's-rounding one is `regridded_observation_bankers`, kept in
+place, plus a 1.8 MB gzipped dump at
+`~/Documents/AFW/regridded_observation_prefix_2026-09-04.sql.gz`. The swap ran as
+one transaction, so there was no moment with no truth field.
 
-Options, in the order I would consider them: rebuild and re-derive the audit
-numbers (correct, and invalidates a lot of written-up work); rebuild after PR #2
-merges so the review is not aimed at a moving target (my preference); or keep the
-current field and treat this as documentation of a known artifact. What should not
-happen is a silent switch — the numbers change materially and a reader comparing
-against the audit would have no way to know why.
+Every interior cell now averages the same stencil — 25 for IMERG, 4 for ERA5 —
+regardless of coordinate parity, against 36/24/16 and 9/3/**1** before.
+
+**What moved, at 36.0/−75.5 over 0–36 h:**
+
+| | AIFS | GEFS | UKMO |
+|---|---|---|---|
+| precipitation MAE | 0.0918 → 0.0862 (−6.1%) | 1.9413 → 1.9404 (−0.0%) | 0.0831 → 0.0775 (−6.7%) |
+| wind bias | 1.6617 → 1.8505 (+11.4%) | 1.3845 → 1.6074 (+16.1%) | 0.7962 → 1.0257 (+28.8%) |
+| wind MAE | 1.9051 → 1.9099 (+0.3%) | 3.1893 → 3.1583 (−1.0%) | 2.5786 → 2.5396 (−1.5%) |
+
+Precipitation errors got slightly *smaller*, which is what a less noisy truth
+field should do. Wind **bias** moved a lot while wind MAE barely did, and the
+reason is worth recording because the obvious explanation is wrong: it is **not**
+a systematic offset in the old field. Domain-mean observed wind moved only
+4.8563 → 4.8409 (0.3%). The large per-cell moves are simply what replacing *one*
+sample with the mean of *four* does at an individual cell — at 36.0/−75.5 that is
+~0.2 m/s, while the domain average is essentially unchanged.
+
+**`METRICS_AUDIT.md` is now stale in the direction that matters**: every figure in
+it was derived against the old field. The new numbers are the better ones, but
+nothing in that document says so, and a reader comparing it against the app will
+find a discrepancy with no explanation attached. **Re-deriving it is the
+follow-up this created**, and it is not small.
+
+To go back: `ALTER TABLE regridded_observation RENAME TO regridded_observation_new;
+ALTER TABLE regridded_observation_bankers RENAME TO regridded_observation;` in one
+transaction, then restart the API and clear `.cache/plots`.
 
 ---
 

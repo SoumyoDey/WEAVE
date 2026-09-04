@@ -29,14 +29,17 @@ import flask_api as api
 class FakeCursor:
     """Answers the two queries `_data_version` issues."""
 
-    def __init__(self, registry=None, has_registry=True):
+    def __init__(self, registry=None, has_registry=True, obs=None):
         self._registry = registry if registry is not None else []
+        self._obs = obs if obs is not None else [dict(OBS)]
         self._has = has_registry
         self._rows = []
 
     def execute(self, sql, params=None):
         if 'to_regclass' in sql:
             self._rows = [{'ok': self._has}]
+        elif 'regridded_observation' in sql:
+            self._rows = list(self._obs)
         else:
             self._rows = list(self._registry)
 
@@ -46,6 +49,10 @@ class FakeCursor:
     def fetchall(self):
         return self._rows
 
+
+# One row of the observation fingerprint: the truth field's side of the version.
+OBS = {'source': 'ERA5_WIND', 'n': 40344,
+       't': '2025-09-08 23:00:00', 's': 192735.753}
 
 ROW = {'model_name': 'AIFS', 'variable_name': 'precipitation',
        'init_time': '2025-09-08 00:00:00', 'loaded_at': '2026-09-02 12:00:00',
@@ -201,3 +208,65 @@ class TestCacheHelpersAreSafeWithoutABackend:
         # of these swallow and carry on.
         assert api._cache_get('k') is None
         api._cache_set('k', {'a': 1}, timeout=60)
+
+
+class TestTheTruthFieldIsInTheVersion:
+    """A score depends on the forecast AND the observation. A version derived
+    only from the forecast registry misses a change to the truth field — which
+    is exactly what happened on 2026-09-04, when `regridded_observation` was
+    replaced with the rebuilt field and the registry was untouched."""
+
+    def test_replacing_the_truth_field_changes_the_version(self):
+        before = api._data_version_uncached(FakeCursor([ROW], obs=[dict(OBS)]))
+        # The real swap: same row count, same timestamps, different values.
+        after = api._data_version_uncached(
+            FakeCursor([ROW], obs=[{**OBS, 's': 193378.266}]))
+        assert before != after, (
+            'a change to the observations does not move the data version — '
+            'cached scores would keep serving pre-switch numbers')
+
+    def test_the_row_count_alone_would_not_have_caught_it(self):
+        # Why the checksum is the load-bearing part and not decoration: the swap
+        # preserved every count and every timestamp.
+        same_shape = api._data_version_uncached(
+            FakeCursor([ROW], obs=[{**OBS, 's': 999.0}]))
+        assert same_shape != api._data_version_uncached(
+            FakeCursor([ROW], obs=[dict(OBS)]))
+
+    def test_a_new_observation_source_changes_the_version(self):
+        one = api._data_version_uncached(FakeCursor([ROW], obs=[dict(OBS)]))
+        two = api._data_version_uncached(
+            FakeCursor([ROW], obs=[dict(OBS), {**OBS, 'source': 'GPM'}]))
+        assert one != two
+
+
+class TestTheVersionIsStable:
+    """A version that changes between identical requests is worse than no cache:
+    every key is a miss, and the app pays the fingerprint query for nothing.
+
+    This is not hypothetical. The first version of the observation fingerprint
+    used `SUM(value)` on a double-precision column. PostgreSQL aggregates in
+    parallel, so the addition order varies between identical queries and the last
+    digits move — three consecutive calls produced three different versions, and
+    the cache never hit once. `SUM(value::numeric)` is exact and
+    order-independent.
+    """
+
+    def test_repeated_calls_agree(self):
+        cur = FakeCursor([ROW], obs=[dict(OBS)])
+        versions = {api._data_version_uncached(FakeCursor([ROW], obs=[dict(OBS)]))
+                    for _ in range(5)}
+        assert len(versions) == 1, f'version is unstable: {versions}'
+
+    def test_the_fingerprint_query_uses_exact_arithmetic(self):
+        # The guard for the real defect. A float SUM reintroduces it silently —
+        # nothing fails, the cache just stops working.
+        # Comment lines dropped: the comment explaining the defect necessarily
+        # mentions the wrong form, which a naive substring check trips on.
+        sql = '\n'.join(l for l in inspect.getsource(api._data_version_uncached)
+                        .splitlines() if not l.strip().startswith('#'))
+        assert 'SUM(value::numeric)' in sql, (
+            'the observation fingerprint must sum as numeric; a float SUM is '
+            'non-deterministic under parallel aggregation and makes every '
+            'cache key a miss')
+        assert 'SUM(value)' not in sql
