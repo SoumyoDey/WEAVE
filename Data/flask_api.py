@@ -233,6 +233,73 @@ def _metric_cache_key(prefix, cursor, **parts):
 # space, so it can be generous.
 METRIC_CACHE_TTL = int(os.environ.get('METRIC_CACHE_TTL', 6 * 3600))
 
+# ── Row caps on point-list responses ─────────────────────────────────────────
+# `/api/forecast-data` and `/api/wind-data` return one record per native grid
+# cell, and the native grid is a property of whatever data was loaded, not of
+# anything this code controls. Today the worst case is UKMO wind at 7,597 cells
+# and 946 KB; a finer model or a wider domain would grow that without limit, and
+# nothing in the request can bound it.
+#
+# The cap is on CELLS, not rows. These queries return one row per (cell, hour)
+# and group into cells afterwards, so a plain `LIMIT` on rows would cut the last
+# cell in half and hand back a cell with hours missing — a subtly wrong value
+# rather than a visibly short list, which is the worse failure. The SQL limit is
+# therefore generous enough to bound the database's work, and the trim to whole
+# cells happens after grouping.
+#
+# Set well above anything the current data produces, so this changes no
+# behaviour today and exists to stop the unbounded case.
+POINT_LIST_MAX_CELLS = int(os.environ.get('POINT_LIST_MAX_CELLS', 20000))
+
+
+def _cap_cells(by_cell, limit=None):
+    """(kept, truncated) — whole cells only, deterministically ordered.
+
+    Sorting before trimming matters: without it, which cells survive depends on
+    dict insertion order, so two identical requests could return different halves
+    of the domain and the cache would key them the same.
+    """
+    limit = POINT_LIST_MAX_CELLS if limit is None else limit
+    if len(by_cell) <= limit:
+        return by_cell, False
+    kept = dict(sorted(by_cell.items())[:limit])
+    return kept, True
+
+
+def _point_list_response(result, truncated, what=''):
+    """A bare-array response, with truncation reported in headers.
+
+    Headers rather than a wrapper object because these endpoints return a JSON
+    array and the frontend reads it as one; changing the shape to report an edge
+    case would break every caller for the common case. A client that ignores the
+    header gets the capped list, which is the same thing it would have got from
+    a server that simply could not return more.
+
+    **No total is reported, deliberately.** The obvious header — "showing N of
+    M" — cannot be filled honestly here: the query fetches `limit + 1` rows
+    precisely so that overflow is detectable without reading the whole table, so
+    the only total available is `limit + 1`. An earlier version reported that,
+    which said "100 of 101" for a request whose real total was 7,597 — worse than
+    silence, because it made the loss look negligible. Getting the true figure
+    needs a second COUNT query, which is not worth paying to decorate an error
+    path; the caller is told it is incomplete and what the limit was, which is
+    what they need to act.
+    """
+    resp = jsonify(result)
+    resp.headers['X-Row-Count'] = str(len(result))
+    resp.headers['X-Row-Limit'] = str(POINT_LIST_MAX_CELLS)
+    if truncated:
+        resp.headers['X-Truncated'] = 'true'
+        # Loud on the server too: a truncated map that nobody noticed is exactly
+        # the outcome the cell-wise trim above is meant to avoid. flush=True
+        # because stdout is block-buffered when the server's output is
+        # redirected to a file, which hid this line the first time it fired.
+        print(f"⚠️  point list truncated{what}: returned {len(result)} cells, "
+              f"the limit (POINT_LIST_MAX_CELLS={POINT_LIST_MAX_CELLS}); "
+              f"there are more", flush=True)
+    return resp
+
+
 # The query parameters a spatial metric's answer can depend on. Keying on the
 # whole of `request.args` would let an unrelated parameter — a cache-buster, an
 # analytics tag — fragment the cache into single-use entries; keying on too few
@@ -1587,7 +1654,10 @@ def get_forecast_data():
                 WHERE es.run_id = %s
                   AND es.variable_id = (SELECT variable_id FROM variables WHERE variable_name = %s)
                   AND es.forecast_hour = ANY(%s)
-            """, (run_id, variable_name, hours))
+                ORDER BY latitude, longitude, forecast_hour
+                LIMIT %s
+            """, (run_id, variable_name, hours,
+                  POINT_LIST_MAX_CELLS * max(len(hours), 1) + 1))
             by_cell = defaultdict(dict)
             for row in cursor.fetchall():
                 if row['mean_value'] is None:
@@ -1596,6 +1666,7 @@ def get_forecast_data():
                     float(row['mean_value']),
                     float(row['std_dev']) if row['std_dev'] is not None else None)
             idx = 0 if member == 'mean' else 1
+            by_cell, truncated = _cap_cells(by_cell)
             result = []
             for (lat, lon), series in by_cell.items():
                 rec = _precip_rate_series(model_name, _fill_predecessor(series)).get(forecast_hour)
@@ -1613,12 +1684,16 @@ def get_forecast_data():
                   AND variable_id = (SELECT variable_id FROM variables WHERE variable_name = %s)
                   AND forecast_hour = ANY(%s)
                   AND ensemble_member = %s
-            """, (run_id, variable_name, hours, member_num))
+                ORDER BY latitude, longitude, forecast_hour
+                LIMIT %s
+            """, (run_id, variable_name, hours, member_num,
+                  POINT_LIST_MAX_CELLS * max(len(hours), 1) + 1))
             by_cell = defaultdict(dict)
             for row in cursor.fetchall():
                 if row['value'] is None:
                     continue
                 by_cell[(float(row['lat']), float(row['lon']))][row['forecast_hour']] = float(row['value'])
+            by_cell, truncated = _cap_cells(by_cell)
             result = []
             for (lat, lon), series in by_cell.items():
                 rec = _precip_member_rate_series(model_name, _fill_predecessor(series)).get(forecast_hour)
@@ -1628,7 +1703,8 @@ def get_forecast_data():
 
         print(f"✅ Returned {len(result)} precipitation points (mm/h) for "
               f"{model_name} +{forecast_hour}h")
-        return jsonify(result)
+        return _point_list_response(
+            result, truncated, f" ({model_name} precipitation +{forecast_hour}h)")
 
     except RunSelectionError:
         # A 400 about the request, not a server fault: let the
@@ -1678,7 +1754,9 @@ def get_wind_data():
                   AND u.variable_id = (SELECT variable_id FROM variables WHERE variable_name = 'wind_u_10m')
                   AND v.variable_id = (SELECT variable_id FROM variables WHERE variable_name = 'wind_v_10m')
                   AND u.forecast_hour = %s
-            """, (run_id, forecast_hour))
+                ORDER BY u.latitude, u.longitude
+                LIMIT %s
+            """, (run_id, forecast_hour, POINT_LIST_MAX_CELLS + 1))
 
         elif member == 'std':
             cursor.execute("""
@@ -1696,7 +1774,9 @@ def get_wind_data():
                   AND v.variable_id = (SELECT variable_id FROM variables WHERE variable_name = 'wind_v_10m')
                   AND u.forecast_hour = %s
                   AND u.std_dev IS NOT NULL
-            """, (run_id, forecast_hour))
+                ORDER BY u.latitude, u.longitude
+                LIMIT %s
+            """, (run_id, forecast_hour, POINT_LIST_MAX_CELLS + 1))
 
         else:
             member_num = int(member)
@@ -1716,9 +1796,17 @@ def get_wind_data():
                   AND v.variable_id = (SELECT variable_id FROM variables WHERE variable_name = 'wind_v_10m')
                   AND u.forecast_hour = %s
                   AND u.ensemble_member = %s
-            """, (run_id, forecast_hour, member_num))
+                ORDER BY u.latitude, u.longitude
+                LIMIT %s
+            """, (run_id, forecast_hour, member_num, POINT_LIST_MAX_CELLS + 1))
 
-        data   = cursor.fetchall()
+        data = cursor.fetchall()
+        # One row per cell here, so the SQL limit already bounds cells; fetching
+        # one extra is how we know the limit was reached rather than the data
+        # simply ending there.
+        truncated = len(data) > POINT_LIST_MAX_CELLS
+        if truncated:
+            data = data[:POINT_LIST_MAX_CELLS]
         result = []
         for row in data:
             u = float(row['u']) if row['u'] else 0
@@ -1736,7 +1824,8 @@ def get_wind_data():
             })
 
         print(f"✅ Returned {len(result)} wind points for {model_name} +{forecast_hour}h ({member})")
-        return jsonify(result)
+        return _point_list_response(
+            result, truncated, f" ({model_name} wind +{forecast_hour}h {member})")
 
     except RunSelectionError:
         # A 400 about the request, not a server fault: let the

@@ -130,8 +130,8 @@ In priority order. Nothing here is half-done.
    The root problem was that the original figures recorded no query, so several
    are not recomputable at all — that is now fixed for next time by the script
    rather than by another round of archaeology.
-5. **Item 6, the lower-priority list.** Vite (CRA is EOL) and row caps on
-   point-list queries. Endpoint caching is done (§9).
+5. **Item 6, the lower-priority list.** Vite (CRA is EOL) is the only one left —
+   endpoint caching (§9) and row caps are both done.
 6. **`DATA_EXPANSION_DESIGN.md` phases 3–5.** No longer blocked on the schema —
    phases 1–2 are done (§8). What remains is the run-selector UI, which has no
    user-visible value while one run is loaded, and the ingest above. Read that
@@ -737,7 +737,19 @@ fallback. That is one less thing for DATA_EXPANSION_DESIGN.md to trip over.
 
 - **Vite migration** — CRA is EOL.
 - **Cache the deterministic metric endpoints** — only the plot endpoint is cached.
-- **Row caps on point-list queries** — currently unbounded.
+- ~~**Row caps on point-list queries**~~ **done 2026-09-04.**
+  `POINT_LIST_MAX_CELLS` (default 20,000) bounds `/api/forecast-data` and
+  `/api/wind-data`, whose size is set by the native grid rather than by anything
+  in the request — today's worst case is UKMO wind at 7,597 cells and 946 KB, so
+  the cap is inert now and exists for a finer model or wider domain. Two details
+  are load-bearing: it trims **whole cells** (forecast-data returns one row per
+  (cell, hour) and groups afterwards, so a plain row `LIMIT` would return a cell
+  computed from a partial series — wrong rather than short), and it reports
+  truncation in headers plus a server log line, because a shortened map looks
+  complete. No "showing N of M": the query reads `limit + 1` so overflow is
+  cheap to detect, which means the only total available is `limit + 1` — an
+  earlier version reported that and said "100 of 101" where the real total was
+  7,597.
 
 ---
 

@@ -12,6 +12,23 @@ export const fetchForecastData = async (modelName, variable, hour, member) => {
   const params   = new URLSearchParams({ model: modelName, variable, hour, member });
   const response = await fetch(`${BASE}/${endpoint}?${withRunParam(params)}`);
   if (!response.ok) throw new Error(`API error: ${response.status}`);
+
+  // These endpoints cap how many grid cells they return, because the native
+  // grid is a property of the loaded data and nothing in the request bounds it.
+  // The cap is inert on the current data — it exists for a finer model or a
+  // wider domain — but a shortened map looks complete, so say something rather
+  // than draw a partial field silently. If this ever fires in practice it
+  // belongs in the UI, not the console.
+  if (response.headers.get('X-Truncated') === 'true') {
+    // No "of M" here: the server cannot report a true total cheaply, and an
+    // understated one would make the loss look negligible.
+    console.warn(
+      `${endpoint}: returned ${response.headers.get('X-Row-Count')} grid cells, `
+      + `which is the server limit (${response.headers.get('X-Row-Limit')}). `
+      + `There are more — the map is incomplete. Narrow the request or raise `
+      + `POINT_LIST_MAX_CELLS.`);
+  }
+
   const data = await response.json();
   // An empty array is a valid response (e.g. an out-of-range member/hour) —
   // it's not an error, so callers can distinguish it from a thrown failure.
