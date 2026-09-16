@@ -6,6 +6,12 @@ Architecture: a **React single-page app** (static build) talking to a **Flask JS
 [ browser ] → static build (CDN / static host) ─HTTP→ Flask API (gunicorn) → PostgreSQL
 ```
 
+**Deploying the password-protected reviewer beta?** Two prerequisites this guide does
+not cover — putting the password in front of the *API* as well as the frontend, and
+the connection-pool ceiling that bites at 5+ concurrent users — are written up in
+[`REVIEW_DEPLOY_PREREQS.md`](REVIEW_DEPLOY_PREREQS.md). The cost estimate for that
+deployment, and a .docx of the same note, are in `Estimate Costs/` outside this repo.
+
 ---
 
 ## 1. Prerequisites
