@@ -1,6 +1,28 @@
 # WEAVE_v3 — system, workflow & metric-correctness audit
 
-> ## ⚠️ The numbers in this document are stale as of 2026-09-04
+> ## ⚠️ The truth field changed AGAIN on 2026-09-16 — precipitation figures moved a second time
+>
+> **IMERG's observation timestamps were 4 hours behind UTC, and ERA5's were
+> not.** So every precipitation score in this document — including §0's, which
+> was re-derived on 2026-09-04 and was correct for the field as it then stood —
+> compared a forecast at lead H against truth from H+4. Wind was never
+> affected, which is also the control that identified the defect.
+>
+> **§0 has been regenerated against the corrected field** (`rederive_audit.py`,
+> 2026-09-16). What moved, region-wide over 25–45 N / −85 to −65 W: AIFS MAE
+> 0.3719 → 0.3320, UKMO RMSE 1.0489 → 0.9330, and **UKMO's point bias flipped
+> sign**, 0.0267 → −0.0086. Wind's figures are byte-identical.
+>
+> The part worth reading twice: correcting the shift moved the *neighbourhood*
+> scores in **opposite directions by model** — UKMO's FSS up ~51%, AIFS's down
+> ~66% — so the old numbers were not uniformly pessimistic, they were changing
+> which model looked better. `NEXT_STEPS.md` §12 has the measurement, the method
+> and the rollback.
+>
+> The two warnings below remain the record of the *previous* change. Both are
+> still true about what they describe.
+
+> ## ⚠️ The numbers in this document were stale as of 2026-09-04
 >
 > **The truth field was replaced.** `regridded_observation` used to assign
 > observations to grid cells with round-half-to-even, which starved every
@@ -37,7 +59,7 @@
 
 ---
 
-## 0. Re-derived figures — 2026-09-04
+## 0. Re-derived figures — 2026-09-04, regenerated 2026-09-16
 
 Everything below this section was measured against the **pre-2026-09-04 truth
 field** and is stale (see the warning at the top). This section is the current
@@ -106,9 +128,9 @@ Every row must show the SAME min/max within a source. Different values by parity
 
 | variable | model | bias | mae | rmse | crps | ssr_agg |
 |---|---|---|---|---|---|---|
-| precipitation | AIFS | 0.0619 | 0.0862 | 0.0954 | 0.0517 | 1.3093 |
-| precipitation | GEFS | 1.9404 | 1.9404 | 2.2421 | 1.4637 | 0.447 |
-| precipitation | UKMO | 0.0267 | 0.0775 | 0.0881 | 0.0599 | 1.9832 |
+| precipitation | AIFS | 0.0221 | 0.0318 | 0.0384 | 0.0272 | 2.8823 |
+| precipitation | GEFS | 1.4399 | 1.4399 | 1.9035 | 1.0799 | 0.4568 |
+| precipitation | UKMO | -0.0086 | 0.0285 | 0.0326 | 0.0343 | 4.6663 |
 | wind | AIFS | 1.8505 | 1.9099 | 2.7158 | 1.6688 | 0.8048 |
 | wind | GEFS | 1.6074 | 3.1583 | 3.8627 | 2.6056 | 0.5226 |
 | wind | UKMO | 1.0257 | 2.5396 | 3.0854 | 2.1197 | 0.7729 |
@@ -119,12 +141,12 @@ Every row must show the SAME min/max within a source. Different values by parity
 
 | model | metric | pooled | cell mean | ratio | n cells |
 |---|---|---|---|---|---|
-| AIFS | rmse | 1.0171 | 0.4621 | 2.201 | 1681 |
-| AIFS | mae | 0.3719 | 0.3719 | 1.0 | 1681 |
-| GEFS | rmse | 1.4042 | 0.6878 | 2.042 | 1435 |
-| GEFS | mae | 0.5611 | 0.5436 | 1.032 | 1435 |
-| UKMO | rmse | 1.0489 | 0.5084 | 2.063 | 1521 |
-| UKMO | mae | 0.42 | 0.42 | 1.0 | 1521 |
+| AIFS | rmse | 0.8737 | 0.4282 | 2.04 | 1681 |
+| AIFS | mae | 0.332 | 0.332 | 1.0 | 1681 |
+| GEFS | rmse | 1.2742 | 0.6755 | 1.886 | 1435 |
+| GEFS | mae | 0.5256 | 0.5102 | 1.03 | 1435 |
+| UKMO | rmse | 0.933 | 0.5036 | 1.853 | 1521 |
+| UKMO | mae | 0.3982 | 0.3982 | 1.0 | 1521 |
 
 RMSE differs by Jensen (sqrt is concave). MAE is linear, so the two agree wherever every cell contributes the same number of samples — GEFS is the exception, because its cells do not.
 
@@ -134,18 +156,18 @@ RMSE differs by Jensen (sqrt is concave). MAE is linear, so the two agree wherev
 
 | thr mm/6h | model | pooled CSI | cell-mean CSI |
 |---|---|---|---|
-| 25 | AIFS | 0.0105 | 0.0127 |
+| 25 | AIFS | 0.0 | 0.0 |
 | 25 | GEFS | 0.0 | 0.0 |
-| 25 | UKMO | 0.0804 | 0.05 |
-| 6 | AIFS | 0.2621 | 0.195 |
-| 6 | GEFS | 0.0098 | 0.013 |
-| 6 | UKMO | 0.3809 | 0.3299 |
-| 3 | AIFS | 0.4734 | 0.4199 |
-| 3 | GEFS | 0.0973 | 0.0827 |
-| 3 | UKMO | 0.5024 | 0.4531 |
-| 1 | AIFS | 0.5945 | 0.5303 |
-| 1 | GEFS | 0.2262 | 0.1962 |
-| 1 | UKMO | 0.5949 | 0.5426 |
+| 25 | UKMO | 0.1349 | 0.0815 |
+| 6 | AIFS | 0.2999 | 0.2333 |
+| 6 | GEFS | 0.0109 | 0.0116 |
+| 6 | UKMO | 0.3256 | 0.2691 |
+| 3 | AIFS | 0.504 | 0.4539 |
+| 3 | GEFS | 0.1013 | 0.0833 |
+| 3 | UKMO | 0.4546 | 0.3923 |
+| 1 | AIFS | 0.5798 | 0.5127 |
+| 1 | GEFS | 0.2151 | 0.1768 |
+| 1 | UKMO | 0.5597 | 0.4844 |
 
 At 25 mm/6h GEFS has no events at all, so its CSI is 0 by definition rather than by performance — a threshold has to produce events before the two estimators can be compared.
 
@@ -155,9 +177,9 @@ At 25 mm/6h GEFS has no events at all, so its CSI is 0 by definition rather than
 
 | variable | model | n cells | mean | median | max |
 |---|---|---|---|---|---|
-| precipitation | AIFS | 1681 | 0.3719 | 0.1022 | 7.3262 |
-| precipitation | GEFS | 1435 | 0.5436 | 0.1566 | 9.1789 |
-| precipitation | UKMO | 1521 | 0.42 | 0.1058 | 7.0677 |
+| precipitation | AIFS | 1681 | 0.332 | 0.1241 | 5.534 |
+| precipitation | GEFS | 1435 | 0.5102 | 0.1929 | 7.3641 |
+| precipitation | UKMO | 1521 | 0.3982 | 0.1345 | 5.3135 |
 | wind | AIFS | 1681 | 2.2386 | 1.7754 | 6.8164 |
 | wind | GEFS | 1681 | 2.2455 | 1.8209 | 7.5518 |
 | wind | UKMO | 1521 | 2.3331 | 1.7846 | 6.2672 |
@@ -175,6 +197,7 @@ At 25 mm/6h GEFS has no events at all, so its CSI is 0 by definition rather than
 | forecast (as stored) | UKMO | 0.3032 | 235755 |
 
 AIFS's forecast figure is a CUMULATIVE total, not a rate, so it is not comparable with the others — the audit's in-family check uses the AIFS *increment*. Kept here only to make that trap visible rather than to invite the comparison.
+
 
 ---
 
@@ -827,7 +850,7 @@ if not obs_window:
 ```
 
 The observation record ends at 2025-09-08 19:30 and the run initialises at
-00Z, so truth exists only out to fh ≈ 19.5. Yet a region query over hours 24-48
+00Z, so truth exists only out to fh ≈ 23.5. Yet a region query over hours 24-48
 returned **229 AIFS cells with bias 0.3048**. **[pre-2026-09-04 truth field — §0]** The AIFS record at fh 24 is valid
 2025-09-09 00:00; its window reaches back to Sep 8 19:00, where exactly one
 observation still exists. A 6-hour forecast was being scored against a single

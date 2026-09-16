@@ -31,7 +31,7 @@ export function Timeline({ currentModel, selectedHour, setSelectedHour, obsCover
   const pastVerified = verifiedTo != null && selectedHour > verifiedTo;
 
   // Observations can outlast the last hour that can be *scored*: precipitation
-  // needs its whole 6 h window observed, so a record ending at +19.5h verifies
+  // needs its whole 6 h window observed, so a record ending at +23.5h verifies
   // only to +18h. Wind is instantaneous and the two coincide. Saying "no
   // observations beyond +18h" was the wrong statement in the first case and the
   // window clause is meaningless in the second, so the two are worded apart.

@@ -236,7 +236,7 @@ Decide up front:
   approximate spread on the archive — but that must be visible in the UI, not
   silent.
 - **Verification needs observations to cover the forecast range.** The current run
-  has truth for ~19.5 h of a 240 h forecast. More runs are only worth loading if
+  has truth for ~23.5 h of a 240 h forecast. More runs are only worth loading if
   the observation record grows with them.
 
 ---

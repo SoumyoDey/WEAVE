@@ -2661,9 +2661,15 @@ def observation_coverage():
 
     `last_verifiable_hour` is the answer to "how far out can I expect a score":
     a record covering `window_hours` must have that whole window observed, so it
-    is the last window boundary at or before the end of the record. On the loaded
-    run the observations stop 19.5 h after initialisation, which is +18 h for
-    precipitation (6 h windows) and +19 h for wind (instantaneous).
+    is the last window boundary at or before the end of the record. Each variable
+    has its own record, which is why this is computed per variable rather than
+    once: on the loaded run IMERG ends **+23.5 h** after initialisation, giving
+    +18 h for precipitation (6 h windows), while ERA5 ends +23 h and wind reaches
+    +23 h, being instantaneous.
+
+    Those figures were +19.5 h and +18/+19 h until 2026-09-16, when IMERG's
+    timestamps were corrected from 4 hours behind UTC (NEXT_STEPS.md section 12).
+    The old comment also read IMERG's end as wind's, which it never was.
 
     Query: model (default AIFS), variable (precipitation | wind)
     """
@@ -2703,8 +2709,9 @@ def observation_coverage():
             'init_time':    init_time.isoformat() if init_time else None,
             'obs_start':    first_obs.isoformat() if first_obs else None,
             'obs_end':      last_obs.isoformat()  if last_obs  else None,
-            # Hours after initialisation at which the record ends (19.5 on the
-            # loaded run) — not necessarily a scorable lead time itself.
+            # Hours after initialisation at which the record ends (23.5 for
+            # precipitation on the loaded run, 23.0 for wind) — not necessarily a
+            # scorable lead time itself.
             'record_end_lead_hours': (round(record_end_lead, 2)
                                       if record_end_lead is not None else None),
             'last_verifiable_hour':  last_verifiable,

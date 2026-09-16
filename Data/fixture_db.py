@@ -71,7 +71,7 @@ spread == error at every lead time and the spread-skill correlation is exactly
 +1 — a signed anchor, which a constant field cannot give.
 
 Observations stop at +12 h on purpose. The loaded run's real observations end at
-+19.5 h, and "the forecast outruns the truth" is a live behaviour of this API
++23.5 h, and "the forecast outruns the truth" is a live behaviour of this API
 (NEXT_STEPS item 4), so the fixture reproduces it: forecast records exist out to
 +36 h and everything past +12 h must go unscored rather than be scored against a
 partially observed window.

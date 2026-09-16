@@ -427,14 +427,14 @@ Comparison has its own hour controls.
 ### 6.4 The timeline denies observations that exist — **accidental · FIXED**
 
 The hatched track read *"No observations beyond +18h — nothing to verify
-against"*. Observations run to **+19.5h**; verification stops at +18h because a
+against"*. Observations run to **+23.5h**; verification stops at +18h because a
 precipitation record needs its whole 6 h window observed. The distinction is the
 entire point of `record_end_lead_hours` vs `last_verifiable_hour`, and the other
 two surfaces that report coverage state it correctly — this one flattened them
 into a claim about the data that was not true.
 
 **Fixed**, and the two cases are worded apart: precipitation gets "observations
-run to +19.5h, and a score needs its whole window observed"; wind, being
+run to +23.5h, and a score needs its whole window observed"; wind, being
 instantaneous, gets "the observation record ends there" — the window clause is
 meaningless for it. Caught only by reading the rendered tooltip in both variables;
 the first fix said "whole window" for wind too.
