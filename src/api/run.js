@@ -1,3 +1,5 @@
+import { API_BASE as BASE } from './base';
+
 /**
  * Which forecast run the app is asking about.
  *
@@ -30,7 +32,6 @@
  * another run's label. When that selector is built, move the value into state or
  * context and let `withRun`/`withRunParams` take it as an argument.
  */
-const BASE = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
 // How long to wait for /api/runs before giving up and sending requests without
 // a run. A single-run backend still answers those, so a slow or broken /api/runs

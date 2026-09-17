@@ -1,6 +1,6 @@
 import { withRun, whenRunReady } from './run';
 
-const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+import { API_BASE } from './base';
 
 /**
  * Fetches per-hour ensemble mean and std for multiple models at a single point.

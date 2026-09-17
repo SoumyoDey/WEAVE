@@ -140,13 +140,13 @@ commits. See §1 for how and why it went in without review.
 
 In priority order. Nothing here is half-done.
 
-0. **The reviewer deployment is the live task** (§10) and it is ahead of
-   everything else on this list, because it has an audience waiting. Two
-   prerequisites gate it, both unimplemented, both in
-   `REVIEW_DEPLOY_PREREQS.md`: the API authenticates nothing on any of its 19
-   routes, and the connection-pool arithmetic fails at 5+ concurrent users.
-   **It is also coupled to item 3** in a way neither document said until now —
-   see §10.
+0. **The reviewer deployment is the live task** (§10). **Both prerequisites are
+   fixed as of 2026-09-17** — one origin behind one `basic_auth`, and pool
+   defaults that are safe at every tier and checked at startup. What is left is
+   not code: generate the password hash, point the hostname at the box, and
+   run `caddy validate` on `deploy/Caddyfile`, which has not been syntax-checked
+   because Caddy is not installed here. **It is also coupled to item 3** in a way
+   neither document said until now — see §10.
 1. **Nothing is blocked on a person any more.** PR #2 is merged (§1). What is
    left is either work, a decision that is yours, or blocked on data that is not
    in this repository — and each says which below.
@@ -953,12 +953,48 @@ wrong `init_time` did, in one line. When you centralise a lookup, grep for the
 
 ---
 
-## 10. The reviewer deployment — PREREQUISITES RECORDED 2026-09-10, NEITHER DONE
+## 10. The reviewer deployment — PREREQUISITES FIXED 2026-09-17
 
 A password-protected deployment for external reviewers. The cost estimate and a
 .docx of the note below live in `Estimate Costs/` **outside this repository**;
 `REVIEW_DEPLOY_PREREQS.md` is the in-repo copy, put there so it survives a
-clone. Both prerequisites are write-ups. **Neither is implemented.**
+clone — and that .docx is now **out of date on status**, since it does not know
+either item is fixed.
+
+**Both prerequisites are fixed.** What shipped, and how each was verified:
+
+| | fix | verified by |
+|---|---|---|
+| §1 auth | `src/api/base.js` defaults to same-origin `/api` in a production build; `deploy/Caddyfile` puts one `basic_auth` over both halves; gunicorn binds `127.0.0.1` | a build with `REACT_APP_API_URL` unset ships **zero** occurrences of a separate API origin in its JavaScript |
+| §2 pool | `DB_POOL_MAX` defaults to **8**, safe at every tier (8×8=64 < 97 usable) | startup check and `/api/health` → `connection_pool` report the live arithmetic; the old 20 is reported `safe: false` at −63 headroom |
+
+**Two steps remain yours and cannot be done for you:** run
+`caddy hash-password` and paste the bcrypt hash into the Caddyfile, and point
+the hostname at the box. A password should only be written to a file by the
+person choosing it.
+
+**Not verified:** `deploy/Caddyfile` has **not been syntax-checked** —
+Caddy is not installed on this machine. Run `caddy validate --config
+deploy/Caddyfile` once the hash is in before trusting it.
+
+Three things found while doing this, none of them in the original note:
+
+- **The API base was duplicated across five files**, each with its own
+  `|| 'http://localhost:5000/api'`. That is the root of §1 rather than a tidiness
+  problem: there was no same-origin option to choose. Now one module, and the
+  standing "replacing a resolver means finding every copy" lesson applies again.
+- **The default build ships a 4.5 MB source map** with the complete original
+  source. `DEPLOY.md` §4 now builds with `GENERATE_SOURCEMAP=false`.
+- **`DEPLOY.md` §3 said to bind `0.0.0.0`**, which would have left port 5000
+  reachable and the password bypassable by addressing the host directly. The
+  Caddyfile and §3 both say `127.0.0.1` now, and §8's smoke test checks it from
+  another machine.
+
+`DEPLOY.md` §8 now also asserts the password is load-bearing — an unauthenticated
+request to `/` and to `/api/health` must both return **401**. A 200 from either
+is the exact failure §1 describes.
+
+The original write-ups follow, kept as the reasoning.
 
 1. **The API authenticates nothing.** All 19 routes in `flask_api.py` are open;
    the only `token` references in the file are the input-validation regex and

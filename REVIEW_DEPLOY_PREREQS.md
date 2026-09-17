@@ -1,10 +1,36 @@
 # Review deployment — fix before opening access
 
-Two items left out of the cost estimate because they are not costs. Both still need
-doing before external reviewers get the URL. Neither changes the estimate.
+Two items left out of the cost estimate because they are not costs. Neither
+changes the estimate.
+
+> **Both are FIXED as of 2026-09-17.** This note is kept as the reasoning, not
+> as a to-do list. What shipped:
+>
+> - **§1, auth.** `src/api/base.js` is now the single definition of the API base
+>   and **defaults to same-origin `/api` in a production build**, so the bundle
+>   ships no second origin to call around the password. Verified: a build with
+>   `REACT_APP_API_URL` unset contains **zero** occurrences of a separate API
+>   origin in the shipped JavaScript. `deploy/Caddyfile` serves both halves
+>   behind one `basic_auth`, and `DEPLOY.md` §3 now binds gunicorn to
+>   `127.0.0.1` so port 5000 is not a way past it.
+> - **§2, the pool.** `DB_POOL_MAX` defaults to **8** instead of 20, which is
+>   safe at every worker count the estimate assumes (8 × 8 = 64 < 100). The API
+>   also checks the arithmetic against the live server at startup and reports it
+>   at `/api/health` under `connection_pool`, so the condition is observable
+>   rather than documented.
+>
+> **Two steps remain yours, and cannot be done for you:** generate the bcrypt
+> hash with `caddy hash-password` and paste it into the Caddyfile, and point the
+> hostname at the box. A password must not be written into a file by anything
+> other than the person choosing it.
+>
+> One thing found while verifying: the default build also emits a 4.5 MB
+> `main.*.js.map` carrying the complete source. `DEPLOY.md` §4 now builds with
+> `GENERATE_SOURCEMAP=false`.
 
 Same content as `Estimate Costs/WEAVE_Review_Deployment_Prerequisites.docx`; this copy
-lives in the repo so it survives a clone.
+lives in the repo so it survives a clone. **That .docx is now out of date on
+status** — its analysis still holds, but it does not know either item is fixed.
 
 ---
 
@@ -19,8 +45,9 @@ baked into the bundle at build time (`DEPLOY.md` §4). That URL therefore ships 
 every browser in readable JavaScript. **A password on the static site alone protects
 nothing** — anyone who opens the bundle can call `/api/*` directly.
 
-**Fix:** serve the frontend and the API from one origin behind a single Caddy vhost,
-and put the password on the whole vhost.
+**Fix — shipped in `deploy/Caddyfile`.** Serve the frontend and the API from one
+origin behind a single Caddy vhost, and put the password on the whole vhost. The
+file in the repo is the real thing, with comments; this is the shape of it:
 
 ```
 weave-review.example.com {
@@ -38,12 +65,18 @@ weave-review.example.com {
 }
 ```
 
-Build the frontend with a same-origin API base so nothing points off-host:
+Build the frontend with a same-origin API base so nothing points off-host. As of
+2026-09-17 that is the **default** for a production build, so the variable is
+better left unset than set — `src/api/base.js` resolves to `/api`:
 
 ```bash
-REACT_APP_API_URL="https://weave-review.example.com/api" npm ci
-REACT_APP_API_URL="https://weave-review.example.com/api" npm run build
+npm ci
+GENERATE_SOURCEMAP=false npm run build
 ```
+
+Setting `REACT_APP_API_URL` to an absolute URL still works and is still correct
+for a genuinely two-host deployment — which is also the deployment this section
+says a single password cannot protect.
 
 Caddy fetches and renews the TLS certificate itself, so the `DEPLOY.md` §7 item about
 terminating TLS at the proxy is covered. Same-origin also makes the `CORS_ORIGIN`
@@ -69,17 +102,31 @@ counts go past that:
 Past the limit, workers fail to acquire a connection and requests error out under
 exactly the load the bigger instance was bought to handle.
 
-**Fix:** either lower the per-worker pool in `Data/.env` —
+**Fix — shipped.** The per-worker pool now *defaults* to these values rather than
+needing them set:
 
 ```
 DB_POOL_MIN=2
 DB_POOL_MAX=8
 ```
 
-— giving 8 × 8 = 64 connections at the 10-user size, or raise `max_connections` in
-`postgresql.conf` to comfortably exceed `workers × DB_POOL_MAX`. Lowering the pool is
-the safer default; each connection costs memory on a box that is also running the
-database.
+That gives 8 × 8 = 64 connections at the 10-user size. Raising `max_connections`
+in `postgresql.conf` above `workers × DB_POOL_MAX` is the other valid fix;
+lowering the pool is the safer default, because each connection costs memory on
+a box that is also running the database.
+
+**And it is now checked rather than documented.** `_check_pool_headroom` in
+`flask_api.py` reads the server's real `max_connections` — minus
+`superuser_reserved_connections`, which are not available to this role, so the
+usable ceiling is 97 rather than 100 — multiplies `DB_POOL_MAX` by the worker
+count from `WEB_CONCURRENCY`, and reports both at startup and in `/api/health`
+under `connection_pool`. It warns rather than refuses, because the worker count
+is inferred from the environment and refusing would take a working deployment
+down over an unset variable.
+
+The reason this needs a check at all is that the failure is invisible until it
+is not: everything works until enough users arrive together, and then requests
+fail with a pool exhaustion that reads as a database fault.
 
 ---
 

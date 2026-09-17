@@ -359,16 +359,89 @@ DB_CONFIG = {
 import psycopg2.pool
 
 # ThreadedConnectionPool is safe for multi-threaded Flask serving.
-# Min=5 pre-warms connections at startup so the first requests don't pay
-# connection setup cost. Max=20 handles bursts (region analysis fires ~10
-# concurrent requests).
+#
+# The pool is PER WORKER, so the number that has to stay under PostgreSQL's
+# `max_connections` is `workers × DB_POOL_MAX`, not DB_POOL_MAX. The old
+# defaults (5/20) were chosen for the 4-worker case in DEPLOY.md §3 and hold
+# there: 4 × 20 = 80 < 100. They do NOT hold at the worker counts the review
+# deployment's larger tiers assume — 6 × 20 = 120 and 8 × 20 = 160 — where
+# workers fail to acquire a connection under exactly the load the bigger
+# instance was bought to carry.
+#
+# So the defaults are now 2/8, which is safe across every documented tier
+# (8 × 8 = 64 < 100) and still covers the region "Compute All Maps" burst of
+# ~10 concurrent requests, since those queue on the pool rather than failing
+# (`_pool_getconn` retries). Raising `max_connections` instead is the other
+# valid fix, and costs memory on a box that is also running the database.
+#
+# `_check_pool_headroom` verifies the arithmetic against the live server at
+# startup rather than trusting this comment to be read.
+# Named rather than inlined into the `os.environ.get` calls so a test can pin
+# the shipped default. Reading the *effective* value instead would pass against
+# whatever a local .env happens to set, which is not the thing worth asserting.
+DB_POOL_MIN_DEFAULT = 2
+DB_POOL_MAX_DEFAULT = 8
+
+DB_POOL_MIN = int(os.environ.get('DB_POOL_MIN', DB_POOL_MIN_DEFAULT))
+DB_POOL_MAX = int(os.environ.get('DB_POOL_MAX', DB_POOL_MAX_DEFAULT))
+
 connection_pool = psycopg2.pool.ThreadedConnectionPool(
-    int(os.environ.get('DB_POOL_MIN', 5)),
-    # Default 20 so the DEPLOY.md worker math holds (workers × DB_POOL_MAX must
-    # stay under PostgreSQL max_connections; 4 × 20 = 80 < 100).
-    int(os.environ.get('DB_POOL_MAX', 20)),
-    **DB_CONFIG
+    DB_POOL_MIN, DB_POOL_MAX, **DB_CONFIG
 )
+
+
+def _worker_count():
+    """How many API processes will share this database.
+
+    `WEB_CONCURRENCY` is the variable gunicorn itself reads, so a deployment
+    that sets workers the documented way is understood without extra
+    configuration. Falls back to 1, which is the dev case and cannot be wrong
+    in the dangerous direction: it under-reports the risk only when the
+    variable is unset, and then there is nothing to report.
+    """
+    for name in ('WEB_CONCURRENCY', 'GUNICORN_WORKERS'):
+        raw = os.environ.get(name)
+        if raw:
+            try:
+                return max(1, int(raw))
+            except ValueError:
+                pass
+    return 1
+
+
+def _check_pool_headroom(cursor):
+    """Compare `workers × DB_POOL_MAX` against the server's `max_connections`.
+
+    Returns a dict for `/api/health`, so the condition is checkable on a
+    deployed instance rather than only in a startup log nobody reads. The
+    failure this catches is quiet and load-dependent: everything works until
+    enough users arrive at once, and then requests error out with a pool
+    exhaustion that looks like a database problem.
+
+    `superuser_reserved_connections` is subtracted because those slots are not
+    available to this role, so the usable ceiling is lower than
+    `max_connections` suggests.
+    """
+    cursor.execute("SHOW max_connections")
+    max_conn = int(cursor.fetchone()[0])
+    try:
+        cursor.execute("SHOW superuser_reserved_connections")
+        reserved = int(cursor.fetchone()[0])
+    except Exception:
+        reserved = 0
+
+    workers = _worker_count()
+    demand  = workers * DB_POOL_MAX
+    usable  = max_conn - reserved
+    return {
+        'workers':             workers,
+        'pool_max_per_worker': DB_POOL_MAX,
+        'peak_connections':    demand,
+        'max_connections':     max_conn,
+        'usable_connections':  usable,
+        'headroom':            usable - demand,
+        'safe':                demand <= usable,
+    }
 
 
 def _pool_getconn():
@@ -2827,6 +2900,10 @@ def health_check():
             # otherwise correct twice, silently and invisibly.
             "precip_export_convention": _check_export_convention(
                 cursor, init_time=gefs_init),
+            # Whether workers × DB_POOL_MAX still fits under max_connections.
+            # Reported here because the failure it predicts only appears under
+            # concurrent load, by which point it reads as a database fault.
+            "connection_pool": _check_pool_headroom(cursor),
         })
     except RunSelectionError:
         # A 400 about the request, not a server fault: let the
@@ -4778,6 +4855,37 @@ if __name__ == '__main__':
     print("  • POST /api/compare/spatial-diff       {model_a, model_b, metric, variable, min_lat, max_lat, min_lon, max_lon, hour_min, hour_max}")
     print("=" * 60)
     print("✅ Optimized with connection pooling")
+
+    # Say it at startup, loudly, when the pool cannot fit under the server's
+    # max_connections. This is a warning rather than a refusal on purpose: the
+    # worker count is inferred from the environment, so refusing would take an
+    # otherwise-working deployment down over a variable that may simply be
+    # unset. /api/health carries the same figures for checking afterwards.
+    try:
+        _hc_conn = get_db_connection()
+        try:
+            with _hc_conn.cursor() as _hc_cur:
+                _pool = _check_pool_headroom(_hc_cur)
+        finally:
+            return_db_connection(_hc_conn)
+
+        if _pool['safe']:
+            print(f"✅ Pool headroom: {_pool['workers']} worker(s) × "
+                  f"{_pool['pool_max_per_worker']} = {_pool['peak_connections']} "
+                  f"of {_pool['usable_connections']} usable connections")
+        else:
+            print("=" * 60)
+            print("⚠️  CONNECTION POOL OVER CAPACITY — requests will fail under load")
+            print(f"    {_pool['workers']} worker(s) × {_pool['pool_max_per_worker']} "
+                  f"= {_pool['peak_connections']} connections at peak")
+            print(f"    server allows {_pool['usable_connections']} usable "
+                  f"(max_connections {_pool['max_connections']})")
+            print("    Lower DB_POOL_MAX in Data/.env, or raise max_connections.")
+            print("    See REVIEW_DEPLOY_PREREQS.md §2.")
+            print("=" * 60)
+    except Exception as _e:
+        # Never let the check itself stop the server starting.
+        print(f"⚠️  Could not verify pool headroom: {_e}")
     print("🌬️  Wind: speed = √(u² + v²), direction = atan2(u,v)")
     print("📊 Cone of Uncertainty: mean, std, min, max, p10/p25/p75/p90 per hour")
     print("📊 Multi-model comparison: timeseries, skill scores, spatial agreement")

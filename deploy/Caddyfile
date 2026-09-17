@@ -1,0 +1,79 @@
+# WEAVE reviewer beta — one origin, one password.
+#
+# Why a single vhost rather than a static host plus a separate API host:
+# `REACT_APP_API_URL` is baked into the bundle at build time, so if it names a
+# second origin, that address ships to every browser in readable JavaScript and
+# a password on the static site protects nothing — anyone who opens the bundle
+# can call the API directly. Serving both halves here means there is one door
+# and `basic_auth` is in front of it. See REVIEW_DEPLOY_PREREQS.md §1.
+#
+# `src/api/base.js` defaults to same-origin `/api` in a production build, so the
+# frontend needs no API URL configured for this deployment. Verified: a build
+# with `REACT_APP_API_URL` unset contains zero occurrences of a separate origin
+# in the shipped JavaScript.
+#
+# SETUP — two things to do before this file works:
+#
+#   1. Generate the password hash. This file must contain a bcrypt hash, never
+#      a plaintext password:
+#
+#          caddy hash-password
+#
+#      Paste the output in place of REPLACE_WITH_BCRYPT_HASH below. The hash is
+#      safe to commit in the sense that it is not reversible, but prefer keeping
+#      this file out of the repo once it holds a real one.
+#
+#   2. Point `weave-review.example.com` at the real hostname, and make sure that
+#      name resolves to this box — Caddy fetches and renews the TLS certificate
+#      itself on first request, which is what covers DEPLOY.md §7's TLS item.
+#
+# Run with:  caddy run --config deploy/Caddyfile
+
+weave-review.example.com {
+
+	# One password over the whole vhost: the static build AND /api/*. Applying
+	# it only to the static half is the mistake this file exists to prevent.
+	#
+	# Caddy renamed this directive from `basicauth` in v2.7; use `basicauth` on
+	# older builds. The hash is bcrypt, from `caddy hash-password`.
+	basic_auth {
+		reviewer REPLACE_WITH_BCRYPT_HASH
+	}
+
+	# The API. gunicorn must bind 127.0.0.1, not 0.0.0.0 — otherwise port 5000
+	# is reachable from outside and the password is bypassable by addressing the
+	# host directly. DEPLOY.md §3 has the command.
+	handle /api/* {
+		reverse_proxy 127.0.0.1:5000 {
+			# The Cartopy render endpoints are slow on a cold cache; the default
+			# would cut them off mid-render and surface as a 502.
+			transport http {
+				response_header_timeout 120s
+			}
+		}
+	}
+
+	# The static build. `try_files` sends unknown paths to index.html because
+	# this is a single-page app: a reviewer refreshing on a client-side route
+	# would otherwise get a 404 from the file server.
+	handle {
+		root * /srv/weave/build
+		try_files {path} /index.html
+		file_server
+	}
+
+	encode gzip zstd
+
+	# Modest hardening. Not a substitute for the password; these only reduce
+	# what a hostile page embedding this one could do.
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/weave-review.log
+	}
+}
