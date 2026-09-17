@@ -143,9 +143,8 @@ In priority order. Nothing here is half-done.
 0. **The reviewer deployment is the live task** (§10). **Both prerequisites are
    fixed as of 2026-09-17** — one origin behind one `basic_auth`, and pool
    defaults that are safe at every tier and checked at startup. What is left is
-   not code: generate the password hash, point the hostname at the box, and
-   run `caddy validate` on `deploy/Caddyfile`, which has not been syntax-checked
-   because Caddy is not installed here. **It is also coupled to item 3** in a way
+   not code: generate the password hash and point the hostname at the box. The
+   Caddyfile is validated (Caddy v2.11.4, "Valid configuration"). **It is also coupled to item 3** in a way
    neither document said until now — see §10.
 1. **Nothing is blocked on a person any more.** PR #2 is merged (§1). What is
    left is either work, a decision that is yours, or blocked on data that is not
@@ -973,9 +972,24 @@ either item is fixed.
 the hostname at the box. A password should only be written to a file by the
 person choosing it.
 
-**Not verified:** `deploy/Caddyfile` has **not been syntax-checked** —
-Caddy is not installed on this machine. Run `caddy validate --config
-deploy/Caddyfile` once the hash is in before trusting it.
+**Validated 2026-09-17** against Caddy v2.11.4: `caddy validate` returns
+**"Valid configuration"**, and the run confirms automatic HTTPS with
+HTTP→HTTPS redirects, so §7's TLS item is genuinely covered rather than
+assumed. Checked with a real bcrypt hash substituted, since the committed file
+carries a placeholder and hash validity is not checked at adaptation time.
+`caddy fmt` is clean.
+
+**One deployment prerequisite that looks like a config bug.** Caddy opens the
+log writer while *loading* the config, not on first request, so if
+`/var/log/caddy` does not exist both `caddy validate` and `caddy run` fail
+outright with `mkdir /var/log/caddy: permission denied`. Create it first:
+
+```bash
+sudo mkdir -p /var/log/caddy && sudo chown caddy:caddy /var/log/caddy
+```
+
+That was the only error the validation found, and it is about the box rather
+than the file. The Caddyfile now says so at the `log` block.
 
 Three things found while doing this, none of them in the original note:
 

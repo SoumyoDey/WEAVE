@@ -30,7 +30,6 @@
 # Run with:  caddy run --config deploy/Caddyfile
 
 weave-review.example.com {
-
 	# One password over the whole vhost: the static build AND /api/*. Applying
 	# it only to the static half is the mistake this file exists to prevent.
 	#
@@ -73,6 +72,16 @@ weave-review.example.com {
 		-Server
 	}
 
+	# `/var/log/caddy` must already exist and be writable by the user Caddy runs
+	# as. Caddy opens the log writer during config *loading*, not on first
+	# request, so a missing directory fails `caddy validate` and `caddy run`
+	# outright — with a `mkdir /var/log/caddy: permission denied` that looks like
+	# a config error and is not one:
+	#
+	#     sudo mkdir -p /var/log/caddy && sudo chown caddy:caddy /var/log/caddy
+	#
+	# To validate this file on a machine without that directory, point the output
+	# somewhere writable for the check, or comment this block out.
 	log {
 		output file /var/log/caddy/weave-review.log
 	}
