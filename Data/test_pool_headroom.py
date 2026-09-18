@@ -78,7 +78,7 @@ class TestWorkerCount:
 
 class TestHeadroom:
     def test_the_documented_safe_tier_is_safe(self, monkeypatch, clean_worker_env):
-        """8 workers x 8 = 64, under 97 usable. This is the tier the old default
+        """8 workers x 8 = 64, under 97 usable. This is the count the old default
         of 20 broke: 8 x 20 = 160."""
         monkeypatch.setenv('WEB_CONCURRENCY', '8')
         monkeypatch.setattr(api, 'DB_POOL_MAX', 8)
@@ -132,9 +132,11 @@ class TestTheShippedDefault:
         because the effective value comes from whatever `.env` this machine has
         and would pass on a dev box while the committed default was unsafe.
 
-        The tiers are the ones in the cost estimate; the assertion is that the
-        default clears all of them against a stock PostgreSQL (100 connections,
-        3 superuser-reserved).
+        The worker counts are plain plausible ones, not a particular platform's
+        instance tiers — they were the AWS tiers until that plan was dropped on
+        2026-09-18, and tying a test to a deployment decision is how it goes
+        stale. The assertion is that the default clears all of them against a
+        stock PostgreSQL (100 connections, 3 superuser-reserved).
         """
         default = api.DB_POOL_MAX_DEFAULT
         for workers in (2, 4, 6, 8):

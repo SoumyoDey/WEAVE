@@ -89,18 +89,26 @@ step in `DEPLOY.md` §5 unnecessary — there is no cross-origin request left to
 `DEPLOY.md` §3 works the arithmetic for 4 workers: 4 × `DB_POOL_MAX` 20 = 80
 connections, safely under PostgreSQL's default `max_connections` of 100.
 
-The cost estimate sizes larger instances for higher concurrency, and the worker
-counts go past that:
+Any deployment sized for more concurrency runs more workers, and the arithmetic
+stops holding quickly:
 
-| Concurrent users | Workers | × DB_POOL_MAX 20 | vs. max_connections 100 |
-|---|---|---|---|
-| 1 | 2 | 40 | fine |
-| 3 | 4 | 80 | fine |
-| 5 | 6 | 120 | **over** |
-| 10 | 8 | 160 | **over** |
+| Workers | × DB_POOL_MAX 20 | vs. max_connections 100 |
+|---|---|---|
+| 2 | 40 | fine |
+| 4 | 80 | fine |
+| 6 | 120 | **over** |
+| 8 | 160 | **over** |
 
 Past the limit, workers fail to acquire a connection and requests error out under
-exactly the load the bigger instance was bought to handle.
+exactly the load the extra workers were added to carry.
+
+> **The worker counts above used to be tied to the AWS instance tiers in the cost
+> estimate. That plan is off as of 2026-09-18 and the platform is undecided**, so
+> they are stated here as plain worker counts instead. Nothing about the problem
+> or the fix was platform-specific: the constraint is `workers × DB_POOL_MAX`
+> against the server's own `max_connections`, which is true of any host. The
+> check described below reads both from the live server rather than from a table,
+> which is why re-anchoring this section needed no code change.
 
 **Fix — shipped.** The per-worker pool now *defaults* to these values rather than
 needing them set:
@@ -110,7 +118,8 @@ DB_POOL_MIN=2
 DB_POOL_MAX=8
 ```
 
-That gives 8 × 8 = 64 connections at the 10-user size. Raising `max_connections`
+That gives 8 × 8 = 64 at eight workers, and clears every count in the table
+above. Raising `max_connections`
 in `postgresql.conf` above `workers × DB_POOL_MAX` is the other valid fix;
 lowering the pool is the safer default, because each connection costs memory on
 a box that is also running the database.
@@ -132,5 +141,12 @@ fail with a pool exhaustion that reads as a database fault.
 
 *Sources: derived from `Data/flask_api.py` and `DEPLOY.md` in this repository as of
 10 September 2026 — route count and absence of authentication read from the source,
-worker and pool arithmetic from `DEPLOY.md` §3. Worker counts per tier are those in
-the companion `Estimate Costs/WEAVE_Review_Deployment_Cost_Estimate.docx`.*
+worker and pool arithmetic from `DEPLOY.md` §3.*
+
+*The worker counts originally came from the AWS instance tiers in
+`Estimate Costs/WEAVE_Review_Deployment_Cost_Estimate.docx`. **Both .docx files
+in `Estimate Costs/` are superseded as of 2026-09-18** — that estimate prices a
+platform that is no longer the plan, and the prerequisites .docx does not know
+either item is fixed. Their technical content still holds, because neither
+prerequisite was ever AWS-specific; it is the platform and the status that are
+stale. This file is the live version.*

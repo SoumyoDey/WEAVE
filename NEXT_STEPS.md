@@ -954,11 +954,19 @@ wrong `init_time` did, in one line. When you centralise a lookup, grep for the
 
 ## 10. The reviewer deployment — PREREQUISITES FIXED 2026-09-17
 
-A password-protected deployment for external reviewers. The cost estimate and a
-.docx of the note below live in `Estimate Costs/` **outside this repository**;
-`REVIEW_DEPLOY_PREREQS.md` is the in-repo copy, put there so it survives a
-clone — and that .docx is now **out of date on status**, since it does not know
-either item is fixed.
+A password-protected deployment for external reviewers.
+`REVIEW_DEPLOY_PREREQS.md` is the live record; it lives in the repo so it
+survives a clone.
+
+**The AWS plan is off as of 2026-09-18 and no replacement platform is chosen
+yet.** Both .docx files in `Estimate Costs/` (outside this repository) are
+therefore superseded — the estimate prices a platform that is no longer the
+plan, and the prerequisites note does not know either item is fixed. **Neither
+fix below was platform-specific**, so nothing shipped needs revisiting: one
+origin behind one password is a property of the vhost, and the pool check reads
+the live server's own limits. What a new platform changes is the worker count
+and `max_connections`, which are inputs to that check rather than assumptions
+baked into it.
 
 **Both prerequisites are fixed.** What shipped, and how each was verified:
 
@@ -967,10 +975,11 @@ either item is fixed.
 | §1 auth | `src/api/base.js` defaults to same-origin `/api` in a production build; `deploy/Caddyfile` puts one `basic_auth` over both halves; gunicorn binds `127.0.0.1` | a build with `REACT_APP_API_URL` unset ships **zero** occurrences of a separate API origin in its JavaScript |
 | §2 pool | `DB_POOL_MAX` defaults to **8**, safe at every tier (8×8=64 < 97 usable) | startup check and `/api/health` → `connection_pool` report the live arithmetic; the old 20 is reported `safe: false` at −63 headroom |
 
-**Two steps remain yours and cannot be done for you:** run
-`caddy hash-password` and paste the bcrypt hash into the Caddyfile, and point
-the hostname at the box. A password should only be written to a file by the
-person choosing it.
+**What remains is not code.** A host has to be chosen first — that is the open
+question as of 2026-09-18. Then two steps that are yours and cannot be done for
+you: run `caddy hash-password` and paste the bcrypt hash into the Caddyfile, and
+point the hostname at the box. A password should only be written to a file by
+the person choosing it.
 
 **Validated 2026-09-17** against Caddy v2.11.4: `caddy validate` returns
 **"Valid configuration"**, and the run confirms automatic HTTPS with

@@ -12,9 +12,10 @@ one origin behind a single `basic_auth` (`deploy/Caddyfile`), and §3's pool
 defaults are safe at every worker count and checked at startup. The reasoning,
 and the arithmetic, are in
 [`REVIEW_DEPLOY_PREREQS.md`](REVIEW_DEPLOY_PREREQS.md). **Two steps are still
-yours**: generate the password hash with `caddy hash-password`, and point the
-hostname at the box. The cost estimate, and a .docx of that note, are in
-`Estimate Costs/` outside this repo.
+yours**: choose a host, generate the password hash with `caddy hash-password`,
+and point the hostname at the box. (The `Estimate Costs/` .docx files outside
+this repo are superseded — they price an AWS deployment that is no longer the
+plan.)
 
 ---
 
