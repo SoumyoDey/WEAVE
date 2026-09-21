@@ -17,6 +17,8 @@ in this repository.
 
 **Changes the rest of this document assumes**, newest first:
 
+- **2026-09-21 — the CI actions need a version bump** (§6). Every run warns
+  that Node 20 is deprecated and being forced onto Node 24. Nothing fails yet.
 - **2026-09-21 — the Vite migration is dropped** (§6). That empties the
   lower-priority list; the cost of staying on CRA is stated there.
 - **2026-09-21 — `observation_data` was VACUUM FULLed**, 1065 MB back down to
@@ -193,12 +195,16 @@ In priority order. Nothing here is half-done.
    The root problem was that the original figures recorded no query, so several
    are not recomputable at all — that is now fixed for next time by the script
    rather than by another round of archaeology.
-5. ~~**Item 6, the lower-priority list.**~~ **Empty as of 2026-09-21.** Endpoint
-   caching (§6) and row caps are both done, and the Vite migration — the only
-   remaining entry — was dropped. See §6 for what staying on CRA costs.
-6. **`DATA_EXPANSION_DESIGN.md` phases 3–5.** No longer blocked on the schema —
-   phases 1–2 are done (§8). What remains is the run-selector UI, which has no
-   user-visible value while one run is loaded, and the ingest above. Read that
+5. **Item 6, the lower-priority list** — emptied and then refilled with one
+   thing. Endpoint caching (§6) and row caps are done, and the Vite migration
+   was dropped (see §6 for what staying on CRA costs). What replaced them is
+   the **Node 20 action deprecation in CI**, also §6.
+6. **`DATA_EXPANSION_DESIGN.md` phases 3–5 — now the largest piece of real work
+   left.** Unblocked on both counts: the schema landed in phases 1–2 (§8) and
+   the ingest is done (§12), so nothing stands between this and a second run
+   except the work itself. What remains is the run-selector UI, which has no
+   user-visible value *while one run is loaded* — so it and a second run are
+   one task, not two. Read that
    document's status table first; three of its instructions were superseded by
    what actually shipped and are marked as such.
 
@@ -798,6 +804,18 @@ fallback. That is one less thing for DATA_EXPANSION_DESIGN.md to trip over.
   superseded by what shipped and are marked against each phase.
 
 ## 6. Lower priority
+
+- **Bump the GitHub Actions to their current majors.** Every CI run since
+  roughly mid-September carries `Node.js 20 is deprecated ... being forced to
+  run on Node.js 24` for `actions/checkout@v4`, `setup-node@v4`,
+  `setup-python@v5`, `cache@v4` and `upload-artifact@v4`. **Nothing fails
+  today** — the runner substitutes Node 24 — which is exactly why this will sit
+  unread until the forcing stops and four green jobs turn red in one push.
+
+  Not urgent and not hard; the reason it is written down is that it was
+  *noticed* on 2026-09-16, mentioned once, and never recorded. Do it as one
+  commit and watch the annotations disappear rather than trusting the version
+  numbers, since majors move.
 
 - ~~**Vite migration**~~ **dropped 2026-09-21.** A decision, not an oversight,
   so it is struck through rather than deleted — otherwise it reappears the next
