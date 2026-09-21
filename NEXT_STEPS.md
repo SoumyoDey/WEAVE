@@ -1,13 +1,13 @@
 # Next steps
 
-State as of 2026-09-16. **PR #2 is merged** (`49ead8f`); `main` is the live
+State as of 2026-09-21. **PR #2 is merged** (`49ead8f`); `main` is the live
 branch and carries everything below.
 
-**The active workstream is now the password-protected reviewer deployment**
-(§10), which is not what the rest of this document is about — everything below
-§9 predates it. Two prerequisites gate it and neither is written up anywhere
-else in this repository: read `REVIEW_DEPLOY_PREREQS.md` before deploying
-anything.
+**The active workstream is the password-protected reviewer deployment** (§10),
+which is not what the rest of this document is about — everything below §8
+predates it. Both of its prerequisites are **fixed**; what it now waits on is a
+**host**, since the AWS plan was dropped on 2026-09-18 and nothing replaced it.
+Read `REVIEW_DEPLOY_PREREQS.md` before deploying anything.
 
 **Read this first.** Items 1, 3, 3b, 4, 7 and 8 below are done, all seven
 defects the fixture layer found are fixed, and **the consistency audit is closed —
@@ -17,6 +17,19 @@ in this repository.
 
 **Changes the rest of this document assumes**, newest first:
 
+- **2026-09-21 — `observation_data` was VACUUM FULLed**, 1065 MB back down to
+  499 MB (§12). Housekeeping rather than a fix, but it is a direct consequence
+  of the UTC correction and the reason is worth knowing before the next bulk
+  `UPDATE` on this database.
+- **2026-09-18 — the AWS deployment is off** and no platform has replaced it
+  (§10). Both `Estimate Costs/*.docx` are superseded. **No code changed**: the
+  pool check reads the live server's limits rather than a table of instance
+  sizes, so only the *justification* in `REVIEW_DEPLOY_PREREQS.md` §2 needed
+  re-anchoring.
+- **2026-09-17 — both reviewer-deployment prerequisites are fixed** (§10). One
+  origin behind one `basic_auth` (`deploy/Caddyfile`, validated), same-origin
+  API base, gunicorn on `127.0.0.1`, and a `DB_POOL_MAX` default that is safe at
+  every worker count and checked at startup.
 - **2026-09-16 — `observation_data` has a loader, it found a 4-hour defect in
   the truth field, and that defect is now FIXED** (§12).
   `Data/load_observations.py` reproduces **all 2,480,664 rows** of the loaded
@@ -53,7 +66,7 @@ in this repository.
   checkerboard is gone; every interior cell now averages the same number of
   observations. Scores moved — wind bias by up to 29% at a point — so
   `METRICS_AUDIT.md`'s figures no longer match the app and need re-deriving.
-- **2026-09-04 — the deterministic metric endpoints are cached** (§9), 382x on a
+- **2026-09-04 — the deterministic metric endpoints are cached** (§6), 382x on a
   warm request. Note the cache key includes a fingerprint of the truth field, so
   the switch above invalidated it automatically.
 - **2026-08-27 — the target grid is a constant**, so `regrid_members.py` can run
@@ -144,8 +157,9 @@ In priority order. Nothing here is half-done.
    fixed as of 2026-09-17** — one origin behind one `basic_auth`, and pool
    defaults that are safe at every tier and checked at startup. What is left is
    not code: generate the password hash and point the hostname at the box. The
-   Caddyfile is validated (Caddy v2.11.4, "Valid configuration"). **It is also coupled to item 3** in a way
-   neither document said until now — see §10.
+   Caddyfile is validated (Caddy v2.11.4, "Valid configuration"). **The host
+   decision is also the data decision** — a fresh box starts with an empty
+   PostgreSQL and the database is 36 GB — see §10.
 1. **Nothing is blocked on a person any more.** PR #2 is merged (§1). What is
    left is either work, a decision that is yours, or blocked on data that is not
    in this repository — and each says which below.
@@ -160,9 +174,9 @@ In priority order. Nothing here is half-done.
    promise of "forecasts and no truth" no longer holds. This also unblocks
    `DATA_EXPANSION_DESIGN.md` phase 4 and therefore a second run.
 
-   **What it created is larger than what it closed, and is now the top item on
-   this list.** The run's precipitation truth is stored **4 hours behind UTC**
-   while its wind truth is not (§12), so every precipitation number the app and
+   **What it created was larger than what it closed.** The run's precipitation
+   truth was stored **4 hours behind UTC** while its wind truth was not (§12),
+   so every precipitation number the app and
    `METRICS_AUDIT.md` reported was misaligned in time. **Measured and then
    fixed, 2026-09-16** (§12): continuous errors fell 4–11% domain-wide and up
    to 67% at a point, UKMO's precipitation bias flipped sign, and FSS/CSI moved
@@ -178,7 +192,7 @@ In priority order. Nothing here is half-done.
    are not recomputable at all — that is now fixed for next time by the script
    rather than by another round of archaeology.
 5. **Item 6, the lower-priority list.** Vite (CRA is EOL) is the only one left —
-   endpoint caching (§9) and row caps are both done.
+   endpoint caching (§6) and row caps are both done.
 6. **`DATA_EXPANSION_DESIGN.md` phases 3–5.** No longer blocked on the schema —
    phases 1–2 are done (§8). What remains is the run-selector UI, which has no
    user-visible value while one run is loaded, and the ingest above. Read that
@@ -783,7 +797,12 @@ fallback. That is one less thing for DATA_EXPANSION_DESIGN.md to trip over.
 ## 6. Lower priority
 
 - **Vite migration** — CRA is EOL.
-- **Cache the deterministic metric endpoints** — only the plot endpoint is cached.
+- ~~**Cache the deterministic metric endpoints**~~ **done 2026-09-04.** 382x on
+  a warm request. The cache key includes a fingerprint of the truth field, so
+  both truth-field swaps since (§7, §12) invalidated it automatically rather
+  than serving stale scores. **This is what the references to "§9" elsewhere in
+  this document meant** — there has never been a section 9; the work was
+  recorded here. Those references now point at §6.
 - ~~**Row caps on point-list queries**~~ **done 2026-09-04.**
   `POINT_LIST_MAX_CELLS` (default 20,000) bounds `/api/forecast-data` and
   `/api/wind-data`, whose size is set by the native grid rather than by anything
@@ -1035,18 +1054,44 @@ The original write-ups follow, kept as the reasoning.
    of the two fixes, since each connection costs memory on a box also running
    the database.
 
-**The coupling neither document mentioned, and the thing to settle first.**
-This deployment and the `observation_data` ingest (item 3, §11) are the same
-question if the beta goes onto a fresh host. Nothing in this repository writes
-`observation_data`, so a fresh box gets forecasts and **no truth field at all** —
-every scored endpoint would return empty, correctly, and reviewers would see an
-app with no verification in it. Decide deliberately which of these it is:
+### Getting the data to wherever it lands — the thing to settle first
 
-- **Serve from this machine's existing `weave_weather`.** No ingest needed, the
-  beta ships as soon as the two prerequisites are done. The truth field is the
-  rebuilt partition-based one (§7), which is the good one.
-- **Deploy to a fresh host.** Then §11 is a prerequisite too, and the IMERG
-  decision in it has to be made before reviewers see anything.
+The host decision and the data decision are the same decision, which neither
+the estimate nor the prerequisites note said. **A fresh box starts with an empty
+PostgreSQL**, so every scored endpoint would return empty — correctly — and
+reviewers would see an app with no verification in it.
+
+What is actually in the database, as of 2026-09-21:
+
+| table | size |
+|---|---|
+| `forecast_data` | 25 GB |
+| `regridded_forecast_member` | 9.0 GB |
+| `observation_data` | 499 MB |
+| `regridded_forecast_ens` | 332 MB |
+| `regridded_observation` | 33 MB |
+| **whole database** | **36 GB** |
+
+Three ways, cheapest first:
+
+1. **Serve from this machine's existing `weave_weather`.** Nothing moves. The
+   truth field here is the corrected UTC one (§12), verified end to end. The
+   beta ships as soon as a host can reach this database.
+2. **Dump and restore.** 36 GB, ~85% of it `forecast_data`. Worth asking whether
+   the beta needs that table at all before moving it: the scored endpoints read
+   the regridded tables and `regridded_observation`, which together are under
+   10 GB.
+3. **Rebuild from source on the new host.** Now genuinely possible —
+   `load_to_postgres.py`, `load_wind.py` and `load_gefs_ukmo_wind.py` write the
+   raw forecast tables, `regrid_members.py` the regridded ones, and
+   `load_observations.py` + `regrid_observations.py` the truth (§11, §12). But
+   the source GRIB/NetCDF lives on Explorer under 14 TB of it, so this means
+   pulling data down and re-running the regrids. **This is the path that matters
+   for a *second run*, not for standing up this one.**
+
+An earlier version of this section said a fresh host needs the observation
+ingest specifically. That was too narrow — it is the whole database, and the
+forecast side is the larger part of it.
 
 ## 11. Where the observation sources actually are — FOUND 2026-09-16
 
@@ -1301,6 +1346,43 @@ UPDATE observation_data SET obs_time = obs_time - interval '4 hours'
 ```
 
 then clear `.cache/plots` and restart every server (§1's trap).
+
+### The bloat it left, and the vacuum — 2026-09-21
+
+The `UPDATE` above doubled `observation_data` on disk: **499 MB → 1065 MB**.
+Nothing was wrong with it; that is just how PostgreSQL works. An `UPDATE` never
+rewrites a row in place — it writes a new version and marks the old one dead, so
+that concurrent readers keep seeing a consistent snapshot. Touching 2,323,200
+rows therefore left 2,323,200 dead versions behind.
+
+`VACUUM FULL (ANALYZE)` brought it back to **499 MB**, reclaiming 566 MB in 7
+seconds. The verbose output is the part worth reading:
+
+```
+found 0 removable, 2480664 nonremovable row versions in 64052 pages
+```
+
+**Zero removable** — autovacuum had already swept the dead tuples and marked
+that space reusable, which is why nothing was ever broken or slow. What it could
+not do is give the space back: plain `VACUUM` frees dead space *for reuse by the
+same table*, it does not shrink the file. `VACUUM FULL` rewrites the table into
+a fresh file, 64,052 pages down to 33,076, and that is the only form that
+returns disk to the OS.
+
+**When to bother, and when not to.** Normally not: on a table that keeps being
+written, the holes get reused and `VACUUM FULL`'s exclusive lock is not worth
+paying. `observation_data` is the exception — it is loaded once and then only
+read, so that 566 MB would never have been reclaimed by anything else. Expect
+the same after any future bulk `UPDATE` here, including a re-run of the
+correction on a second run's rows.
+
+It takes an `ACCESS EXCLUSIVE` lock and needs roughly the table's size in free
+space to build the copy, so run it with no server attached. Verified afterwards:
+row counts and both sources' UTC ranges unchanged, and the app re-checked end to
+end — `/api/health` healthy, `compare/skill` returning the same post-fix figures
+to four decimals, a Comparison run driven through the UI with all six metric
+panels rendering and a clean console. `VACUUM FULL` cannot alter values, only
+their physical layout, so that was confirmation rather than a real risk.
 
 **One loose end, left deliberately.** `regridded_observation_bankers` — the
 pre-2026-09-04 banker's-rounding field, kept as §7's rollback — is **still on
