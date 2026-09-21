@@ -227,9 +227,16 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
 - **Exit:** adding a model/variable/metric is a single-place change.
 
 ### S5 — Frontend platform & resilience — ~3–4 days, low–med risk
-- Vite migration (CRA is EOL); React error boundary; runtime API config (stop
-  baking `REACT_APP_API_URL`); code-splitting / lazy tabs.
-- **Exit:** maintained toolchain, resilient UI, per-env runtime config.
+- ~~Vite migration (CRA is EOL)~~ **dropped 2026-09-21** — see `NEXT_STEPS.md`
+  §6 for what staying on CRA costs. The rest of S5 stands.
+- React error boundary; code-splitting / lazy tabs.
+- Runtime API config (stop baking `REACT_APP_API_URL`) — **partly overtaken**:
+  `src/api/base.js` now defaults to same-origin `/api` in a production build, so
+  the single-origin deployment needs no build-time URL at all. The variable is
+  still baked when set, so this item survives only for a genuinely multi-host
+  deployment.
+- **Exit:** resilient UI, per-env config where it is still needed. "Maintained
+  toolchain" is no longer part of the exit, since the migration is dropped.
 
 ### S6 — Security & multi-user *(only if exposed beyond internal)* — ~1 wk, med risk
 - AuthN (SSO/API keys), authz, per-user quotas, audit logging.

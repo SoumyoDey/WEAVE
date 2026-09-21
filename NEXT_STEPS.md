@@ -17,6 +17,8 @@ in this repository.
 
 **Changes the rest of this document assumes**, newest first:
 
+- **2026-09-21 — the Vite migration is dropped** (§6). That empties the
+  lower-priority list; the cost of staying on CRA is stated there.
 - **2026-09-21 — `observation_data` was VACUUM FULLed**, 1065 MB back down to
   499 MB (§12). Housekeeping rather than a fix, but it is a direct consequence
   of the UTC correction and the reason is worth knowing before the next bulk
@@ -191,8 +193,9 @@ In priority order. Nothing here is half-done.
    The root problem was that the original figures recorded no query, so several
    are not recomputable at all — that is now fixed for next time by the script
    rather than by another round of archaeology.
-5. **Item 6, the lower-priority list.** Vite (CRA is EOL) is the only one left —
-   endpoint caching (§6) and row caps are both done.
+5. ~~**Item 6, the lower-priority list.**~~ **Empty as of 2026-09-21.** Endpoint
+   caching (§6) and row caps are both done, and the Vite migration — the only
+   remaining entry — was dropped. See §6 for what staying on CRA costs.
 6. **`DATA_EXPANSION_DESIGN.md` phases 3–5.** No longer blocked on the schema —
    phases 1–2 are done (§8). What remains is the run-selector UI, which has no
    user-visible value while one run is loaded, and the ingest above. Read that
@@ -796,7 +799,20 @@ fallback. That is one less thing for DATA_EXPANSION_DESIGN.md to trip over.
 
 ## 6. Lower priority
 
-- **Vite migration** — CRA is EOL.
+- ~~**Vite migration**~~ **dropped 2026-09-21.** A decision, not an oversight,
+  so it is struck through rather than deleted — otherwise it reappears the next
+  time someone notices the toolchain.
+
+  **What staying on CRA costs**, stated once so it is not rediscovered as a
+  surprise: `react-scripts` is unmaintained, so the build toolchain receives no
+  upstream fixes and `npm audit` findings in build-time dependencies cannot be
+  cleared by upgrading it. Those are build-time, not served to users, which is
+  what makes this a defensible call for a short-lived reviewer beta. It becomes
+  a real problem only if this app acquires a long production life.
+
+  Two consequences that stay live either way: the **stale `node_modules/.cache`**
+  trap in §1 is CRA's, and it has already cost an hour once; and the build job's
+  warnings-as-errors is what keeps the CRA build from decaying quietly.
 - ~~**Cache the deterministic metric endpoints**~~ **done 2026-09-04.** 382x on
   a warm request. The cache key includes a fingerprint of the truth field, so
   both truth-field swaps since (§7, §12) invalidated it automatically rather
