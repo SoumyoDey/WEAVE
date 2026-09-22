@@ -17,8 +17,10 @@ in this repository.
 
 **Changes the rest of this document assumes**, newest first:
 
-- **2026-09-21 — the CI actions need a version bump** (§6). Every run warns
-  that Node 20 is deprecated and being forced onto Node 24. Nothing fails yet.
+- **2026-09-22 — the CI actions are bumped** (§6) and the Node 20 warnings are
+  gone. A new one replaces them: `ubuntu-latest` migrates to Ubuntu 26 on 19
+  October, which is worth watching only because Cartopy links against
+  apt-installed GEOS and PROJ.
 - **2026-09-21 — the Vite migration is dropped** (§6). That empties the
   lower-priority list; the cost of staying on CRA is stated there.
 - **2026-09-21 — `observation_data` was VACUUM FULLed**, 1065 MB back down to
@@ -195,10 +197,11 @@ In priority order. Nothing here is half-done.
    The root problem was that the original figures recorded no query, so several
    are not recomputable at all — that is now fixed for next time by the script
    rather than by another round of archaeology.
-5. **Item 6, the lower-priority list** — emptied and then refilled with one
-   thing. Endpoint caching (§6) and row caps are done, and the Vite migration
-   was dropped (see §6 for what staying on CRA costs). What replaced them is
-   the **Node 20 action deprecation in CI**, also §6.
+5. **Item 6, the lower-priority list** — one watch item, no work. Endpoint
+   caching and row caps are done, the Vite migration was dropped, and the CI
+   action bump landed 2026-09-22. What remains is a note that `ubuntu-latest`
+   migrates to Ubuntu 26 on 19 October, which matters here only because Cartopy
+   links against apt-installed GEOS and PROJ. See §6.
 6. **`DATA_EXPANSION_DESIGN.md` phases 3–5 — now the largest piece of real work
    left.** Unblocked on both counts: the schema landed in phases 1–2 (§8) and
    the ingest is done (§12), so nothing stands between this and a second run
@@ -805,17 +808,36 @@ fallback. That is one less thing for DATA_EXPANSION_DESIGN.md to trip over.
 
 ## 6. Lower priority
 
-- **Bump the GitHub Actions to their current majors.** Every CI run since
-  roughly mid-September carries `Node.js 20 is deprecated ... being forced to
-  run on Node.js 24` for `actions/checkout@v4`, `setup-node@v4`,
-  `setup-python@v5`, `cache@v4` and `upload-artifact@v4`. **Nothing fails
-  today** — the runner substitutes Node 24 — which is exactly why this will sit
-  unread until the forcing stops and four green jobs turn red in one push.
+- ~~**Bump the GitHub Actions off the deprecated Node 20 runtime.**~~
+  **done 2026-09-22.** `checkout` v4→**v7**, `setup-node` v4→**v7**,
+  `setup-python` v5→**v7**, `cache` v4→**v6**, `upload-artifact` v4→**v7**. No
+  step inputs changed, all four jobs green, and the Node 20 annotations are
+  gone — which is the check that matters, since a local YAML parse cannot see a
+  broken input.
 
-  Not urgent and not hard; the reason it is written down is that it was
-  *noticed* on 2026-09-16, mentioned once, and never recorded. Do it as one
-  commit and watch the annotations disappear rather than trusting the version
-  numbers, since majors move.
+  **Take the versions from the releases API, not from memory.** The current
+  majors were several ahead of what I would have guessed, and guessing would
+  have bumped to versions that were themselves already deprecated:
+
+  ```bash
+  for r in actions/checkout actions/setup-node actions/setup-python \
+           actions/cache actions/upload-artifact; do
+    printf '%-26s ' "$r"; gh api "repos/$r/releases/latest" --jq .tag_name
+  done
+  ```
+
+- **`ubuntu-latest` migrates to Ubuntu 26 from 2026-10-19** — a new CI
+  annotation, replacing the Node 20 one. Informational, and **not** a config
+  problem, but worth watching *here* specifically: the backend job `apt-get
+  install`s `libgeos-dev`, `libproj-dev`, `proj-data` and `proj-bin`, and
+  Cartopy links against GEOS and PROJ. An image change moves those package
+  versions underneath the render tests.
+
+  Two options, neither urgent. Pin `runs-on: ubuntu-24.04` for reproducibility,
+  accepting that the pin eventually ages onto an unsupported image; or leave
+  `ubuntu-latest` and let it migrate. **If CI breaks around 19 October and the
+  failure is in the Cartopy renders, this is the first thing to check** — that
+  sentence is the actual value of this entry.
 
 - ~~**Vite migration**~~ **dropped 2026-09-21.** A decision, not an oversight,
   so it is struck through rather than deleted — otherwise it reappears the next
