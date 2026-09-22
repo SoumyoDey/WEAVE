@@ -19,9 +19,9 @@ jobs:
     name: frontend · jest
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # Matches the development environment. Not load-bearing any more —
           # `yaml` is now an explicit devDependency (see README), so `npm ci`
@@ -41,9 +41,9 @@ jobs:
     name: frontend · playwright
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # Matches the development environment. Not load-bearing any more —
           # `yaml` is now an explicit devDependency (see README), so `npm ci`
@@ -57,7 +57,7 @@ jobs:
       # their own cache. Keyed on the lockfile: a Playwright bump must redownload.
       - name: Cache Playwright browsers
         id: pw-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
@@ -79,7 +79,7 @@ jobs:
 
       - name: Upload report
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: |
@@ -92,9 +92,9 @@ jobs:
     name: frontend · build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # Matches the development environment. Not load-bearing any more —
           # `yaml` is now an explicit devDependency (see README), so `npm ci`
@@ -147,9 +147,9 @@ jobs:
       DB_PORT: 5432
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
           cache: pip
@@ -170,7 +170,7 @@ jobs:
       # The Cartopy renders pull Natural Earth 50m coastlines on first use.
       # Cache them so only the first run on a given key hits the network.
       - name: Cache Cartopy Natural Earth data
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.local/share/cartopy
           key: ${{ runner.os }}-cartopy-ne-50m
