@@ -17,10 +17,10 @@ in this repository.
 
 **Changes the rest of this document assumes**, newest first:
 
-- **2026-09-22 — the CI actions are bumped** (§6) and the Node 20 warnings are
-  gone. A new one replaces them: `ubuntu-latest` migrates to Ubuntu 26 on 19
-  October, which is worth watching only because Cartopy links against
-  apt-installed GEOS and PROJ.
+- **2026-09-22 — CI is clean** (§6): the actions are bumped off the deprecated
+  Node 20 runtime, and the runners are pinned to `ubuntu-24.04` ahead of the
+  19 October migration to Ubuntu 26, which would otherwise have moved Cartopy's
+  GEOS and PROJ underneath the render tests unannounced. No annotations remain.
 - **2026-09-21 — the Vite migration is dropped** (§6). That empties the
   lower-priority list; the cost of staying on CRA is stated there.
 - **2026-09-21 — `observation_data` was VACUUM FULLed**, 1065 MB back down to
@@ -197,11 +197,11 @@ In priority order. Nothing here is half-done.
    The root problem was that the original figures recorded no query, so several
    are not recomputable at all — that is now fixed for next time by the script
    rather than by another round of archaeology.
-5. **Item 6, the lower-priority list** — one watch item, no work. Endpoint
-   caching and row caps are done, the Vite migration was dropped, and the CI
-   action bump landed 2026-09-22. What remains is a note that `ubuntu-latest`
-   migrates to Ubuntu 26 on 19 October, which matters here only because Cartopy
-   links against apt-installed GEOS and PROJ. See §6.
+5. ~~**Item 6, the lower-priority list.**~~ **Empty as of 2026-09-22**, this
+   time with nothing pending behind it: endpoint caching and row caps done, the
+   Vite migration dropped, the CI actions bumped and the runners pinned. CI
+   emits no annotations. The one thing §6 still asks of a future reader is to
+   revisit the `ubuntu-24.04` pin before it ages out.
 6. **`DATA_EXPANSION_DESIGN.md` phases 3–5 — now the largest piece of real work
    left.** Unblocked on both counts: the schema landed in phases 1–2 (§8) and
    the ingest is done (§12), so nothing stands between this and a second run
@@ -826,18 +826,22 @@ fallback. That is one less thing for DATA_EXPANSION_DESIGN.md to trip over.
   done
   ```
 
-- **`ubuntu-latest` migrates to Ubuntu 26 from 2026-10-19** — a new CI
-  annotation, replacing the Node 20 one. Informational, and **not** a config
-  problem, but worth watching *here* specifically: the backend job `apt-get
-  install`s `libgeos-dev`, `libproj-dev`, `proj-data` and `proj-bin`, and
-  Cartopy links against GEOS and PROJ. An image change moves those package
-  versions underneath the render tests.
+- ~~**`ubuntu-latest` migrates to Ubuntu 26 from 2026-10-19.**~~ **Pinned to
+  `ubuntu-24.04` on 2026-09-22.** The backend job `apt-get install`s
+  `libgeos-dev`, `libproj-dev`, `proj-data` and `proj-bin`, and Cartopy links
+  against GEOS and PROJ — so the migration would have moved those versions
+  underneath the render tests **on a date nobody chose, attached to whatever
+  push happened to be next**. Pinning does not avoid the migration; it makes it
+  a deliberate commit whose diff points at the cause.
 
-  Two options, neither urgent. Pin `runs-on: ubuntu-24.04` for reproducibility,
-  accepting that the pin eventually ages onto an unsupported image; or leave
-  `ubuntu-latest` and let it migrate. **If CI breaks around 19 October and the
-  failure is in the Cartopy renders, this is the first thing to check** — that
-  sentence is the actual value of this entry.
+  24.04 is what `ubuntu-latest` resolved to already, so nothing about the run
+  changed — confirmed: all four jobs green and **CI now emits no annotations at
+  all**, for the first time in a while.
+
+  **The cost, so it is not a surprise later: a pin ages.** 24.04 is supported
+  into 2029, but this is now something to revisit rather than something that
+  maintains itself. The reason lives in the workflow header too, so whoever
+  changes it does not have to find this document first.
 
 - ~~**Vite migration**~~ **dropped 2026-09-21.** A decision, not an oversight,
   so it is struck through rather than deleted — otherwise it reappears the next
