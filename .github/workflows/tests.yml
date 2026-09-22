@@ -8,6 +8,16 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Pinned rather than `ubuntu-latest`, which migrates to Ubuntu 26 from
+# 2026-10-19. The backend job apt-installs libgeos-dev / libproj-dev /
+# proj-data / proj-bin and Cartopy links against GEOS and PROJ, so a runner
+# image change moves those versions underneath the render tests — and it would
+# do it on a date nobody chose, to a push that changed nothing. Pinning makes
+# that migration a deliberate commit instead.
+#
+# The cost is that a pin ages: 24.04 is supported into 2029, but this needs
+# revisiting rather than being left to rot. See NEXT_STEPS.md §6.
+
 # A new push supersedes the run in flight for the same ref.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -17,7 +27,7 @@ jobs:
   # ── Layer 1: components and pure helpers, in jsdom ──────────────────────────
   frontend-unit:
     name: frontend · jest
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
@@ -39,7 +49,7 @@ jobs:
   # ── Layer 2: real Chromium, for what jsdom structurally cannot reach ────────
   frontend-e2e:
     name: frontend · playwright
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
@@ -90,7 +100,7 @@ jobs:
   # ── The production bundle actually compiles ─────────────────────────────────
   frontend-build:
     name: frontend · build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
@@ -122,7 +132,7 @@ jobs:
   # ── Layer 3: the science, the endpoints, and the SQL against real Postgres ──
   backend:
     name: backend · pytest
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     services:
       postgres:
