@@ -22,6 +22,7 @@ import { renderMetricCanvas, clearMetricCanvas } from './layers/metricLayer';
 
 // ── UI Components ─────────────────────────────────────────────────────────────
 import { ControlsSidebar }    from './components/ControlsSidebar';
+import { RunSelector }        from './components/RunSelector';
 import { Timeline }           from './components/Timeline';
 import { AboutModal }         from './components/AboutModal';
 import { OnboardingTour }     from './components/OnboardingTour';
@@ -633,10 +634,12 @@ function App() {
             <Icon size={15} />{!isNarrow && label}
           </button>
         ))}
-        {/* Persistent context: what you're currently looking at (hidden on narrow) */}
+        {/* Persistent context: what you're currently looking at (hidden on narrow).
+            The run leads it, because it qualifies everything after it: the model
+            and lead time are only meaningful relative to an initialisation. */}
         {!isNarrow && (
         <span style={{ marginLeft: 'auto', marginRight: '16px', display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 12px', borderRadius: '20px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.75)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }}>
-          {currentModel.name} · {selectedVariable === 'wind' ? 'Wind' : 'Precipitation'} · +{selectedHour}h
+          <RunSelector compact /> · {currentModel.name} · {selectedVariable === 'wind' ? 'Wind' : 'Precipitation'} · +{selectedHour}h
         </span>
         )}
       </div>
