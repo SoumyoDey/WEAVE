@@ -185,13 +185,46 @@ GET /api/runs  ->  [{model, init_time, hours: [...], members, variables: [...]}]
 The UI needs this to populate its selectors, and it is also the honest answer to
 "what data do you have?", which nothing currently answers.
 
-## Phase 3 — Frontend
+## Phase 3 — Frontend — DONE 2026-09-24
 
-A **run selector** in the header, beside the existing model/variable/lead-time
-controls: initialisation date, then time (00Z / 06Z / 12Z / 18Z). Populated from
-`/api/runs`, not hard-coded.
+Built in three commits: `90980bc` the state foundation, `03ba7ab` the selector,
+`f8a7c79` the switch behaviour. What shipped, against what this section asked
+for:
 
-Decisions to make deliberately:
+| asked for | shipped |
+|---|---|
+| selector in the header, from `/api/runs` | yes — `src/components/RunSelector.jsx` |
+| date, then cycle | **one list instead** — see below |
+| global, shaped for per-tab later | yes — `RunProvider`, consumers use `useRun()` |
+| lead time persists / clamps | yes, from the run's own range |
+| regions and points survive | yes |
+| results invalidated | yes, via `runEpoch` |
+| missing model greyed with the reason | yes |
+
+**Two departures.** One run renders as a static label rather than a disabled
+dropdown — greyed-out reads as "broken", a label reads as "this is what you are
+looking at". And one list rather than a date picker plus a cycle picker: two
+coupled dropdowns can hold a combination that does not exist, so they need
+validation a single list makes impossible. Revisit when the list is long enough
+to scroll.
+
+**The design's "pass the run into `withRun` at each call site" was not
+followed**, deliberately. There are 53 call sites and no component reads the
+value for itself, so it would have been pure prop-drilling — and it would not
+have fixed the race it was proposed for. A fetch captures the value when it
+leaves, so moving that value to a prop changes nothing. `runEpoch` is what
+closes it: it increments on every change, and A → B → A is detectable where a
+value comparison is not.
+
+**The bug this turned up**, worth keeping because the shape recurs: the UI has
+one variable called `wind`, the database stores `wind_u_10m` and `wind_v_10m`.
+Looking up `wind` returned null, which reads as "this run has no wind" and
+silently disabled clamping for it. The mocked test payload used the UI spelling
+and so agreed with the code; the live endpoint is what disagreed. Wind's range
+is now the **intersection** of its two components, since speed is only
+computable where both exist.
+
+Decisions this section asked to make deliberately, and how they went:
 
 - **Does the run apply globally or per tab?** Global is simpler and matches how
   the model selector already behaves. But the Comparison tab may eventually want
@@ -246,8 +279,12 @@ Decide up front:
 1. ~~Schema + run registry (Phase 1)~~ **done 2026-09-02**
 2. ~~Backend `init_time` threading, with no silent default (Phase 2)~~ **done
    2026-09-02** — plus the frontend naming the run on every request
-3. `/api/runs` **done**; the selector is not built, and has no user-visible value
-   until a second run exists
+3. ~~`/api/runs` **done**; the selector is not built~~ — **the selector is
+   built, 2026-09-24 (Phase 3).** It still has little user-visible value until
+   a second run exists, with one exception that turned out to matter already:
+   lead-time clamping is live on the single run, because the three models have
+   different ranges. +360h on AIFS now clamps to +198h on UKMO instead of
+   scrubbing to a lead time that returns nothing.
 4. Scripted ingest (Phase 4) — **the remaining blocker**
 5. Load a second run
 

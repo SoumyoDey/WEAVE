@@ -17,6 +17,10 @@ in this repository.
 
 **Changes the rest of this document assumes**, newest first:
 
+- **2026-09-24 — the run selector is built** (`DATA_EXPANSION_DESIGN.md`
+  phase 3): run state in React with a stale-response guard, a header selector,
+  and switch behaviour. Lead-time clamping turns out to matter on the single
+  loaded run, since the models' ranges differ.
 - **2026-09-22 — CI is clean** (§6): the actions are bumped off the deprecated
   Node 20 runtime, and the runners are pinned to `ubuntu-24.04` ahead of the
   19 October migration to Ubuntu 26, which would otherwise have moved Cartopy's
@@ -202,12 +206,22 @@ In priority order. Nothing here is half-done.
    Vite migration dropped, the CI actions bumped and the runners pinned. CI
    emits no annotations. The one thing §6 still asks of a future reader is to
    revisit the `ubuntu-24.04` pin before it ages out.
-6. **`DATA_EXPANSION_DESIGN.md` phases 3–5 — now the largest piece of real work
-   left.** Unblocked on both counts: the schema landed in phases 1–2 (§8) and
-   the ingest is done (§12), so nothing stands between this and a second run
-   except the work itself. What remains is the run-selector UI, which has no
-   user-visible value *while one run is loaded* — so it and a second run are
-   one task, not two. Read that
+6. **`DATA_EXPANSION_DESIGN.md` phases 4–5.** ~~Phase 3, the run-selector UI~~
+   **done 2026-09-24** — `RunProvider`, a header selector, and switch
+   behaviour (invalidate, clamp lead time, grey out models a run lacks). Read
+   that document's phase 3 for what shipped and the two departures from its
+   sketch.
+
+   **One part of it was not inert on the single run, contrary to the
+   expectation recorded here for weeks.** Lead-time clamping is live now,
+   because the three models have different ranges in the same run: +360h on
+   AIFS clamps to +198h on UKMO instead of scrubbing to a lead time that
+   returns nothing.
+
+   **What is left is phase 4 (a scripted, idempotent ingest) and phase 5
+   (retention and scale).** Both are about loading a second run rather than
+   displaying one, and §11 plus `load_observations.py` already cover the
+   observation half. Read that
    document's status table first; three of its instructions were superseded by
    what actually shipped and are marked as such.
 
