@@ -99,6 +99,8 @@ from datetime import datetime, timedelta
 import psycopg2
 from psycopg2.extras import execute_values
 
+import run_registry
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Named so it cannot be confused with the real database, and guarded below.
@@ -482,23 +484,37 @@ def _assert_safe_name():
             f'database name must start with "weave_fixture"')
 
 
+def _extract(path, name):
+    """The triple-quoted DDL assigned to `name` in a Python source file."""
+    with open(os.path.join(HERE, path)) as fh:
+        source = fh.read()
+    marker = f'{name} = """'
+    start  = source.index(marker) + len(marker)
+    return source[start:source.index('"""', start)]
+
+
 def _schema_sql():
-    """The real schema, from the two files that create the real database.
+    """The real schema, from the files that create the real database.
 
     `schema.sql` predates the ensemble regrid, so the member and mean/spread
-    tables live in `regrid_members.py`. Reading both keeps the fixture honest: if
-    a column is added to either one and the endpoints start using it, the fixture
-    picks it up without anyone remembering to.
+    tables live in `regrid_members.py`, and `forecast_run_registry` lives in
+    `migrate_init_time.py`. Reading all three keeps the fixture honest: if a
+    column is added to any of them and the endpoints start using it, the
+    fixture picks it up without anyone remembering to.
+
+    **The registry was missing here until 2026-09-24**, which is worth stating
+    rather than quietly fixing. The fixture is built from source DDL precisely
+    so a table cannot drift out of it — and one had, because it was created by
+    a migration rather than by either file this function knew about. Nothing
+    failed, because nothing read it yet; the cost would have landed the moment
+    scoring did.
     """
-    with open(os.path.join(HERE, 'schema.sql')) as fh:
-        base = fh.read()
-    ddl = [base]
-    with open(os.path.join(HERE, 'regrid_members.py')) as fh:
-        source = fh.read()
-    for name in ('SCHEMA', 'INDEXES'):
-        marker = f'{name} = """'
-        start  = source.index(marker) + len(marker)
-        ddl.append(source[start:source.index('"""', start)])
+    ddl = [open(os.path.join(HERE, 'schema.sql')).read()]
+    ddl.append(_extract('regrid_members.py', 'SCHEMA'))
+    ddl.append(_extract('regrid_members.py', 'INDEXES'))
+    ddl.append(_extract('migrate_init_time.py', 'REGISTRY_DDL'))
+    # The convention column, added additively by the registry module itself.
+    ddl.append(run_registry.SCHEMA_ADDITIONS)
     return '\n'.join(ddl)
 
 
@@ -552,6 +568,20 @@ def seed(conn):
                      ensemble_member, latitude, longitude, value) VALUES %s
             """, _with_run(rows))
             mem += len(rows)
+
+            # Register the run, the same way `regrid_members.py` does after a
+            # real load. Without this the fixture has the table but no rows,
+            # and anything resolving a run's export convention would raise
+            # against a database that is otherwise complete.
+            #
+            # The conventions match what this fixture actually seeds, which is
+            # the whole point of the scene: AIFS is cumulative and was divided
+            # by a flat 6 h, GEFS by a flat 3 h, and UKMO's native hourly rate
+            # was never scaled. Those three storage conventions holding the
+            # same true field is what makes the models score identically.
+            for variable in ('precipitation', 'wind_u_10m', 'wind_v_10m'):
+                run_registry.record(cur, model, variable, INIT_TIME,
+                                    n_members=len(MEMBER_OFFSETS))
 
         execute_values(cur, """
             INSERT INTO regridded_observation

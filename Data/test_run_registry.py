@@ -31,10 +31,17 @@ class TestTheDeclaredConventions:
         about it, not an absence of information."""
         assert reg.declared_for('UKMO', 'precipitation') == (reg.UNSCALED, None)
 
-    def test_wind_declares_nothing_because_there_is_no_window(self):
-        """u and v are instantaneous. There is no accumulation period to divide
-        by, so there is no convention to record."""
-        assert reg.declared_for('AIFS', 'wind_u_10m') is None
+    def test_wind_is_declared_unscaled_rather_than_left_out(self):
+        """u and v are instantaneous, so nothing was divided out — and saying
+        so beats staying silent.
+
+        Leaving wind undeclared was the first attempt and it drifted: the real
+        database's backfill named it `unscaled` while a freshly built fixture
+        left it NULL, so the same lookup returned None against one and raised
+        against the other.
+        """
+        assert reg.declared_for('AIFS', 'wind_u_10m') == (reg.UNSCALED, None)
+        assert reg.declared_for('UKMO', 'wind_v_10m') == (reg.UNSCALED, None)
 
     def test_an_unheard_of_model_is_undeclared(self):
         assert reg.declared_for('ECMWF_IFS', 'precipitation') is None

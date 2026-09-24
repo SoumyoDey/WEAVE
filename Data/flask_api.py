@@ -43,6 +43,7 @@ CORS(app, origins=os.environ.get('CORS_ORIGIN', 'http://localhost:3000'))
 # The science lives in metrics.py as pure functions (no Flask, no DB), so it can
 # be tested without a database and reasoned about on its own. Imported by name
 # rather than with a star so the dependency is explicit and greppable.
+import run_registry
 from metrics import (                                    # noqa: E402
     MODEL_ACCUM_HOURS, CUMULATIVE_PRECIP_MODELS,
     RATE_CUMULATED_PRECIP_MODELS, SSR_CAP,
@@ -1086,7 +1087,9 @@ def _member_cases_by_cell(cursor, model_name, variable, init_time,
     for cell, members in raw.items():
         by_hour, periods = defaultdict(list), {}
         for series in members.values():
-            rates = _precip_member_rate_series(model_name, series, is_wind=is_wind)
+            rates = _precip_member_rate_series(
+                model_name, series, is_wind=is_wind,
+                exported=_export_divisor(model_name, init_time))
             if not is_wind:
                 # Members are re-binned individually and only then pooled, so the
                 # spread is of 6 h means rather than of a mixture of windows.
@@ -1272,7 +1275,8 @@ def _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
         raw_by_cell[key][row['forecast_hour']] = (float(row['mean_value']),
                                                   float(row['std_dev']))
     rates_by_cell = {
-        cell: _precip_rate_series(model_name, series, is_wind)
+        cell: _precip_rate_series(model_name, series, is_wind,
+                                  exported=_export_divisor(model_name, init_time_val))
         for cell, series in raw_by_cell.items()
     }
     # Wind is instantaneous and already on one footing; precipitation is not, so
@@ -2868,6 +2872,57 @@ def _check_export_convention(cursor, model_name='GEFS', init_time=None):
     return result
 
 
+# ── The per-run export convention ─────────────────────────────────────────────
+#
+# `SCALED_EXPORT_DIVISOR_HOURS` describes the export that happens to be loaded.
+# `forecast_run_registry` describes each run's own, which is the only thing that
+# works once two runs exist — see run_registry.py and DATA_EXPANSION_DESIGN.md
+# phase 4.
+#
+# Cached process-wide and keyed on the run, which is safe where a single
+# "current divisor" would not be: the key includes `init_time`, so two runs get
+# two entries and concurrent requests for different runs cannot read each
+# other's. The registry only changes when data is loaded, and the standing rule
+# after a data change is to restart the server (NEXT_STEPS.md section 1).
+_DIVISOR_CACHE = {}
+_DIVISOR_MISS  = object()
+
+
+def _export_divisor(model_name, init_time, variable='precipitation'):
+    """The divisor this run's export applied, or None if it applied none.
+
+    Falls back to the constant when the registry cannot answer, and says so
+    once per key rather than per request. Raising would be the louder choice
+    and is wrong here: a database that predates the registry would lose every
+    precipitation endpoint at once, and the fallback reproduces exactly the
+    behaviour those deployments already have. What must not happen silently is
+    a *second* run being scored with the first's divisor — and that cannot
+    happen through this path, because a missing row logs and a present row is
+    per-run by construction.
+    """
+    key = (model_name, variable, str(init_time))
+    hit = _DIVISOR_CACHE.get(key, _DIVISOR_MISS)
+    if hit is not _DIVISOR_MISS:
+        return hit
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            value = run_registry.resolve_divisor(cur, model_name, variable, init_time)
+    except Exception as exc:
+        value = SCALED_EXPORT_DIVISOR_HOURS.get(model_name)
+        print(f"⚠️  export convention for {model_name}/{variable} at {init_time} "
+              f"unavailable ({type(exc).__name__}: {exc}); falling back to the "
+              f"constant ({value}). Run `python run_registry.py --backfill`.")
+    finally:
+        if conn is not None:
+            return_db_connection(conn)
+
+    _DIVISOR_CACHE[key] = value
+    return value
+
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     # Acquiring the connection is inside the try: an exhausted or unreachable
@@ -3665,7 +3720,8 @@ def categorical_metrics_endpoint():
             raw_by_cell[key][r['forecast_hour']] = (float(r['mean_value']),
                                                     float(r['std_dev']))
         def _cell_rates(series):
-            r = _precip_rate_series(model_name, series, is_wind)
+            r = _precip_rate_series(model_name, series, is_wind,
+                                    exported=_export_divisor(model_name, init_time_val))
             if not is_wind:
                 r = _rebin_to_common_window(r)     # one window for every model
             return {h: v for h, v in r.items() if hour_min <= h <= hour_max}
@@ -3952,9 +4008,10 @@ def region_categorical_metrics_endpoint():
             key = (round(float(row['latitude']), 2), round(float(row['longitude']), 2))
             raw_by_cell[key][row['forecast_hour']] = (float(row['mean_value']),
                                                       float(row['std_dev']))
-        rates_by_cell = {cell: (_precip_rate_series(model_name, series, is_wind) if is_wind
+        _exp = _export_divisor(model_name, init_time_val)
+        rates_by_cell = {cell: (_precip_rate_series(model_name, series, is_wind, exported=_exp) if is_wind
                                 else _rebin_to_common_window(
-                                    _precip_rate_series(model_name, series, is_wind)))
+                                    _precip_rate_series(model_name, series, is_wind, exported=_exp)))
                          for cell, series in raw_by_cell.items()}
         in_range = [(cell, h, v) for cell, rates in rates_by_cell.items()
                     for h, v in rates.items() if hour_min <= h <= hour_max]
@@ -4216,9 +4273,10 @@ def _categorical_hours_for_box(cursor, model_name, fcst_var, obs_var, obs_src,
         key = (round(float(row['latitude']), 2), round(float(row['longitude']), 2))
         raw_by_cell[key][row['forecast_hour']] = (float(row['mean_value']),
                                                   float(row['std_dev']))
-    rates_by_cell = {cell: (_precip_rate_series(model_name, series, is_wind) if is_wind
+    _exp = _export_divisor(model_name, init_time_val)
+    rates_by_cell = {cell: (_precip_rate_series(model_name, series, is_wind, exported=_exp) if is_wind
                             else _rebin_to_common_window(
-                                _precip_rate_series(model_name, series, is_wind)))
+                                _precip_rate_series(model_name, series, is_wind, exported=_exp)))
                      for cell, series in raw_by_cell.items()}
 
     in_range = [(cell, h, v) for cell, rates in rates_by_cell.items()

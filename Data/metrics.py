@@ -356,7 +356,13 @@ def _infer_scaled_export_divisor(ratios, min_samples=100):
     return None
 
 
-def _increment_divisor(model_name, period):
+# Distinguishes "the caller did not say" from "the caller said there is no
+# divisor". `None` is a real answer meaning the export was unscaled, so it
+# cannot double as the default.
+FROM_CONSTANT = object()
+
+
+def _increment_divisor(model_name, period, exported=FROM_CONSTANT):
     """Hours to divide a stored precipitation value (or a differenced cumulative
     increment) by to reach mm/h.
 
@@ -365,8 +371,20 @@ def _increment_divisor(model_name, period):
     buckets come out at 1 (already correct) and its 6 h buckets at 2 (halved);
     AIFS is 6/6 = 1 throughout. An unscaled model still stores an amount and
     divides by its own window.
+
+    `exported` is that per-model factor, and it is a **parameter because it is a
+    property of the run, not of the model**. `SCALED_EXPORT_DIVISOR_HOURS`
+    describes the export that happens to be loaded; two runs exported
+    differently need two different values, and a module constant can only hold
+    one. Callers that know which run they are scoring pass the value from
+    `forecast_run_registry`; the constant remains the default so that anything
+    that does not know keeps its current behaviour rather than breaking.
+
+    Passing `None` explicitly means the export was unscaled — a real answer,
+    not an absence — and gives the same result as an unknown model does today.
     """
-    exported = SCALED_EXPORT_DIVISOR_HOURS.get(model_name)
+    if exported is FROM_CONSTANT:
+        exported = SCALED_EXPORT_DIVISOR_HOURS.get(model_name)
     if exported:
         return period / exported
     return period
@@ -477,7 +495,8 @@ def _precip_lookback_hours(model_name):
     return MODEL_ACCUM_HOURS.get(model_name, 1) if model_name in CUMULATIVE_PRECIP_MODELS else 0
 
 
-def _precip_member_rate_series(model_name, series, is_wind=False):
+def _precip_member_rate_series(model_name, series, is_wind=False,
+                               exported=FROM_CONSTANT):
     """Scalar sibling of _precip_rate_series, for a single ensemble member.
 
     {hour: value} -> {hour: (rate, period_h)}. Members carry no spread of their
@@ -494,7 +513,7 @@ def _precip_member_rate_series(model_name, series, is_wind=False):
         period = _precip_period_hours(model_name, hour)
         value  = series[hour]
         if not cumulative:
-            out[hour] = (value / _increment_divisor(model_name, period), period)
+            out[hour] = (value / _increment_divisor(model_name, period, exported), period)
             continue
         prev_hour = hour - period
         if prev_hour <= 0:
@@ -503,11 +522,12 @@ def _precip_member_rate_series(model_name, series, is_wind=False):
             amount = value - series[prev_hour]
         else:
             continue                             # can't difference — drop
-        out[hour] = (max(0.0, amount) / _increment_divisor(model_name, period), period)
+        out[hour] = (max(0.0, amount) / _increment_divisor(model_name, period, exported), period)
     return out
 
 
-def _precip_rate_series(model_name, series, is_wind=False):
+def _precip_rate_series(model_name, series, is_wind=False,
+                        exported=FROM_CONSTANT):
     """{hour: (mean, std)} -> {hour: (mean_rate, std_rate|None, period_h)}, mm/h.
 
     Wind is instantaneous and passes through unchanged (period 1).
@@ -534,7 +554,7 @@ def _precip_rate_series(model_name, series, is_wind=False):
         mean, std = series[hour]
         period    = _precip_period_hours(model_name, hour)
         if not cumulative:
-            div = _increment_divisor(model_name, period)
+            div = _increment_divisor(model_name, period, exported)
             out[hour] = (mean / div, (std / div) if std is not None else None, period)
             continue
 
@@ -554,7 +574,7 @@ def _precip_rate_series(model_name, series, is_wind=False):
 
         # Cumulative totals are non-decreasing; a small negative is rounding.
         amount    = max(0.0, amount)
-        divisor   = _increment_divisor(model_name, period)
+        divisor   = _increment_divisor(model_name, period, exported)
         std_rate  = (math.sqrt(variance) / divisor) if (variance is not None and variance > 0) else None
         out[hour] = (amount / divisor, std_rate, period)
     return out

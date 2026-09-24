@@ -94,8 +94,14 @@ class UnknownConventionError(Exception):
 # itself; the registry row is what scoring will eventually read, so a run that
 # was made differently overrides this by recording its own.
 #
-# Wind is absent on purpose: u and v are instantaneous, so there is no window
-# to divide by and no convention to record.
+# Wind is included and declared UNSCALED rather than left out. An earlier
+# version omitted it, reasoning that instantaneous data has no window to divide
+# by and therefore no convention — true, but it produced drift: the real
+# database's backfill named wind `unscaled` while a freshly built fixture left
+# it NULL, so `resolve_divisor` returned None against one and raised against
+# the other. "Nothing was divided out" is a fact about wind, and saying it
+# explicitly is what keeps the two databases answering the same question the
+# same way.
 DECLARED = {
     # React.py divided by a flat 6 h, which matches AIFS's 6-hourly records.
     ('AIFS', 'precipitation'): (SCALED, 6.0),
@@ -108,6 +114,11 @@ DECLARED = {
     # Never scaled: React.py converts the native rate (m/s) straight to mm/h.
     ('UKMO', 'precipitation'): (UNSCALED, None),
 }
+# Wind components, for every model: instantaneous, so nothing was divided out.
+for _model in ('AIFS', 'GEFS', 'UKMO'):
+    for _component in ('wind_u_10m', 'wind_v_10m'):
+        DECLARED[(_model, _component)] = (UNSCALED, None)
+del _model, _component
 
 
 SCHEMA_ADDITIONS = f"""
