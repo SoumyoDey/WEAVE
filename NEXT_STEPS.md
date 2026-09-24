@@ -17,6 +17,10 @@ in this repository.
 
 **Changes the rest of this document assumes**, newest first:
 
+- **2026-09-24 — a SECOND RUN is loaded** (§14): `2025-09-08 06Z`, UKMO only,
+  0–36 h. The selector is a real dropdown now. It surfaced three defects that
+  needed two runs to exist, and confirmed the AIFS/GEFS conversion stage does
+  not exist anywhere.
 - **2026-09-24 — the export convention is per-run, and scoring reads it**
   (§13). Finding a regrid re-run duplicated rows came out of the same work;
   that is fixed too, so **`DATA_EXPANSION_DESIGN.md` phase 4 is closed** and
@@ -1581,6 +1585,67 @@ one had, because the registry is created by a migration rather than by either
 file `_schema_sql` read. Nothing failed, because nothing read it. Adding a
 reader is what would have found it, which is a general argument for checking
 what the fixture *lacks* rather than trusting that it mirrors production.
+
+## 14. A second run is loaded — 2026-09-24
+
+**`2025-09-08 06Z`, UKMO precipitation only, lead hours 0–36.** The first time
+this database has held two initialisations, and the first time the run selector
+has had anything to select.
+
+Deliberately partial. AIFS and GEFS could not be loaded at all (see below), and
+a one-model run turns out to exercise more of the new machinery than a full one
+would: the selector switches, models absent from a run grey out with a reason,
+lead time clamps between runs with different ranges, and the per-run export
+convention is read rather than assumed.
+
+**Where it came from.** `UKMO/regional_data/conus_east/total_rainfall/2025-09-08/T0600Z`
+on Explorer — 37 hourly NetCDF files, 2 MB — converted by
+`Data_convert_weave/React.py`, loaded with `load_to_postgres.py` at
+`init_time='2025-09-08 06:00:00'`, then `regrid_members.py --init-time`.
+
+### The pipeline is not reproducible for AIFS or GEFS
+
+**There is no NetCDF → JSON converter for them.** `React.py` handles UKMO only
+(it reads `total_rainfall_rate` and multiplies by 3.6e6); `aifs react.py`,
+despite the name, is JSON → JSON rescaling that sits *downstream* of the
+missing stage. Searched both this machine — all five WEAVE folders — and the
+cluster: it exists nowhere. That stage was run off-machine and was not kept.
+
+This is the concrete thing behind `DATA_EXPANSION_DESIGN.md`'s "manual and
+partly off-machine". Phase 4's work made the *registry* half reproducible; the
+conversion half is still missing, and writing that converter is what a genuine
+multi-model second run needs.
+
+The source data is there: AIFS has 16 runs (4 dates × 4 cycles) already cut to
+`conus_east`, at ~32 MB per cycle. It is the converter that is absent, not the
+data.
+
+### Three defects this surfaced, all of which needed two runs to exist
+
+- **`fetch_hour` was not scoped to a run** (`2bda3ad`). It would have merged
+  members from both initialisations into one dict keyed by member number, so
+  the later run's member 5 overwrote the earlier one's and the regrid emitted a
+  blend of two runs. `run_init_time`'s refusal on ambiguity was the only thing
+  keeping that latent.
+- **`run_init_time` told callers to "pass the run explicitly" with no parameter
+  to pass it through** (`2bda3ad`). Loading a second run made the model
+  unregriddable, including the run already there. There is a `--init-time` flag
+  now and the refusal names it.
+- **A partial regrid narrowed the registry's recorded range.** `--hours 6` set
+  UKMO 00Z to `hours 6–6` while the stored data still spanned 0–198, and the
+  UI's lead-time clamp reads exactly that field. The load path now *measures*
+  from the stored data instead of recording what the pass wrote — ~20 s scoped
+  to one run, because the natural-key index covers it.
+
+### Two things left open
+
+- **The run selector is hidden below 760px**, because it lives inside the
+  header badge that collapses on narrow windows. The run is the one piece of
+  context that qualifies everything else on screen, so hiding it is the wrong
+  trade — but moving it is a layout decision rather than a bug fix.
+- **Observations stop at 2025-09-08 23:30 UTC**, so the 06Z run verifies to
+  about +17.5 h rather than its full 36. Extending it means loading 09-09 IMERG
+  and ERA5, both of which are on Explorer (§11).
 
 ## Standing decisions — do not undo these by accident
 
