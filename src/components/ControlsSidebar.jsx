@@ -39,6 +39,10 @@ const MODES = [
 export function ControlsSidebar({
   open, isNarrow = false,
   models, selectedModel, setSelectedModel,
+  // Models the *selected run* actually holds. Null while the run detail is
+  // still loading, which is treated as "all available" rather than greying
+  // everything out for a moment on startup.
+  availableModels = null,
   selectedVariable, setSelectedVariable,
   currentModel, getMemberOptions, selectedMember, setSelectedMember,
   loading, error,
@@ -66,12 +70,26 @@ export function ControlsSidebar({
         {/* ── Data ── */}
         <SectionHeader icon={Database}>Data</SectionHeader>
         <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
-          {Object.entries(models).map(([key, model]) => (
+          {Object.entries(models).map(([key, model]) => {
+            // Absent from this run. Disabled and dimmed with the reason,
+            // rather than clickable and silently returning nothing — phase 3
+            // asks for exactly that distinction.
+            const missing = availableModels != null && !availableModels.includes(key);
+            return (
             <button key={key} onClick={() => setSelectedModel(key)}
-              style={{ flex: 1, padding: '8px 4px', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.bold, border: selectedModel === key ? `2px solid ${model.color}` : '2px solid rgba(255,255,255,0.08)', borderRadius: t.radius, background: selectedModel === key ? `${model.color}22` : 'rgba(255,255,255,0.04)', color: selectedModel === key ? model.color : t.textMuted, cursor: 'pointer', transition: 'all 0.15s' }}>
-              {model.name}<Hint text={`${model.ensembleCount} ensemble members`} />
+              disabled={missing}
+              aria-disabled={missing}
+              title={missing
+                ? `${model.name} is not loaded for the selected forecast run`
+                : undefined}
+              style={{ flex: 1, padding: '8px 4px', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.bold, border: selectedModel === key ? `2px solid ${model.color}` : '2px solid rgba(255,255,255,0.08)', borderRadius: t.radius, background: selectedModel === key ? `${model.color}22` : 'rgba(255,255,255,0.04)', color: selectedModel === key ? model.color : t.textMuted, cursor: missing ? 'not-allowed' : 'pointer', opacity: missing ? 0.4 : 1, transition: 'all 0.15s' }}>
+              {model.name}
+              <Hint text={missing
+                ? `Not in this run — ${model.name} was not loaded for the selected initialisation`
+                : `${model.ensembleCount} ensemble members`} />
             </button>
-          ))}
+            );
+          })}
         </div>
         <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
           {[{ val: 'precipitation', icon: Droplet, label: 'Precip' }, { val: 'wind', icon: Wind, label: 'Wind' }].map(({ val, icon: Icon, label }) => {

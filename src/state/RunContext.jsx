@@ -31,6 +31,25 @@ import { fetchRuns, getInitTime, getRunEpoch, setInitTime } from '../api/run';
  * mocked `/api/runs`, since the database has one run to offer.
  */
 
+/**
+ * How the UI's variable names map onto the ones `/api/runs` reports.
+ *
+ * They are not the same, and the difference is silent. The UI has one `wind`,
+ * because a user picks wind and gets speed; the database stores `wind_u_10m`
+ * and `wind_v_10m`, because speed is derived per member as sqrt(u^2 + v^2).
+ * Looking up `wind` directly finds nothing and returns null — which reads as
+ * "this run has no wind" and would have disabled every lead-time clamp on the
+ * wind variable without erroring anywhere.
+ *
+ * Caught by checking the live endpoint rather than by a test, because the
+ * mocked payload used the UI's spelling. The fixture-vs-reality gap is the
+ * point: a mock agrees with whatever you wrote it to say.
+ */
+const STORED_VARIABLES = {
+  wind: ['wind_u_10m', 'wind_v_10m'],
+  precipitation: ['precipitation'],
+};
+
 const RunContext = createContext(null);
 
 export const RunProvider = ({ children, initialRun = null }) => {
@@ -103,6 +122,35 @@ export const RunProvider = ({ children, initialRun = null }) => {
     return d ? Object.keys(d.models) : [];
   }, [detail]);
 
+  /**
+   * The lead-time range a run actually holds for one model and variable, as
+   * `{ min, max }`, or null when that combination is not in the run.
+   *
+   * Phase 3 asks for lead time to persist across a switch where valid and
+   * clamp where not, which needs the new run's range rather than the constant
+   * in `MODELS` — that constant describes what a model *can* produce, not what
+   * was loaded. Returning null rather than a default range matters: an absent
+   * combination should grey out the model, and a fabricated `{0, 168}` would
+   * instead scrub happily across lead times that return nothing.
+   */
+  const hourRangeFor = useCallback((initTime, model, variable) => {
+    const d = detail.find((x) => x.init_time === initTime);
+    const stored = d?.models?.[model]?.variables;
+    if (!stored) return null;
+
+    const wanted = STORED_VARIABLES[variable] ?? [variable];
+    const entries = wanted.map((name) => stored.find((v) => v.variable === name));
+    if (entries.some((e) => !e)) return null;   // some component is missing
+
+    // Intersect, which only bites for wind: it is derived from two stored
+    // components and is only scoreable where both exist. Taking u's range
+    // alone would offer lead times v does not reach.
+    const min = Math.max(...entries.map((e) => e.hour_min));
+    const max = Math.min(...entries.map((e) => e.hour_max));
+    if (!Number.isFinite(min) || !Number.isFinite(max) || min > max) return null;
+    return { min, max };
+  }, [detail]);
+
   const value = useMemo(() => ({
     runs,
     detail,
@@ -110,6 +158,7 @@ export const RunProvider = ({ children, initialRun = null }) => {
     selectRun,
     runDetail,
     modelsFor,
+    hourRangeFor,
     runEpoch: epoch,
     // One run is not a choice. The selector renders as a static label rather
     // than a disabled dropdown, which reads as "this is what you are looking
@@ -117,7 +166,8 @@ export const RunProvider = ({ children, initialRun = null }) => {
     canSwitch: runs.length > 1,
     status,
     error,
-  }), [runs, detail, selected, selectRun, runDetail, modelsFor, epoch, status, error]);
+  }), [runs, detail, selected, selectRun, runDetail, modelsFor, hourRangeFor,
+       epoch, status, error]);
 
   return <RunContext.Provider value={value}>{children}</RunContext.Provider>;
 };

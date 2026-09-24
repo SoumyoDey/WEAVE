@@ -23,6 +23,7 @@ import { renderMetricCanvas, clearMetricCanvas } from './layers/metricLayer';
 // ── UI Components ─────────────────────────────────────────────────────────────
 import { ControlsSidebar }    from './components/ControlsSidebar';
 import { RunSelector }        from './components/RunSelector';
+import { useRun }             from './state/RunContext';
 import { Timeline }           from './components/Timeline';
 import { AboutModal }         from './components/AboutModal';
 import { OnboardingTour }     from './components/OnboardingTour';
@@ -40,6 +41,11 @@ import { t } from './theme';
 const TAB_BAR_H = 48;
 
 function App() {
+  // Which forecast run everything below is about. `runEpoch` is what the data
+  // effects depend on: it changes on every switch, including a switch back to
+  // a previously selected run, which a comparison of `selectedRun` would miss.
+  const { selectedRun, runEpoch, modelsFor, hourRangeFor } = useRun();
+
   // ── UI state ────────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab]               = useState('visualization');
   const [menuOpen, setMenuOpen]                 = useState(false);
@@ -110,6 +116,56 @@ function App() {
     setMetricThreshold(selectedVariable === 'wind' ? 10 : 25);
     setSpatialData(null);
   }, [selectedVariable]);
+
+  // ── Switching forecast run ────────────────────────────────────────────────
+  //
+  // Everything computed belongs to the run it was computed under. Leaving any
+  // of it on screen after a switch is exactly the quiet wrongness this project
+  // keeps finding: a map that looks fine and answers a question nobody asked.
+  // So results are dropped, and the effects that fetch them list `runEpoch` so
+  // they refill.
+  //
+  // What deliberately survives: the clicked point, a drawn region, the
+  // selection mode, the panel's position, and the model / variable / colormap
+  // choices. Those are the user's framing of the question, not answers to it,
+  // and phase 3 asks for them to persist. Re-drawing a box after every switch
+  // would make comparing two runs over one region unusable, which is the whole
+  // point of having two.
+  const firstRunRef = useRef(true);
+  useEffect(() => {
+    // Not on the first resolve — there is nothing stale yet, and clearing here
+    // would throw away the first paint's results for no reason.
+    if (firstRunRef.current) { firstRunRef.current = false; return; }
+    setSpatialData(null);
+    setTimeseriesData(null);
+    setSsrData(null);
+    setStats(null);
+    setObsCoverage(null);
+    setError('');
+  }, [runEpoch]);
+
+  // Lead time persists across a switch where the new run has it, and clamps
+  // where it does not. Reading the range from the run rather than from
+  // `MODELS.hours`: that constant says what a model can produce, while this
+  // says what was actually loaded, and scrubbing to a lead time the run does
+  // not hold returns nothing with no explanation.
+  useEffect(() => {
+    if (!selectedRun) return;
+    const range = hourRangeFor(selectedRun, selectedModel, selectedVariable);
+    if (!range) return;   // model missing from this run — handled below
+    setSelectedHour((h) => Math.min(Math.max(h, range.min), range.max));
+    setMetricHour((h)  => Math.min(Math.max(h, range.min), range.max));
+  }, [selectedRun, selectedModel, selectedVariable, hourRangeFor]);
+
+  // A run need not carry every model. Rather than leaving a selection that
+  // silently returns nothing, fall back to one the run does have.
+  useEffect(() => {
+    if (!selectedRun) return;
+    const available = modelsFor(selectedRun);
+    if (available.length === 0) return;          // detail not loaded yet
+    if (available.includes(selectedModel)) return;
+    setSelectedModel(available[0]);
+  }, [selectedRun, selectedModel, modelsFor]);
 
 
   // ── Analysis tab state ────────────────────────────────────────────────────────
@@ -214,7 +270,7 @@ function App() {
     if (!mapInstanceRef.current) return;
     const id = setTimeout(loadDataForHour, 300);
     return () => clearTimeout(id);
-  }, [selectedHour, selectedModel, selectedMember, selectedVariable]); // eslint-disable-line
+  }, [selectedHour, selectedModel, selectedMember, selectedVariable, runEpoch]); // eslint-disable-line
 
   // ── Redraw IDW / VSup when colormap or invert changes ────────────────────────
   useEffect(() => {
@@ -250,7 +306,7 @@ function App() {
       stopWindArrows(map, arrowsCanvasRef);
       stopStreamlines(animationFrameRef);
     }
-  }, [showWindArrows, showWindLines, selectedVariable, selectedHour, selectedModel, selectedMember]); // eslint-disable-line
+  }, [showWindArrows, showWindLines, selectedVariable, selectedHour, selectedModel, selectedMember, runEpoch]); // eslint-disable-line
 
   // ── VSup Boxes overlay ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -262,7 +318,7 @@ function App() {
       if (canvasRef.current && uncertaintyMode === null) canvasRef.current.style.display = 'block';
       stopUncertainty(map, uncertaintyLayerRef, uncertaintyCanvasRef);
     }
-  }, [showUncertainty, selectedHour, selectedModel, selectedVariable, selectedColormap, invertUncertainty, numBuckets, flipColormap, gridOpacity]); // eslint-disable-line
+  }, [showUncertainty, selectedHour, selectedModel, selectedVariable, selectedColormap, invertUncertainty, numBuckets, flipColormap, gridOpacity, runEpoch]); // eslint-disable-line
 
   // ── Bivariate / VSUP Fan overlay ─────────────────────────────────────────────
   useEffect(() => {
@@ -279,7 +335,7 @@ function App() {
       if (canvasRef.current && uncertaintyMode === null) canvasRef.current.style.display = 'block';
       stopBivariate(map, bivariateLayerRef);
     }
-  }, [showBivariate, showFanChart, selectedHour, selectedModel, selectedVariable, numBuckets, selectedColormap, invertUncertainty, flipColormap, gridOpacity]); // eslint-disable-line
+  }, [showBivariate, showFanChart, selectedHour, selectedModel, selectedVariable, numBuckets, selectedColormap, invertUncertainty, flipColormap, gridOpacity, runEpoch]); // eslint-disable-line
 
   // ── Texture overlay ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -291,7 +347,7 @@ function App() {
       if (canvasRef.current && uncertaintyMode === null) canvasRef.current.style.display = 'block';
       stopTexture(map, textureLayerRef);
     }
-  }, [showTexture, selectedHour, selectedModel, selectedVariable, selectedColormap, textureStyle, numBuckets, flipColormap, gridOpacity, invertUncertainty]); // eslint-disable-line
+  }, [showTexture, selectedHour, selectedModel, selectedVariable, selectedColormap, textureStyle, numBuckets, flipColormap, gridOpacity, invertUncertainty, runEpoch]); // eslint-disable-line
 
   // ── Data fetch ────────────────────────────────────────────────────────────────
   const loadDataForHour = async () => {
@@ -406,7 +462,7 @@ function App() {
       .finally(() => { if (!cancelled) setSsrLoading(false); });
 
     return () => { cancelled = true; };
-  }, [clickedPoint, selectedModel, selectedVariable]); // eslint-disable-line
+  }, [clickedPoint, selectedModel, selectedVariable, runEpoch]); // eslint-disable-line
 
   // ── Observation coverage ──────────────────────────────────────────────────────
   // How far the truth reaches. Verification correctly returns nothing past the
@@ -422,7 +478,7 @@ function App() {
         if (!cancelled) { console.error('Observation coverage error:', err); setObsCoverage(null); }
       });
     return () => { cancelled = true; };
-  }, [currentModel.name, selectedVariable]);
+  }, [currentModel.name, selectedVariable, runEpoch]);
 
   // ── Spatial metric computation ────────────────────────────────────────────────
   const computeSpatialMetric = async () => {
@@ -687,6 +743,7 @@ function App() {
           open={menuOpen}
           isNarrow={isNarrow}
           models={MODELS}
+          availableModels={selectedRun ? (modelsFor(selectedRun).length ? modelsFor(selectedRun) : null) : null}
           selectedModel={selectedModel} setSelectedModel={setSelectedModel}
           selectedVariable={selectedVariable} setSelectedVariable={setSelectedVariable}
           currentModel={currentModel}
