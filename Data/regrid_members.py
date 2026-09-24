@@ -124,6 +124,22 @@ CREATE INDEX IF NOT EXISTS idx_rfm_run
     ON regridded_forecast_member(model_name, variable_name, init_time, forecast_hour, latitude, longitude);
 CREATE INDEX IF NOT EXISTS idx_rfe_run
     ON regridded_forecast_ens(model_name, variable_name, init_time, forecast_hour, latitude, longitude);
+
+-- The natural key, enforced. Without these, re-running a regrid over hours
+-- already present appends a second copy of every row and nothing complains —
+-- and every score is then computed over duplicated members, which is a spread
+-- that looks plausible and is wrong. DATA_EXPANSION_DESIGN.md phase 4 item 1
+-- asks for each step to be re-runnable; this is what makes that true rather
+-- than hoped for.
+--
+-- `idx_rfm_run` above looks similar and is not a substitute: it is not unique,
+-- and it omits `ensemble_member`, which is part of what identifies a member row.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rfm_natural_key
+    ON regridded_forecast_member(model_name, variable_name, init_time,
+                                 forecast_hour, ensemble_member, latitude, longitude);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rfe_natural_key
+    ON regridded_forecast_ens(model_name, variable_name, init_time,
+                              forecast_hour, latitude, longitude);
 """
 
 
@@ -279,6 +295,28 @@ def interpolate_member(cell_values, src_lats, src_lons, tgt_lats, tgt_lons, zero
     return interp(points).reshape(len(tgt_lats), len(tgt_lons))
 
 
+def clear_slice(conn, table, model, variable, init_time, hour):
+    """Remove the (model, variable, run, hour) slice about to be rewritten.
+
+    What makes a re-run safe. `COPY` cannot express `ON CONFLICT`, so the
+    idempotency has to come from clearing first — and clearing exactly the
+    slice this pass is about to write, so re-running one hour does not disturb
+    the rest of the run.
+
+    Runs in the same transaction as the `COPY` that follows (the loop commits
+    per hour), so a crash between them leaves the slice as it was rather than
+    deleted. The unique indexes are the backstop: if this is ever skipped, the
+    second write fails loudly instead of silently doubling the data.
+    """
+    with conn.cursor() as cur:
+        cur.execute(f"""
+            DELETE FROM {table}
+             WHERE model_name = %s AND variable_name = %s
+               AND init_time = %s AND forecast_hour = %s
+        """, (model, variable, init_time, hour))
+        return cur.rowcount
+
+
 def copy_rows(conn, table, columns, rows):
     """Bulk-load via COPY — orders of magnitude faster than execute_batch here."""
     if not rows:
@@ -366,6 +404,14 @@ def regrid(conn, model, variable, hours, tgt_lats, tgt_lons, verify=False):
                                      float(mean[i, j]), float(std[i, j]),
                                      len(members), '0.5deg'))
 
+            # Idempotency, per hour: clear what this pass is about to write.
+            # Without it a re-run appends a second copy of every row — see
+            # clear_slice and the unique indexes in INDEXES.
+            replaced = (clear_slice(conn, 'regridded_forecast_member',
+                                    model, variable, init_time, hour)
+                        + clear_slice(conn, 'regridded_forecast_ens',
+                                      model, variable, init_time, hour))
+
             total_member_rows += copy_rows(
                 conn, 'regridded_forecast_member',
                 ('model_name', 'variable_name', 'init_time', 'forecast_hour',
@@ -379,7 +425,8 @@ def regrid(conn, model, variable, hours, tgt_lats, tgt_lons, verify=False):
             written_hours.append(hour)
             max_members = max(max_members, len(members))
             print(f"    {model} {variable} fh={hour:3d}: {len(members):2d} members, "
-                  f"{int(inside.sum()):4d} cells, {len(member_rows):6,} member rows")
+                  f"{int(inside.sum()):4d} cells, {len(member_rows):6,} member rows"
+                  + (f", replaced {replaced:,}" if replaced else ""))
 
         # Register the run, so it describes itself instead of being inferred
         # later. DATA_EXPANSION_DESIGN.md phase 4: until now nothing but a
