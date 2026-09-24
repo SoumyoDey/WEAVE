@@ -238,32 +238,33 @@ Decisions this section asked to make deliberately, and how they went:
 - **What if a model is missing from a run?** Grey it out with the reason, rather
   than silently returning nothing.
 
-## Phase 4 — Ingest — MOSTLY DONE 2026-09-24, item 1 is NOT
+## Phase 4 — Ingest — DONE 2026-09-24
 
 Three commits: `ab19c68` the registry module, `3467935` wiring it into the
 load, `eda831d` the scoring switch.
 
 | # | asked for | state |
 |---|---|---|
-| 1 | every step re-runnable without duplicating rows | **NO** — see below |
+| 1 | every step re-runnable without duplicating rows | done (`5d45a29`) |
 | 2 | record the convention in the registry at load time | done |
 | 3 | fail loudly on an unknown convention | done |
 | 4 | old and new runs coexist with different divisors | done |
 
-**Item 1 is not done, and the gap is worse than "not yet".** The registry
-upsert is idempotent, but the step that matters is not: `regrid_members.py`
-writes with `COPY` and there is **no unique index on `regridded_forecast_member`
-or `regridded_forecast_ens`, and no delete-before-load**. Re-running a regrid
-over hours already present appends a second copy of every row, and nothing
-complains. Scores would then be computed over duplicated members — a spread
-that looks plausible and is wrong.
+**Item 1, and how it was closed.** `COPY` cannot express `ON CONFLICT`, so the
+idempotency comes from `clear_slice`: each pass deletes exactly the
+(model, variable, run, hour) it is about to write, in the same transaction as
+the `COPY`, so a crash between them leaves the slice as it was. Unique indexes
+on the natural key are the backstop that turns a *missed* clear into a loud
+failure rather than silent doubling.
 
-That makes re-running the pipeline after a partial failure, which this section
-calls the normal case, currently unsafe. The fix is a unique index on
-`(model_name, variable_name, init_time, forecast_hour, ensemble_member,
-latitude, longitude)` plus `ON CONFLICT DO UPDATE`, or an explicit delete of
-the (model, variable, run, hours) being rewritten. Neither is large; both need
-care on a 42M-row table, and creating that index will take a while.
+Both tables were checked for existing duplicates first and were clean, so the
+hazard had never been realised — and the indexes building at all re-proves it,
+since a unique index cannot be created over duplicate data. The member index
+took three minutes on 42M rows.
+
+Verified by doing what used to break it: UKMO precipitation at fh=6 regridded
+twice, 27,378 member and 1,521 ens rows before and after both runs, whole-table
+totals unchanged, every precipitation score identical.
 
 **What item 2–4 bought.** The export convention is now a property of the run in
 data, not of the model in code. `SCALED_EXPORT_DIVISOR_HOURS` described the

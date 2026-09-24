@@ -18,9 +18,9 @@ in this repository.
 **Changes the rest of this document assumes**, newest first:
 
 - **2026-09-24 — the export convention is per-run, and scoring reads it**
-  (§13). Also found: **re-running a regrid duplicates rows**, because the
-  regridded tables have no unique index and the loader appends. Not introduced
-  by this work; surfaced by it.
+  (§13). Finding a regrid re-run duplicated rows came out of the same work;
+  that is fixed too, so **`DATA_EXPANSION_DESIGN.md` phase 4 is closed** and
+  only phase 5 remains.
 - **2026-09-24 — the run selector is built** (`DATA_EXPANSION_DESIGN.md`
   phase 3): run state in React with a stale-response guard, a header selector,
   and switch behaviour. Lead-time clamping turns out to matter on the single
@@ -210,7 +210,7 @@ In priority order. Nothing here is half-done.
    Vite migration dropped, the CI actions bumped and the runners pinned. CI
    emits no annotations. The one thing §6 still asks of a future reader is to
    revisit the `ubuntu-24.04` pin before it ages out.
-6. **`DATA_EXPANSION_DESIGN.md`: one item of phase 4, then phase 5.**
+6. **`DATA_EXPANSION_DESIGN.md`: phase 5 only.**
    ~~Phase 3, the run-selector UI~~ **done 2026-09-24** — `RunProvider`, a header selector, and switch
    behaviour (invalidate, clamp lead time, grey out models a run lacks). Read
    that document's phase 3 for what shipped and the two departures from its
@@ -222,12 +222,12 @@ In priority order. Nothing here is half-done.
    AIFS clamps to +198h on UKMO instead of scrubbing to a lead time that
    returns nothing.
 
-   **Phase 4 is three-quarters done (2026-09-24).** The export convention is
+   **Phase 4 is done (2026-09-24).** The export convention is
    now recorded per run at load time and scoring reads it, so old and new runs
    can disagree about their divisors — which retires the standing warning that
    re-exporting GEFS needs `SCALED_EXPORT_DIVISOR_HOURS` edited in the same
-   commit. **Its item 1 is not done and is a live hazard: re-running a regrid
-   duplicates rows.** See §13.
+   commit. Its item 1 — a
+   regrid re-run duplicating rows — **is fixed too** (`5d45a29`); §13 has it.
 
    **Then phase 5** (retention and scale), which is about how many runs stay
    hot rather than how to load one. §11 plus `load_observations.py` already
@@ -1551,17 +1551,16 @@ those deployments already have. The danger the design names — a second run
 scored with the first's divisor — cannot reach through this path, because the
 cache key is the run.
 
-### Two things this left open
+### One thing this left open
 
-- **Re-running a regrid duplicates rows.** `regrid_members.py` writes with
-  `COPY`, and `regridded_forecast_member` and `regridded_forecast_ens` have
-  **no unique index** and no delete-before-load. Re-running over hours already
-  present appends a second copy of everything, silently, and every score is
-  then computed over duplicated members. This predates the current work and
-  was surfaced by it; it is phase 4's item 1 and the one part still open.
-  Fix is a unique index on the natural key plus `ON CONFLICT`, or an explicit
-  delete of what is being rewritten — neither large, both needing care on a
-  42M-row table.
+- ~~**Re-running a regrid duplicates rows.**~~ **Fixed 2026-09-24**
+  (`5d45a29`). `clear_slice` deletes the (model, variable, run, hour) each pass
+  is about to write, in the same transaction as the `COPY`; unique indexes on
+  the natural key are the backstop that makes a missed clear loud rather than
+  silent. Both tables were clean beforehand, so nothing had to be deduplicated
+  — and the indexes building at all re-proves that, since a unique index
+  cannot be created over duplicate data. Verified by regridding one slice
+  twice: identical counts, identical scores.
 - **`point_timeseries` cannot ask which run it is scoring.** It reads native
   `forecast_data` via `get_model_run_id` and never resolves an `init_time`, so
   it is still on the constant. A pre-existing multi-run ambiguity rather than a
