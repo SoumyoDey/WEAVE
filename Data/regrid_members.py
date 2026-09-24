@@ -218,8 +218,14 @@ def verify_grid(cursor, tgt_lats, tgt_lons):
                   f"all on the grid")
 
 
-def run_init_time(cursor, model):
+def run_init_time(cursor, model, requested=None):
     """The initialisation time this model's `forecast_data` belongs to.
+
+    `requested` selects one when several are loaded. Until 2026-09-24 this
+    function refused on ambiguity and told the caller to "pass the run
+    explicitly" — with no parameter to pass it through, so loading a second run
+    made the model unregriddable, including the run already there. The refusal
+    was right; the missing argument was the bug.
 
     Written into every regridded row so the output carries its run identity.
     Before `migrate_init_time.py` the regridded tables had no such column and
@@ -241,16 +247,36 @@ def run_init_time(cursor, model):
     if not times:
         raise SystemExit(f"{model}: no forecast_data, so no run to attribute a "
                          f"regrid to")
+    if requested is not None:
+        match = [t for t in times if str(t) == str(requested)]
+        if not match:
+            raise SystemExit(
+                f"{model}: no forecast_data at {requested}. Loaded runs are "
+                f"{sorted(str(t) for t in times)}.")
+        return match[0]
     if len(times) > 1:
         raise SystemExit(
             f"{model}: forecast_data spans {len(times)} initialisation times "
             f"({sorted(str(t) for t in times)}). Regrid one run at a time — pass "
-            f"the run explicitly rather than letting this guess.")
+            f"--init-time to say which.")
     return times[0]
 
 
-def fetch_hour(cursor, model, variable, hour):
-    """{member: {(lat, lon): value}} for one model/variable/forecast hour."""
+def fetch_hour(cursor, model, variable, hour, init_time):
+    """{member: {(lat, lon): value}} for one model/variable/hour of one run.
+
+    **`init_time` is not optional, and that is the point.** Until 2026-09-24
+    this query was not scoped to a run at all. With one run loaded that was
+    harmless; with two it returns members from both, and since the result is
+    keyed by member number the later run's member 5 silently overwrites the
+    earlier one's. The regrid would then emit a blend of two initialisations,
+    correctly shaped and quietly wrong — the exact failure the `init_time`
+    migration exists to prevent, surviving in the one place that writes the
+    regridded tables rather than reads them.
+
+    Nothing caught it because `run_init_time` refused to proceed when a model
+    had more than one run, so this code path had never run against two.
+    """
     cursor.execute("""
         SELECT fd.ensemble_member, fd.latitude, fd.longitude, fd.value
         FROM forecast_data fd
@@ -260,7 +286,8 @@ def fetch_hour(cursor, model, variable, hour):
         WHERE m.model_name = %s AND v.variable_name = %s
           AND fd.forecast_hour = %s AND fd.ensemble_member IS NOT NULL
           AND fd.value IS NOT NULL
-    """, (model, variable, hour))
+          AND fr.initialization_time = %s
+    """, (model, variable, hour, init_time))
     by_member = defaultdict(dict)
     for member, lat, lon, value in cursor.fetchall():
         by_member[int(member)][(round(float(lat), 4), round(float(lon), 4))] = float(value)
@@ -331,7 +358,8 @@ def copy_rows(conn, table, columns, rows):
     return len(rows)
 
 
-def regrid(conn, model, variable, hours, tgt_lats, tgt_lons, verify=False):
+def regrid(conn, model, variable, hours, tgt_lats, tgt_lons, verify=False,
+           init_time_requested=None):
     zero_fill = variable in ZERO_FILL_VARIABLES
     total_member_rows = total_ens_rows = 0
     verify_stats = []
@@ -346,9 +374,9 @@ def regrid(conn, model, variable, hours, tgt_lats, tgt_lons, verify=False):
     with conn.cursor() as cur:
         # Resolved once per model/variable and written into every row, so the
         # output says which run it came from instead of leaving the API to guess.
-        init_time = run_init_time(cur, model)
+        init_time = run_init_time(cur, model, init_time_requested)
         for hour in hours:
-            by_member = fetch_hour(cur, model, variable, hour)
+            by_member = fetch_hour(cur, model, variable, hour, init_time)
             if not by_member:
                 continue
 
@@ -458,7 +486,15 @@ def regrid(conn, model, variable, hours, tgt_lats, tgt_lons, verify=False):
     return total_member_rows, total_ens_rows
 
 
-def parse_hours(spec, cursor, model, variable):
+def parse_hours(spec, cursor, model, variable, init_time=None):
+    """Which lead hours to regrid.
+
+    `init_time` scopes the discovered set to one run. Without it the union
+    across runs comes back, and regridding run A would walk hours that only
+    exist in run B — wasted work rather than wrong output, since `fetch_hour`
+    is now run-scoped and simply finds nothing, but it makes the log lie about
+    what was attempted.
+    """
     if spec:
         if '-' in spec:
             a, b = spec.split('-')
@@ -471,8 +507,9 @@ def parse_hours(spec, cursor, model, variable):
         JOIN models m         ON m.model_id = fr.model_id
         JOIN variables v      ON v.variable_id = fd.variable_id
         WHERE m.model_name = %s AND v.variable_name = %s
+          AND (%s IS NULL OR fr.initialization_time = %s)
         ORDER BY 1
-    """, (model, variable))
+    """, (model, variable, init_time, init_time))
     return [int(r[0]) for r in cursor.fetchall()]
 
 
@@ -489,6 +526,11 @@ def main():
                          'target grid, then continue')
     ap.add_argument('--truncate', action='store_true',
                     help='clear the target tables for these models/variables first')
+    ap.add_argument('--init-time', default=None,
+                    help='which loaded run to regrid, e.g. "2025-09-08 06:00:00". '
+                         'Required once a model has more than one run in '
+                         'forecast_data; without it an ambiguous model is refused '
+                         'rather than guessed at.')
     args = ap.parse_args()
 
     conn = psycopg2.connect(**DB_CONFIG)
@@ -518,13 +560,15 @@ def main():
                                         f"WHERE model_name=%s AND variable_name=%s",
                                         (model, variable))
                         conn.commit()
-                    hours = parse_hours(args.hours, cur, model, variable)
+                    hours = parse_hours(args.hours, cur, model, variable,
+                                        args.init_time)
                 if not hours:
                     print(f"  {model} {variable}: no forecast hours, skipped")
                     continue
                 print(f"  {model} {variable}: {len(hours)} forecast hours")
                 m_rows, e_rows = regrid(conn, model, variable, hours,
-                                        tgt_lats, tgt_lons, verify=args.verify)
+                                        tgt_lats, tgt_lons, verify=args.verify,
+                                        init_time_requested=args.init_time)
                 print(f"  -> {m_rows:,} member rows, {e_rows:,} ensemble rows\n")
     finally:
         conn.close()
