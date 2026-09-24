@@ -307,6 +307,49 @@ conventions were so hard to reconstruct. Any expansion should make ingest
 
 ## Phase 5 — Scale
 
+> **The arithmetic below was re-measured on 2026-09-24 and was low by about
+> 5x.** The original estimate — ~6.5 GB of members plus ~250 MB of ensemble
+> statistics, ~65 GB for ten runs — is kept underneath because the *reasoning*
+> still holds; only the numbers were wrong, and they were wrong in the
+> direction that matters for a retention decision.
+>
+> **What one loaded run actually costs**, measured rather than estimated:
+>
+> | table | heap | indexes | total |
+> |---|---|---|---|
+> | `forecast_data` (native) | 10 GB | 15 GB | **25 GB** |
+> | `regridded_forecast_member` | 2.7 GB | 8.7 GB | **11 GB** |
+> | `ensemble_statistics` | 504 MB | 305 MB | 809 MB |
+> | `regridded_forecast_ens` | 113 MB | 308 MB | 421 MB |
+> | | | | **~37 GB per run** |
+>
+> Plus ~0.5 GB of observations, which scale with the period covered rather than
+> with the number of runs. The whole database is **38 GB for one run**, so ten
+> runs is nearer **370 GB than 65 GB** — past the 200 GB figure this section
+> names as the thing not to discover the hard way.
+>
+> **Two reasons the original was low.** It counted only the regridded tables;
+> `forecast_data` is two thirds of the footprint and is per-run too. And it
+> appears to have counted data rather than data *plus indexes* — which is the
+> more interesting error, because **indexes are the dominant cost here**:
+> 8.7 GB of index against 2.7 GB of member data, a ratio of 3.2 to 1. The
+> regridded tables are indexed several ways to keep the scored endpoints fast,
+> and that is what a second run multiplies.
+>
+> About 2 GB of the member table's index is the unique key added on 2026-09-24
+> to make re-running a regrid safe (phase 4, item 1). That is a real cost of a
+> real fix, not overhead to remove.
+>
+> **This strengthens the partitioning note rather than changing it.**
+> Partitioning by `init_time` would give each run its own indexes, so dropping
+> an old run drops its index with it and queries scoped to one run stop paying
+> for the others. At 37 GB a run that stops being a nicety fairly quickly.
+>
+> **And it sharpens the third decision below.** If the observation record does
+> not grow with the runs, each additional run costs ~37 GB to store forecasts
+> that nothing can score. The current run has truth for ~23.5 h of a 240 h
+> forecast.
+
 Rough arithmetic before committing: one run is ~6.5 GB of members plus ~250 MB of
 ensemble statistics, for **two variables and three models**. Ten runs is ~65 GB,
 which is fine on disk and slow without partitioning.

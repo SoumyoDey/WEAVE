@@ -173,7 +173,7 @@ In priority order. Nothing here is half-done.
    not code: generate the password hash and point the hostname at the box. The
    Caddyfile is validated (Caddy v2.11.4, "Valid configuration"). **The host
    decision is also the data decision** — a fresh box starts with an empty
-   PostgreSQL and the database is 36 GB — see §10.
+   PostgreSQL and the database is 38 GB — see §10.
 1. **Nothing is blocked on a person any more.** PR #2 is merged (§1). What is
    left is either work, a decision that is yours, or blocked on data that is not
    in this repository — and each says which below.
@@ -230,7 +230,10 @@ In priority order. Nothing here is half-done.
    regrid re-run duplicating rows — **is fixed too** (`5d45a29`); §13 has it.
 
    **Then phase 5** (retention and scale), which is about how many runs stay
-   hot rather than how to load one. §11 plus `load_observations.py` already
+   hot rather than how to load one. **Its arithmetic was re-measured on
+   2026-09-24 and was low by ~5x**: a run costs ~37 GB, not ~6.75 GB, so ten
+   runs is nearer 370 GB than 65 GB. Indexes are the dominant term — 8.7 GB
+   against 2.7 GB of member data. §11 plus `load_observations.py` already
    cover the observation half of an ingest. Read that
    document's status table first; three of its instructions were superseded by
    what actually shipped and are marked as such.
@@ -1150,18 +1153,22 @@ What is actually in the database, as of 2026-09-21:
 | table | size |
 |---|---|
 | `forecast_data` | 25 GB |
-| `regridded_forecast_member` | 9.0 GB |
+| `regridded_forecast_member` | 11 GB |
+| `ensemble_statistics` | 809 MB |
 | `observation_data` | 499 MB |
-| `regridded_forecast_ens` | 332 MB |
+| `regridded_forecast_ens` | 421 MB |
 | `regridded_observation` | 33 MB |
-| **whole database** | **36 GB** |
+| **whole database** | **38 GB** |
+
+Up from 36 GB on 2026-09-21: the unique indexes that made a regrid re-run safe
+(§13) cost about 2 GB on the member table.
 
 Three ways, cheapest first:
 
 1. **Serve from this machine's existing `weave_weather`.** Nothing moves. The
    truth field here is the corrected UTC one (§12), verified end to end. The
    beta ships as soon as a host can reach this database.
-2. **Dump and restore.** 36 GB, ~85% of it `forecast_data`. Worth asking whether
+2. **Dump and restore.** 38 GB, two thirds of it `forecast_data`. Worth asking whether
    the beta needs that table at all before moving it: the scored endpoints read
    the regridded tables and `regridded_observation`, which together are under
    10 GB.
