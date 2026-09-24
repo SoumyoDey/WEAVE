@@ -467,16 +467,24 @@ def regrid(conn, model, variable, hours, tgt_lats, tgt_lons, verify=False,
         if written_hours:
             with conn.cursor() as reg_cur:
                 run_registry.ensure_schema(reg_cur)
-                run_registry.record(
-                    reg_cur, model, variable, init_time,
-                    n_members=max_members,
-                    hour_min=min(written_hours), hour_max=max(written_hours))
+                # The convention first — the data cannot tell us how the export
+                # was produced, only the declaration can.
+                run_registry.record(reg_cur, model, variable, init_time)
+                # Then the measured fields, from the table rather than from
+                # this pass. Recording what the pass wrote was wrong for a
+                # *partial* regrid: running `--hours 6` narrowed the run's
+                # recorded range to 6-6 while the stored data still spanned
+                # 0-198, and `hourRangeFor` in the UI reads exactly this. The
+                # scan is scoped to one run and takes ~20s against 42M rows,
+                # because the natural-key index covers it.
+                run_registry.refresh_from_members(reg_cur, init_time)
             conn.commit()
             declared = run_registry.declared_for(model, variable)
             how = (f"{declared[0]}" + (f" /{declared[1]:g}h" if declared[1] else '')
                    if declared else 'UNDECLARED — scoring cannot resolve a divisor')
-            print(f"    {model} {variable}: registered {min(written_hours)}–"
-                  f"{max(written_hours)}h, {max_members} members, {how}")
+            print(f"    {model} {variable}: registered from the stored data "
+                  f"(this pass wrote {min(written_hours)}–{max(written_hours)}h, "
+                  f"{max_members} members), {how}")
 
     if verify and verify_stats:
         worst = max(verify_stats)

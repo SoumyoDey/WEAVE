@@ -157,6 +157,20 @@ function App() {
     setMetricHour((h)  => Math.min(Math.max(h, range.min), range.max));
   }, [selectedRun, selectedModel, selectedVariable, hourRangeFor]);
 
+  // True unless the selected model is absent from the selected run.
+  //
+  // The fallback effect below corrects `selectedModel`, but it cannot do so in
+  // time: on the commit where the run changes, every effect in that commit
+  // runs with the *old* model still closed over, so a request goes out for a
+  // model this run does not have and the backend rightly 400s. Deriving the
+  // answer during render instead of after it is what makes the guard early
+  // enough to matter.
+  //
+  // Defaults to true while the run detail is still loading, so a slow
+  // `/api/runs` delays nothing.
+  const runModels = selectedRun ? modelsFor(selectedRun) : [];
+  const runHasSelectedModel = runModels.length === 0 || runModels.includes(selectedModel);
+
   // A run need not carry every model. Rather than leaving a selection that
   // silently returns nothing, fall back to one the run does have.
   useEffect(() => {
@@ -267,10 +281,13 @@ function App() {
   // ── Reload data on control changes (debounced) ───────────────────────────────
   // 300 ms debounce so rapid timeline scrubbing fires only one request.
   useEffect(() => {
+    // Skip while the model is absent from this run; the fallback
+    // below corrects it and this effect re-runs.
+    if (!runHasSelectedModel) return;
     if (!mapInstanceRef.current) return;
     const id = setTimeout(loadDataForHour, 300);
     return () => clearTimeout(id);
-  }, [selectedHour, selectedModel, selectedMember, selectedVariable, runEpoch]); // eslint-disable-line
+  }, [selectedHour, selectedModel, selectedMember, selectedVariable, runEpoch, runHasSelectedModel]); // eslint-disable-line
 
   // ── Redraw IDW / VSup when colormap or invert changes ────────────────────────
   useEffect(() => {
@@ -296,6 +313,9 @@ function App() {
 
   // ── Wind arrows / streamlines ─────────────────────────────────────────────────
   useEffect(() => {
+    // Skip while the model is absent from this run; the fallback
+    // below corrects it and this effect re-runs.
+    if (!runHasSelectedModel) return;
     const map = mapInstanceRef.current;
     if (selectedVariable === 'wind' && dataRef.current?.length && map) {
       if (showWindArrows) drawWindArrows(map, dataRef.current, arrowsCanvasRef);
@@ -306,10 +326,13 @@ function App() {
       stopWindArrows(map, arrowsCanvasRef);
       stopStreamlines(animationFrameRef);
     }
-  }, [showWindArrows, showWindLines, selectedVariable, selectedHour, selectedModel, selectedMember, runEpoch]); // eslint-disable-line
+  }, [showWindArrows, showWindLines, selectedVariable, selectedHour, selectedModel, selectedMember, runEpoch, runHasSelectedModel]); // eslint-disable-line
 
   // ── VSup Boxes overlay ────────────────────────────────────────────────────────
   useEffect(() => {
+    // Skip while the model is absent from this run; the fallback
+    // below corrects it and this effect re-runs.
+    if (!runHasSelectedModel) return;
     const map = mapInstanceRef.current;
     if (showUncertainty && dataRef.current?.length && map) {
       if (canvasRef.current) canvasRef.current.style.display = 'none';
@@ -318,10 +341,13 @@ function App() {
       if (canvasRef.current && uncertaintyMode === null) canvasRef.current.style.display = 'block';
       stopUncertainty(map, uncertaintyLayerRef, uncertaintyCanvasRef);
     }
-  }, [showUncertainty, selectedHour, selectedModel, selectedVariable, selectedColormap, invertUncertainty, numBuckets, flipColormap, gridOpacity, runEpoch]); // eslint-disable-line
+  }, [showUncertainty, selectedHour, selectedModel, selectedVariable, selectedColormap, invertUncertainty, numBuckets, flipColormap, gridOpacity, runEpoch, runHasSelectedModel]); // eslint-disable-line
 
   // ── Bivariate / VSUP Fan overlay ─────────────────────────────────────────────
   useEffect(() => {
+    // Skip while the model is absent from this run; the fallback
+    // below corrects it and this effect re-runs.
+    if (!runHasSelectedModel) return;
     const map = mapInstanceRef.current;
     if ((showBivariate || showFanChart) && map) {
       if (canvasRef.current) canvasRef.current.style.display = 'none';
@@ -335,10 +361,13 @@ function App() {
       if (canvasRef.current && uncertaintyMode === null) canvasRef.current.style.display = 'block';
       stopBivariate(map, bivariateLayerRef);
     }
-  }, [showBivariate, showFanChart, selectedHour, selectedModel, selectedVariable, numBuckets, selectedColormap, invertUncertainty, flipColormap, gridOpacity, runEpoch]); // eslint-disable-line
+  }, [showBivariate, showFanChart, selectedHour, selectedModel, selectedVariable, numBuckets, selectedColormap, invertUncertainty, flipColormap, gridOpacity, runEpoch, runHasSelectedModel]); // eslint-disable-line
 
   // ── Texture overlay ───────────────────────────────────────────────────────────
   useEffect(() => {
+    // Skip while the model is absent from this run; the fallback
+    // below corrects it and this effect re-runs.
+    if (!runHasSelectedModel) return;
     const map = mapInstanceRef.current;
     if (showTexture && map) {
       if (canvasRef.current) canvasRef.current.style.display = 'none';
@@ -347,7 +376,7 @@ function App() {
       if (canvasRef.current && uncertaintyMode === null) canvasRef.current.style.display = 'block';
       stopTexture(map, textureLayerRef);
     }
-  }, [showTexture, selectedHour, selectedModel, selectedVariable, selectedColormap, textureStyle, numBuckets, flipColormap, gridOpacity, invertUncertainty, runEpoch]); // eslint-disable-line
+  }, [showTexture, selectedHour, selectedModel, selectedVariable, selectedColormap, textureStyle, numBuckets, flipColormap, gridOpacity, invertUncertainty, runEpoch, runHasSelectedModel]); // eslint-disable-line
 
   // ── Data fetch ────────────────────────────────────────────────────────────────
   const loadDataForHour = async () => {
@@ -428,6 +457,9 @@ function App() {
   }, [mapReady]); // eslint-disable-line
 
   useEffect(() => {
+    // Skip while the model is absent from this run; the fallback
+    // below corrects it and this effect re-runs.
+    if (!runHasSelectedModel) return;
     if (!clickedPoint) return;
     const { lat, lon } = clickedPoint;
     // Guard against out-of-order responses and setState-after-unmount: the
@@ -462,7 +494,7 @@ function App() {
       .finally(() => { if (!cancelled) setSsrLoading(false); });
 
     return () => { cancelled = true; };
-  }, [clickedPoint, selectedModel, selectedVariable, runEpoch]); // eslint-disable-line
+  }, [clickedPoint, selectedModel, selectedVariable, runEpoch, runHasSelectedModel]); // eslint-disable-line
 
   // ── Observation coverage ──────────────────────────────────────────────────────
   // How far the truth reaches. Verification correctly returns nothing past the
@@ -470,6 +502,9 @@ function App() {
   // extent is fetched up front and shown on the timeline, before anything is
   // clicked. Depends on the run and the variable, not on the selected hour.
   useEffect(() => {
+    // Skip while the model is absent from this run; the fallback
+    // below corrects it and this effect re-runs.
+    if (!runHasSelectedModel) return;
     let cancelled = false;
     fetchObservationCoverage(currentModel.name, selectedVariable)
       .then(data => { if (!cancelled) setObsCoverage(data); })
@@ -478,7 +513,7 @@ function App() {
         if (!cancelled) { console.error('Observation coverage error:', err); setObsCoverage(null); }
       });
     return () => { cancelled = true; };
-  }, [currentModel.name, selectedVariable, runEpoch]);
+  }, [currentModel.name, selectedVariable, runEpoch, runHasSelectedModel]);
 
   // ── Spatial metric computation ────────────────────────────────────────────────
   const computeSpatialMetric = async () => {
