@@ -25,12 +25,27 @@ import { API_BASE as BASE } from './base';
  * only forwards. Keeping it beside `API_BASE`, which is already module scope,
  * means the api layer stays the only place that knows the wire format.
  *
- * The limit: this works because the value is set once and never changes. **A
- * real run selector must not build on it** — switching runs needs re-fetches and
- * cache invalidation, which is React state's job, and mutable module state would
- * let a stale request resolve after the switch and paint one run's numbers under
- * another run's label. When that selector is built, move the value into state or
- * context and let `withRun`/`withRunParams` take it as an argument.
+ * **The selector is now being built (2026-09-22), and this is how the warning
+ * that used to be here was answered.** It said: move the value into React state
+ * and let `withRun`/`withRunParam` take it as an argument. Half of that was
+ * right and half was the wrong fix.
+ *
+ * Right: React state owns the selection. `RunProvider` holds it, and calls
+ * `setInitTime` so this module stays the one place that knows the wire format.
+ *
+ * Wrong: threading the value into `withRun` at every call site. There are 53 of
+ * them across four api modules, and not one component reads the value for
+ * itself — they would all just forward it. That is the prop-drilling this
+ * module was created to avoid, and it would not have fixed the actual bug
+ * anyway.
+ *
+ * Because the real bug is not *where the value lives*. It is that a request
+ * issued under run A can resolve after a switch to run B and paint A's numbers
+ * under B's label. Moving the value to a prop does not stop that — the fetch
+ * already captured the old value when it left. What stops it is knowing which
+ * run a response belongs to, so `runEpoch` increments on every change and
+ * callers check `isCurrentRun(epoch)` before committing a result. Threading a
+ * prop would have moved the value and left the race.
  */
 
 // How long to wait for /api/runs before giving up and sending requests without
@@ -40,12 +55,46 @@ const BOOTSTRAP_TIMEOUT_MS = 5000;
 
 let currentInitTime = null;
 let bootstrap = null;
+let runsPromise = null;
 
-/** Set the run every subsequent request will name. */
-export const setInitTime = (initTime) => { currentInitTime = initTime || null; };
+// Bumped every time the selection actually changes. A response tagged with a
+// stale epoch is from a run nobody is looking at any more.
+let runEpoch = 0;
+
+/**
+ * Set the run every subsequent request will name.
+ *
+ * Only bumps the epoch when the value really changes, so a provider re-render
+ * that sets the same run does not invalidate requests that are legitimately in
+ * flight for it.
+ */
+export const setInitTime = (initTime) => {
+  const next = initTime || null;
+  if (next === currentInitTime) return;
+  currentInitTime = next;
+  runEpoch += 1;
+};
 
 /** The run currently selected, or null before /api/runs has answered. */
 export const getInitTime = () => currentInitTime;
+
+/**
+ * The current epoch. Capture this *before* a fetch, check it after.
+ *
+ *     const epoch = getRunEpoch();
+ *     const data  = await fetchSomething();
+ *     if (!isCurrentRun(epoch)) return;   // the run changed under us
+ *     setState(data);
+ *
+ * Checking `getInitTime()` again instead would not be equivalent: switching
+ * A → B → A lands back on the same value while the in-flight A response is
+ * still wrong to commit, because the component has re-fetched since. A counter
+ * does not have that blind spot.
+ */
+export const getRunEpoch = () => runEpoch;
+
+/** Whether an epoch captured earlier is still the live one. */
+export const isCurrentRun = (epoch) => epoch === runEpoch;
 
 /**
  * Resolve the run once, and hand every later caller the same promise.
@@ -58,12 +107,11 @@ export const whenRunReady = () => {
   if (bootstrap) return bootstrap;
   bootstrap = (async () => {
     try {
-      const timeout = new Promise((resolve) =>
-        setTimeout(() => resolve(null), BOOTSTRAP_TIMEOUT_MS));
-      const res = await Promise.race([fetch(`${BASE}/runs`), timeout]);
-      if (!res || !res.ok) throw new Error(`/api/runs: ${res ? res.status : 'timeout'}`);
-      const data = await res.json();
-      setInitTime(data?.latest);
+      const data = await fetchRuns();
+      // Only default when nothing has chosen yet. A provider that resolved
+      // first — from a URL, or a restored preference — must not be overridden
+      // by the bootstrap arriving late and snapping back to `latest`.
+      if (!currentInitTime) setInitTime(data?.latest);
     } catch (err) {
       // Worth a line: a two-run database failing every scored request is
       // traceable to exactly this.
@@ -75,8 +123,40 @@ export const whenRunReady = () => {
   return bootstrap;
 };
 
-/** Forget the resolved run and the in-flight bootstrap. For tests. */
-export const resetRun = () => { currentInitTime = null; bootstrap = null; };
+/**
+ * The full `/api/runs` payload, fetched once and shared.
+ *
+ * The selector and the bootstrap both need this, and they must not be two
+ * fetches: the bootstrap exists to make request ordering a property of this
+ * module, which a second independent fetch would undo. Memoised on the
+ * promise, not the result, so concurrent callers during startup share one
+ * request rather than racing.
+ *
+ * Rejects on failure, unlike `whenRunReady` — a selector wants to say "could
+ * not load runs", where the api layer wants to degrade quietly. The memo is
+ * cleared on failure so a retry is possible.
+ */
+export const fetchRuns = () => {
+  if (runsPromise) return runsPromise;
+  runsPromise = (async () => {
+    const timeout = new Promise((resolve) =>
+      setTimeout(() => resolve(null), BOOTSTRAP_TIMEOUT_MS));
+    const res = await Promise.race([fetch(`${BASE}/runs`), timeout]);
+    if (!res) throw new Error('/api/runs: timed out');
+    if (!res.ok) throw new Error(`/api/runs: ${res.status}`);
+    return res.json();
+  })();
+  runsPromise.catch(() => { runsPromise = null; });
+  return runsPromise;
+};
+
+/** Forget the resolved run, the bootstrap and the cached runs. For tests. */
+export const resetRun = () => {
+  currentInitTime = null;
+  bootstrap = null;
+  runsPromise = null;
+  runEpoch = 0;
+};
 
 /**
  * A POST body with `init_time` added.
