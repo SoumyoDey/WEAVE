@@ -17,6 +17,10 @@ in this repository.
 
 **Changes the rest of this document assumes**, newest first:
 
+- **2026-09-24 — the export convention is per-run, and scoring reads it**
+  (§13). Also found: **re-running a regrid duplicates rows**, because the
+  regridded tables have no unique index and the loader appends. Not introduced
+  by this work; surfaced by it.
 - **2026-09-24 — the run selector is built** (`DATA_EXPANSION_DESIGN.md`
   phase 3): run state in React with a stale-response guard, a header selector,
   and switch behaviour. Lead-time clamping turns out to matter on the single
@@ -206,8 +210,8 @@ In priority order. Nothing here is half-done.
    Vite migration dropped, the CI actions bumped and the runners pinned. CI
    emits no annotations. The one thing §6 still asks of a future reader is to
    revisit the `ubuntu-24.04` pin before it ages out.
-6. **`DATA_EXPANSION_DESIGN.md` phases 4–5.** ~~Phase 3, the run-selector UI~~
-   **done 2026-09-24** — `RunProvider`, a header selector, and switch
+6. **`DATA_EXPANSION_DESIGN.md`: one item of phase 4, then phase 5.**
+   ~~Phase 3, the run-selector UI~~ **done 2026-09-24** — `RunProvider`, a header selector, and switch
    behaviour (invalidate, clamp lead time, grey out models a run lacks). Read
    that document's phase 3 for what shipped and the two departures from its
    sketch.
@@ -218,10 +222,16 @@ In priority order. Nothing here is half-done.
    AIFS clamps to +198h on UKMO instead of scrubbing to a lead time that
    returns nothing.
 
-   **What is left is phase 4 (a scripted, idempotent ingest) and phase 5
-   (retention and scale).** Both are about loading a second run rather than
-   displaying one, and §11 plus `load_observations.py` already cover the
-   observation half. Read that
+   **Phase 4 is three-quarters done (2026-09-24).** The export convention is
+   now recorded per run at load time and scoring reads it, so old and new runs
+   can disagree about their divisors — which retires the standing warning that
+   re-exporting GEFS needs `SCALED_EXPORT_DIVISOR_HOURS` edited in the same
+   commit. **Its item 1 is not done and is a live hazard: re-running a regrid
+   duplicates rows.** See §13.
+
+   **Then phase 5** (retention and scale), which is about how many runs stay
+   hot rather than how to load one. §11 plus `load_observations.py` already
+   cover the observation half of an ingest. Read that
    document's status table first; three of its instructions were superseded by
    what actually shipped and are marked as such.
 
@@ -1504,6 +1514,67 @@ against the real table. One lesson from writing those tests, which cost a
 failing run: **a synthetic grid noisier than the real one tests the tolerance
 rather than the code.** `np.arange(..., 0.1, dtype=np.float32)` drifts ~2e−3 by
 index 1800 and failed a clip that is correct on every real granule.
+
+## 13. The export convention is per-run now — 2026-09-24
+
+`SCALED_EXPORT_DIVISOR_HOURS` described the export that happened to be loaded.
+`forecast_run_registry` now describes each run's own, `Data/run_registry.py`
+writes it at load time, and scoring reads it. `DATA_EXPANSION_DESIGN.md` phase
+4 has the detail; this is what a reader of *this* document needs.
+
+**The standing GEFS warning is retired.** It said re-exporting GEFS would
+require changing that constant in the same commit or the correction applies
+twice. With the divisor stored per run, a re-export records its own and leaves
+the loaded run alone. There is a test that two runs disagree without either
+being wrong.
+
+**Two distinctions that had to exist first.** `export_divisor_h` was NULL both
+for UKMO — never scaled, React.py converts its native rate straight to mm/h —
+and for a model nobody had declared. Opposite situations, indistinguishable in
+a nullable float, so `export_convention` names them and NULL there is an error
+rather than a default. And `metrics._increment_divisor` returned the period for
+any unknown model, which reads as unscaled: a model whose export divided by 6
+would have scored 6x high with nothing to say so.
+
+**How the switch was verified**, because the obvious check is not sufficient.
+Every precipitation number is byte-identical afterwards — which is the right
+outcome, and also exactly what a silent fallback to the constant would produce.
+So the registry was perturbed instead: GEFS's divisor set to 6 moved its MAE
+from 1.4399 to 2.9422, and restoring 3 brought it back. Identical numbers, zero
+fallback warnings, and a score that follows the registry when it moves.
+
+**Fallback rather than refusal, deliberately.** `_export_divisor` falls back to
+the constant and logs once per key if the registry cannot answer. Raising is
+louder and wrong here: a database predating the registry would lose every
+precipitation endpoint at once, and the fallback is precisely the behaviour
+those deployments already have. The danger the design names — a second run
+scored with the first's divisor — cannot reach through this path, because the
+cache key is the run.
+
+### Two things this left open
+
+- **Re-running a regrid duplicates rows.** `regrid_members.py` writes with
+  `COPY`, and `regridded_forecast_member` and `regridded_forecast_ens` have
+  **no unique index** and no delete-before-load. Re-running over hours already
+  present appends a second copy of everything, silently, and every score is
+  then computed over duplicated members. This predates the current work and
+  was surfaced by it; it is phase 4's item 1 and the one part still open.
+  Fix is a unique index on the natural key plus `ON CONFLICT`, or an explicit
+  delete of what is being rewritten — neither large, both needing care on a
+  42M-row table.
+- **`point_timeseries` cannot ask which run it is scoring.** It reads native
+  `forecast_data` via `get_model_run_id` and never resolves an `init_time`, so
+  it is still on the constant. A pre-existing multi-run ambiguity rather than a
+  divisor problem, and it needs settling before a second run lands.
+
+### One thing worth knowing about the fixture
+
+**It had no `forecast_run_registry` at all**, and now does. The fixture builds
+its schema from source DDL precisely so a table cannot drift out of it — and
+one had, because the registry is created by a migration rather than by either
+file `_schema_sql` read. Nothing failed, because nothing read it. Adding a
+reader is what would have found it, which is a general argument for checking
+what the fixture *lacks* rather than trusting that it mirrors production.
 
 ## Standing decisions — do not undo these by accident
 

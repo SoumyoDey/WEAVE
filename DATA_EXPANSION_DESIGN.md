@@ -238,7 +238,58 @@ Decisions this section asked to make deliberately, and how they went:
 - **What if a model is missing from a run?** Grey it out with the reason, rather
   than silently returning nothing.
 
-## Phase 4 — Ingest
+## Phase 4 — Ingest — MOSTLY DONE 2026-09-24, item 1 is NOT
+
+Three commits: `ab19c68` the registry module, `3467935` wiring it into the
+load, `eda831d` the scoring switch.
+
+| # | asked for | state |
+|---|---|---|
+| 1 | every step re-runnable without duplicating rows | **NO** — see below |
+| 2 | record the convention in the registry at load time | done |
+| 3 | fail loudly on an unknown convention | done |
+| 4 | old and new runs coexist with different divisors | done |
+
+**Item 1 is not done, and the gap is worse than "not yet".** The registry
+upsert is idempotent, but the step that matters is not: `regrid_members.py`
+writes with `COPY` and there is **no unique index on `regridded_forecast_member`
+or `regridded_forecast_ens`, and no delete-before-load**. Re-running a regrid
+over hours already present appends a second copy of every row, and nothing
+complains. Scores would then be computed over duplicated members — a spread
+that looks plausible and is wrong.
+
+That makes re-running the pipeline after a partial failure, which this section
+calls the normal case, currently unsafe. The fix is a unique index on
+`(model_name, variable_name, init_time, forecast_hour, ensemble_member,
+latitude, longitude)` plus `ON CONFLICT DO UPDATE`, or an explicit delete of
+the (model, variable, run, hours) being rewritten. Neither is large; both need
+care on a 42M-row table, and creating that index will take a while.
+
+**What item 2–4 bought.** The export convention is now a property of the run in
+data, not of the model in code. `SCALED_EXPORT_DIVISOR_HOURS` described the
+export that happened to be loaded; the registry describes each run's own, so
+the standing warning that re-exporting GEFS requires editing that constant in
+the same commit — or the correction applies twice — no longer holds. The
+divisor is recorded at load time and scoring reads it.
+
+**Verified by perturbation, not just by agreement.** Every precipitation number
+is byte-identical after the switch, which is what should happen when the
+registry holds the same divisors the constant did — and is also exactly what a
+silent fallback would produce. So the registry was moved instead: setting
+GEFS's divisor to 6 took its MAE from 1.4399 to 2.9422, and restoring 3 brought
+it back. Identical numbers plus zero fallback warnings plus a score that
+follows the registry when it changes is what makes this a switch rather than a
+no-op.
+
+**One reader is still on the constant.** `point_timeseries` reads native
+`forecast_data` through `get_model_run_id` and never resolves an `init_time`,
+so it cannot ask the registry which run it is scoring. That is a pre-existing
+multi-run ambiguity rather than a divisor problem, and it needs settling before
+a second run is loaded.
+
+---
+
+The original text follows.
 
 The current pipeline is manual and partly off-machine, which is why the export
 conventions were so hard to reconstruct. Any expansion should make ingest
