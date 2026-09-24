@@ -60,6 +60,10 @@ import psycopg2
 from dotenv import load_dotenv
 from scipy.interpolate import RegularGridInterpolator
 
+# Local: the run registry, written at the end of each model/variable so the
+# run describes its own export convention rather than being inferred later.
+import run_registry
+
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
 
 DB_CONFIG = {
@@ -293,6 +297,13 @@ def regrid(conn, model, variable, hours, tgt_lats, tgt_lons, verify=False):
     zero_fill = variable in ZERO_FILL_VARIABLES
     total_member_rows = total_ens_rows = 0
     verify_stats = []
+    # What actually got written, for the registry row at the end. Tracked as we
+    # go rather than derived afterwards: deriving means a GROUP BY over
+    # `regridded_forecast_member`, which is 42M rows, to learn something this
+    # loop already knows. `run_registry.py --refresh` still recomputes it from
+    # the data when reconciliation is wanted.
+    written_hours = []
+    max_members = 0
 
     with conn.cursor() as cur:
         # Resolved once per model/variable and written into every row, so the
@@ -365,8 +376,32 @@ def regrid(conn, model, variable, hours, tgt_lats, tgt_lons, verify=False):
                  'latitude', 'longitude',
                  'mean_value', 'std_dev', 'n_members', 'resolution'), ens_rows)
             conn.commit()
+            written_hours.append(hour)
+            max_members = max(max_members, len(members))
             print(f"    {model} {variable} fh={hour:3d}: {len(members):2d} members, "
                   f"{int(inside.sum()):4d} cells, {len(member_rows):6,} member rows")
+
+        # Register the run, so it describes itself instead of being inferred
+        # later. DATA_EXPANSION_DESIGN.md phase 4: until now nothing but a
+        # migration had ever written this table, so a second run would have
+        # been absent from /api/runs entirely — invisible to the run selector
+        # and with no record of how its export was produced.
+        #
+        # Only when something was written. A model/variable that produced no
+        # rows must not leave a registry row claiming it is loaded.
+        if written_hours:
+            with conn.cursor() as reg_cur:
+                run_registry.ensure_schema(reg_cur)
+                run_registry.record(
+                    reg_cur, model, variable, init_time,
+                    n_members=max_members,
+                    hour_min=min(written_hours), hour_max=max(written_hours))
+            conn.commit()
+            declared = run_registry.declared_for(model, variable)
+            how = (f"{declared[0]}" + (f" /{declared[1]:g}h" if declared[1] else '')
+                   if declared else 'UNDECLARED — scoring cannot resolve a divisor')
+            print(f"    {model} {variable}: registered {min(written_hours)}–"
+                  f"{max(written_hours)}h, {max_members} members, {how}")
 
     if verify and verify_stats:
         worst = max(verify_stats)
