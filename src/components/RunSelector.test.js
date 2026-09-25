@@ -32,6 +32,21 @@ const twoRuns = {
 
 const oneRun = { runs: [RUN_A], latest: RUN_A, detail: [twoRuns.detail[1]] };
 
+const DAY = '2025-09-08';
+const mk = (list) => ({ runs: list, latest: list[0],
+                        detail: list.map((r) => ({ init_time: r, variables: ['precipitation'],
+                                                   models: { UKMO: {} } })) });
+
+// One date, several cycles — the case a flat list handles worst.
+const sameDayCycles = mk([`${DAY}T18:00:00`, `${DAY}T12:00:00`,
+                          `${DAY}T06:00:00`, `${DAY}T00:00:00`]);
+// Two dates with different cycles available on each.
+const unevenCycles = mk(['2025-09-09T00:00:00', `${DAY}T12:00:00`,
+                         `${DAY}T06:00:00`, `${DAY}T00:00:00`]);
+// Two dates, same cycles on both.
+const bothDaysAllCycles = mk(['2025-09-09T12:00:00', '2025-09-09T00:00:00',
+                              `${DAY}T12:00:00`, `${DAY}T00:00:00`]);
+
 const renderSelector = async (props = {}) => {
   render(<RunProvider><RunSelector {...props} /></RunProvider>);
   await waitFor(() => expect(getInitTime() || global.fetch.mock.calls.length).toBeTruthy());
@@ -72,28 +87,81 @@ describe('with one run loaded', () => {
 });
 
 describe('with more than one run', () => {
-  it('offers every run, newest first', async () => {
+  it('offers a date control and a cycle control, not one combined list', async () => {
+    // The combined list does not scale: four cycles a day is sixteen flat
+    // entries for four days.
     mockRuns(twoRuns);
     await renderSelector();
-    const select = await screen.findByRole('combobox', { name: 'Forecast run' });
-    const options = Array.from(select.querySelectorAll('option')).map((o) => o.textContent);
-    expect(options).toEqual(['9 Sep 12Z', '8 Sep 00Z']);
+    expect(await screen.findByRole('combobox', { name: 'Forecast date' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Initialisation time' })).toBeInTheDocument();
+  });
+
+  it('lists each date once, newest first', async () => {
+    mockRuns(twoRuns);
+    await renderSelector();
+    const dates = await screen.findByRole('combobox', { name: 'Forecast date' });
+    expect(Array.from(dates.querySelectorAll('option')).map((o) => o.textContent))
+      .toEqual(['9 Sep 2025', '8 Sep 2025']);
   });
 
   it('starts on the newest run', async () => {
     mockRuns(twoRuns);
     await renderSelector();
-    const select = await screen.findByRole('combobox', { name: 'Forecast run' });
-    expect(select).toHaveValue(RUN_B);
+    const cycle = await screen.findByRole('combobox', { name: 'Initialisation time' });
+    expect(cycle).toHaveValue(RUN_B);
   });
 
-  it('switching updates the run the api layer names', async () => {
-    mockRuns(twoRuns);
+  it('switching cycle updates the run the api layer names', async () => {
+    mockRuns(sameDayCycles);
     await renderSelector();
-    const select = await screen.findByRole('combobox', { name: 'Forecast run' });
-    await userEvent.selectOptions(select, RUN_A);
-    await waitFor(() => expect(getInitTime()).toBe(RUN_A));
-    expect(select).toHaveValue(RUN_A);
+    const cycle = await screen.findByRole('combobox', { name: 'Initialisation time' });
+    await userEvent.selectOptions(cycle, `${DAY}T18:00:00`);
+    await waitFor(() => expect(getInitTime()).toBe(`${DAY}T18:00:00`));
+  });
+
+  it('offers only the cycles the selected date actually has', async () => {
+    // The whole reason the combined list was defensible: two loose dropdowns
+    // can express a pair that does not exist. Deriving the cycles from the
+    // date makes that impossible rather than merely validated.
+    mockRuns(unevenCycles);
+    await renderSelector();
+    const dates = await screen.findByRole('combobox', { name: 'Forecast date' });
+    const cycles = () => Array.from(
+      screen.getByRole('combobox', { name: 'Initialisation time' })
+        .querySelectorAll('option')).map((o) => o.textContent);
+
+    await userEvent.selectOptions(dates, '2025-09-09');
+    expect(cycles()).toEqual(['00Z']);            // 9 Sep has only 00Z
+
+    await userEvent.selectOptions(dates, '2025-09-08');
+    expect(cycles()).toEqual(['00Z', '06Z', '12Z']);
+  });
+
+  it('keeps the cycle when moving to a date that has it', async () => {
+    // Snapping to 00Z on every date change loses the user's place for no
+    // reason; comparing the same cycle across days is the normal question.
+    mockRuns(bothDaysAllCycles);
+    await renderSelector();
+    const dates = await screen.findByRole('combobox', { name: 'Forecast date' });
+    const cycle = () => screen.getByRole('combobox', { name: 'Initialisation time' });
+
+    await userEvent.selectOptions(cycle(), '2025-09-09T12:00:00');
+    await userEvent.selectOptions(dates, '2025-09-08');
+    await waitFor(() => expect(getInitTime()).toBe('2025-09-08T12:00:00'));
+  });
+
+  it('falls back to the newest cycle when the new date lacks the current one', async () => {
+    mockRuns(unevenCycles);
+    await renderSelector();
+    const dates = await screen.findByRole('combobox', { name: 'Forecast date' });
+    const cycle = () => screen.getByRole('combobox', { name: 'Initialisation time' });
+
+    // Get onto 8 Sep first — 12Z is not offered while 9 Sep is selected,
+    // which is the constraint being tested.
+    await userEvent.selectOptions(dates, '2025-09-08');
+    await userEvent.selectOptions(cycle(), '2025-09-08T12:00:00');
+    await userEvent.selectOptions(dates, '2025-09-09');     // has only 00Z
+    await waitFor(() => expect(getInitTime()).toBe('2025-09-09T00:00:00'));
   });
 });
 

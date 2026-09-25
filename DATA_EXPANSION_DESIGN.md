@@ -194,19 +194,28 @@ for:
 | asked for | shipped |
 |---|---|
 | selector in the header, from `/api/runs` | yes — `src/components/RunSelector.jsx` |
-| date, then cycle | **one list instead** — see below |
+| date, then cycle | yes, as asked (`3fe8015`+) — an interim single list was reversed |
 | global, shaped for per-tab later | yes — `RunProvider`, consumers use `useRun()` |
 | lead time persists / clamps | yes, from the run's own range |
 | regions and points survive | yes |
 | results invalidated | yes, via `runEpoch` |
 | missing model greyed with the reason | yes |
 
-**Two departures.** One run renders as a static label rather than a disabled
-dropdown — greyed-out reads as "broken", a label reads as "this is what you are
-looking at". And one list rather than a date picker plus a cycle picker: two
-coupled dropdowns can hold a combination that does not exist, so they need
-validation a single list makes impossible. Revisit when the list is long enough
-to scroll.
+**One departure, and one that was reversed.** A single run still renders as a
+static label rather than a disabled dropdown — greyed-out reads as "broken",
+a label reads as "this is what you are looking at".
+
+The date-and-cycle split, which this section asked for, was initially built as
+one combined list instead. The argument was that two coupled dropdowns can hold
+a combination that does not exist — a date chosen, then a cycle that date does
+not have. That risk is real and it was the wrong conclusion: deriving the cycle
+list *from* the selected date makes the impossible pair unrepresentable, rather
+than merely validated after the fact. And the combined list does not scale —
+four cycles a day is sixteen flat entries for four days of AIFS. Split as
+originally specified on 2026-09-25.
+
+Changing date keeps the cycle where the new date has it, so moving between days
+at 12Z stays at 12Z rather than snapping to 00Z.
 
 **The design's "pass the run into `withRun` at each call site" was not
 followed**, deliberately. There are 53 call sites and no component reads the

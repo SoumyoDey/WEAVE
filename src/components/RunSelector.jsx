@@ -14,12 +14,17 @@ import { useRun } from '../state/RunContext';
  * looking at", which is the true statement while one run is loaded. The control
  * becomes interactive the moment a second run exists, with no code change.
  *
- * **One list rather than the date + cycle pair the design document sketches.**
- * That split is right for a long archive and wrong now: two coupled dropdowns
- * can hold a combination that does not exist — a date selected, then a cycle
- * that run does not have — so it needs validation the single list makes
- * impossible by construction. Worth revisiting when the list is long enough to
- * scroll; the formatting below already groups by date visually.
+ * **Date and cycle, as the design document asked for.** An earlier version
+ * used one combined list, on the argument that two coupled dropdowns can hold
+ * a combination that does not exist — a date chosen, then a cycle that date
+ * does not have. That risk is real and it is not a reason to merge the
+ * controls: the cycle list is derived from the selected date, so an impossible
+ * pair cannot be expressed. The combined list also does not scale — four
+ * cycles a day means sixteen entries for four days of AIFS, in one flat list
+ * with no structure.
+ *
+ * Changing date keeps the cycle where the new date has it, so moving between
+ * days at 12Z stays at 12Z rather than snapping to 00Z.
  */
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -41,6 +46,15 @@ export const formatRun = (initTime) => {
   const [, , month, day, hour] = m;
   const name = MONTHS[Number(month) - 1] ?? month;
   return `${Number(day)} ${name} ${hour}Z`;
+};
+
+/** `2025-09-08` -> `8 Sep 2025`. Parsed by hand, for the reason `formatRun` is. */
+export const formatDate = (date) => {
+  if (!date) return '—';
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (!m) return date;
+  const [, year, month, day] = m;
+  return `${Number(day)} ${MONTHS[Number(month) - 1] ?? month} ${year}`;
 };
 
 export function RunSelector({ compact = false }) {
@@ -81,14 +95,49 @@ export function RunSelector({ compact = false }) {
     );
   }
 
+  // Grouped by date, so the two controls can only offer real combinations.
+  const byDate = {};
+  runs.forEach((r) => {
+    const [date, time] = r.split('T');
+    (byDate[date] = byDate[date] || []).push({ run: r, cycle: time.slice(0, 2) });
+  });
+  // Dates newest first, because the newest run is the one usually wanted.
+  // Cycles ascending within a day, because 00/06/12/18 is how a forecast day
+  // is read — reversing them here would be consistency at the cost of sense.
+  const dates = Object.keys(byDate).sort().reverse();
+  Object.values(byDate).forEach((cs) => cs.sort((a, b) => a.cycle.localeCompare(b.cycle)));
+  const selectedDate = (selectedRun || '').split('T')[0];
+  const cycles = byDate[selectedDate] || [];
+
+  // Moving to another date keeps the cycle when that date has it, and falls to
+  // the date's newest otherwise. Jumping to 00Z on every date change would
+  // lose the user's place for no reason; offering a cycle the date does not
+  // have is the thing this layout has to make impossible.
+  const onDateChange = (date) => {
+    const options = byDate[date] || [];
+    if (!options.length) return;
+    const currentCycle = (selectedRun || '').split('T')[1]?.slice(0, 2);
+    const keep = options.find((o) => o.cycle === currentCycle);
+    selectRun((keep || options[options.length - 1]).run);
+  };
+
+  const control = {
+    fontSize: t.fontSize.sm,
+    fontWeight: t.fontWeight.semibold,
+    padding: `${t.space(0.5)} ${t.space(1.5)}`,
+    border: `1px solid ${t.borderStrong}`,
+    borderRadius: t.radiusSm,
+    background: 'rgba(255,255,255,0.06)',
+    color: 'white',
+    cursor: 'pointer',
+    outline: 'none',
+  };
+  const optionStyle = { background: t.bg, color: t.text };
+
   return (
-    <label
+    <span
       style={{ display: 'inline-flex', alignItems: 'center', gap: t.space(1.5) }}
     >
-      {/* The word is dropped in compact mode for the same reason the label
-          variant drops it: on a narrow header every ~30px matters, and the
-          option text ("8 Sep 06Z") plus the control's title already say what
-          this is. */}
       {!compact && (
         <span
           style={{
@@ -98,30 +147,31 @@ export function RunSelector({ compact = false }) {
           Run
         </span>
       )}
+
+      <select
+        value={selectedDate}
+        onChange={(e) => onDateChange(e.target.value)}
+        aria-label="Forecast date"
+        title="Initialisation date of the forecast run (UTC)"
+        style={control}
+      >
+        {dates.map((d) => (
+          <option key={d} value={d} style={optionStyle}>{formatDate(d)}</option>
+        ))}
+      </select>
+
       <select
         value={selectedRun ?? ''}
         onChange={(e) => selectRun(e.target.value)}
-        aria-label="Forecast run"
-        title="Initialisation time of the forecast run, in UTC"
-        style={{
-          fontSize: t.fontSize.sm,
-          fontWeight: t.fontWeight.semibold,
-          padding: `${t.space(0.5)} ${t.space(1.5)}`,
-          border: `1px solid ${t.borderStrong}`,
-          borderRadius: t.radiusSm,
-          background: 'rgba(255,255,255,0.06)',
-          color: 'white',
-          cursor: 'pointer',
-          outline: 'none',
-        }}
+        aria-label="Initialisation time"
+        title="Initialisation cycle, in UTC"
+        style={control}
       >
-        {runs.map((r) => (
-          <option key={r} value={r} style={{ background: t.bg, color: t.text }}>
-            {formatRun(r)}
-          </option>
+        {cycles.map(({ run, cycle }) => (
+          <option key={run} value={run} style={optionStyle}>{cycle}Z</option>
         ))}
       </select>
-    </label>
+    </span>
   );
 }
 
