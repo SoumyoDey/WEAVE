@@ -6,7 +6,7 @@
  * and would otherwise first be exercised on the day a second run lands.
  */
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { RunSelector, formatRun } from './RunSelector';
@@ -162,6 +162,79 @@ describe('with more than one run', () => {
     await userEvent.selectOptions(cycle(), '2025-09-08T12:00:00');
     await userEvent.selectOptions(dates, '2025-09-09');     // has only 00Z
     await waitFor(() => expect(getInitTime()).toBe('2025-09-09T00:00:00'));
+  });
+});
+
+describe('when the archive is large', () => {
+  // 90 days x 4 cycles = 360 runs. A dropdown of 90 dates is not a control,
+  // it is a scroll; this is the shape the app has to hold as runs accumulate.
+  const bigArchive = (() => {
+    const list = [];
+    for (let d = 0; d < 90; d += 1) {
+      const day = new Date(Date.UTC(2025, 5, 1 + d)).toISOString().slice(0, 10);
+      ['00', '06', '12', '18'].forEach((c) => list.push(`${day}T${c}:00:00`));
+    }
+    list.reverse();
+    return mk(list);
+  })();
+
+  it('becomes a date input rather than a 90-option dropdown', async () => {
+    mockRuns(bigArchive);
+    await renderSelector();
+    const date = await screen.findByLabelText('Forecast date');
+    expect(date.tagName).toBe('INPUT');
+    expect(date).toHaveAttribute('type', 'date');
+  });
+
+  it('bounds the input to the dates actually loaded', async () => {
+    mockRuns(bigArchive);
+    await renderSelector();
+    const date = await screen.findByLabelText('Forecast date');
+    expect(date).toHaveAttribute('min', '2025-06-01');
+    expect(date).toHaveAttribute('max', '2025-08-29');
+  });
+
+  it('still offers only that date\'s cycles', async () => {
+    mockRuns(bigArchive);
+    await renderSelector();
+    const select = await screen.findByRole('combobox', { name: 'Initialisation time' });
+    const cycles = Array.from(select.querySelectorAll('option')).map((o) => o.textContent);
+    expect(cycles).toEqual(['00Z', '06Z', '12Z', '18Z']);
+  });
+
+  it('refuses a date inside the range that has no runs, and names it', async () => {
+    // The cost of a date input: min/max bound the range but cannot express
+    // holes in it. Snapping silently to a neighbour would show a different day
+    // than the one asked for, which is worse than saying no.
+    const withHole = mk(['2025-09-10T00:00:00', '2025-09-08T00:00:00',
+                         '2025-09-06T00:00:00', '2025-09-04T00:00:00',
+                         '2025-09-02T00:00:00', '2025-08-31T00:00:00',
+                         '2025-08-29T00:00:00', '2025-08-27T00:00:00',
+                         '2025-08-25T00:00:00', '2025-08-23T00:00:00',
+                         '2025-08-21T00:00:00', '2025-08-19T00:00:00',
+                         '2025-08-17T00:00:00']);
+    mockRuns(withHole);
+    await renderSelector();
+    const date = await screen.findByLabelText('Forecast date');
+    const before = getInitTime();
+
+    fireEvent.change(date, { target: { value: '2025-09-09' } });   // no runs
+
+    expect(await screen.findByText(/no runs on 9 Sep 2025/)).toBeInTheDocument();
+    expect(getInitTime()).toBe(before);        // selection unchanged
+  });
+
+  it('clears the warning once a date with runs is chosen', async () => {
+    const withHole = mk(Array.from({ length: 13 }, (_, i) =>
+      `2025-09-${String(24 - i * 2).padStart(2, '0')}T00:00:00`));
+    mockRuns(withHole);
+    await renderSelector();
+    const date = await screen.findByLabelText('Forecast date');
+
+    fireEvent.change(date, { target: { value: '2025-09-23' } });   // odd day: none
+    await screen.findByText(/no runs on/);
+    fireEvent.change(date, { target: { value: '2025-09-22' } });   // even day: exists
+    await waitFor(() => expect(screen.queryByText(/no runs on/)).not.toBeInTheDocument());
   });
 });
 

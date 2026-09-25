@@ -31,6 +31,21 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /**
+ * Above this many dates the list becomes a date input instead of a dropdown.
+ *
+ * A `<select>` is better while the archive is small: it shows exactly which
+ * days exist, with no way to ask for one that does not. That property stops
+ * being worth its cost once the list is longer than a glance — 17 UKMO dates
+ * are already on the cluster, and four cycles each is 68 runs.
+ *
+ * A date input is constant-size however long the archive grows and lets a user
+ * jump straight to a day, but it cannot grey out the gaps: `min` and `max`
+ * bound the range and say nothing about holes inside it. `onDateChange`
+ * handles that by refusing and naming the date.
+ */
+const DATE_LIST_MAX = 12;
+
+/**
  * `2025-09-08T00:00:00` -> `8 Sep 00Z`.
  *
  * Parsed by hand rather than with `new Date(...)`. The backend sends a naive
@@ -59,6 +74,9 @@ export const formatDate = (date) => {
 
 export function RunSelector({ compact = false }) {
   const { runs, selectedRun, selectRun, canSwitch, status } = useRun();
+  // The date the user asked for that holds no runs, if any. Cleared on the
+  // next successful change.
+  const [gap, setGap] = React.useState(null);
 
   // Nothing useful to say yet, and a spinner in the header for a request that
   // usually takes milliseconds is worse than the gap it fills.
@@ -115,7 +133,17 @@ export function RunSelector({ compact = false }) {
   // have is the thing this layout has to make impossible.
   const onDateChange = (date) => {
     const options = byDate[date] || [];
-    if (!options.length) return;
+    if (!options.length) {
+      // Only reachable from the date *input*, which cannot grey out the days
+      // an archive is missing — `min`/`max` bound the range but say nothing
+      // about holes in it. Refuse and name the date rather than silently
+      // snapping to a neighbour: a selector that quietly shows a different day
+      // than the one asked for is the kind of quiet wrongness this project
+      // keeps removing.
+      setGap(date);
+      return;
+    }
+    setGap(null);
     const currentCycle = (selectedRun || '').split('T')[1]?.slice(0, 2);
     const keep = options.find((o) => o.cycle === currentCycle);
     selectRun((keep || options[options.length - 1]).run);
@@ -148,17 +176,41 @@ export function RunSelector({ compact = false }) {
         </span>
       )}
 
-      <select
-        value={selectedDate}
-        onChange={(e) => onDateChange(e.target.value)}
-        aria-label="Forecast date"
-        title="Initialisation date of the forecast run (UTC)"
-        style={control}
-      >
-        {dates.map((d) => (
-          <option key={d} value={d} style={optionStyle}>{formatDate(d)}</option>
-        ))}
-      </select>
+      {dates.length <= DATE_LIST_MAX ? (
+        <select
+          value={selectedDate}
+          onChange={(e) => onDateChange(e.target.value)}
+          aria-label="Forecast date"
+          title={`Initialisation date (UTC). ${dates.length} loaded.`}
+          style={control}
+        >
+          {dates.map((d) => (
+            <option key={d} value={d} style={optionStyle}>{formatDate(d)}</option>
+          ))}
+        </select>
+      ) : (
+        <input
+          type="date"
+          value={selectedDate}
+          min={dates[dates.length - 1]}
+          max={dates[0]}
+          onChange={(e) => onDateChange(e.target.value)}
+          aria-label="Forecast date"
+          title={`Initialisation date (UTC). ${dates.length} dates loaded, `
+                 + `${formatDate(dates[dates.length - 1])} to ${formatDate(dates[0])}.`}
+          style={{ ...control, colorScheme: 'dark' }}
+        />
+      )}
+      {gap && (
+        <span
+          role="status"
+          title={`Loaded dates run ${formatDate(dates[dates.length - 1])} to `
+                 + `${formatDate(dates[0])}, with gaps.`}
+          style={{ fontSize: t.fontSize.xs, color: t.textMuted, whiteSpace: 'nowrap' }}
+        >
+          no runs on {formatDate(gap)}
+        </span>
+      )}
 
       <select
         value={selectedRun ?? ''}
