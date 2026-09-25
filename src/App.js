@@ -44,7 +44,8 @@ function App() {
   // Which forecast run everything below is about. `runEpoch` is what the data
   // effects depend on: it changes on every switch, including a switch back to
   // a previously selected run, which a comparison of `selectedRun` would miss.
-  const { selectedRun, runEpoch, modelsFor, hourRangeFor } = useRun();
+  const { selectedRun, runEpoch, modelsFor, hourRangeFor,
+          status: runStatus } = useRun();
 
   // ── UI state ────────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab]               = useState('visualization');
@@ -169,7 +170,26 @@ function App() {
   // Defaults to true while the run detail is still loading, so a slow
   // `/api/runs` delays nothing.
   const runModels = selectedRun ? modelsFor(selectedRun) : [];
-  const runHasSelectedModel = runModels.length === 0 || runModels.includes(selectedModel);
+
+  // Nothing model-scoped is fetched until `/api/runs` has answered.
+  //
+  // Two earlier versions of this guard leaked, both by trusting something the
+  // component could see. Treating "models not known yet" as permission to
+  // fetch failed on first load; so did treating "no run selected yet" as
+  // permission, because `run.js` resolves the run on its own and qualifies
+  // requests with it — so the api layer already knew the run while this
+  // component still had `selectedRun === null`. The component cannot reason
+  // about what the api layer will send, so it waits instead of guessing.
+  //
+  // The wait costs nothing: every api call already awaits `whenRunReady()`,
+  // which is the same `/api/runs` request this is waiting on.
+  //
+  // `error` releases the wait — the detail is never coming, and blocking
+  // forever is worse than a request that might 400.
+  const runHasSelectedModel =
+    runStatus === 'error'
+    || (runStatus === 'ready'
+        && (runModels.length === 0 || runModels.includes(selectedModel)));
 
   // A run need not carry every model. Rather than leaving a selection that
   // silently returns nothing, fall back to one the run does have.
@@ -250,11 +270,39 @@ function App() {
       const zoomEl = zoomCtrl.getContainer();
       zoomEl.style.marginTop  = '68px';
       zoomEl.style.marginLeft = '12px';
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap, &copy; CartoDB' }).addTo(map);
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png',   { attribution: '' }).addTo(map);
+      // Esri's World Light Gray, which needs no API key.
+      //
+      // This used to be CARTO's `light_nolabels` / `light_only_labels`. CARTO
+      // retired anonymous access to those, and the way it did so is the
+      // problem: every tile request still returns **HTTP 200**, carrying one
+      // 2,049-byte "API KEY REQUIRED" watermark instead of a map. Nothing in
+      // the app could notice — the layer loads successfully — so the map
+      // silently became a watermark. Verified: three unrelated tiles came back
+      // byte-identical.
+      //
+      // A light grey canvas rather than standard OSM on purpose. The
+      // precipitation overlay is the content; a coloured, detailed basemap
+      // competes with it for attention and makes the colour scale harder to
+      // read. That was the original reason for `light_nolabels` and it still
+      // holds.
+      //
+      // Note the tile order is {z}/{y}/{x} here — Esri puts row before column,
+      // where CARTO and OSM use {z}/{x}/{y}. Swapping them yields tiles that
+      // load without error and show the wrong place.
+      const ESRI_CANVAS = 'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas';
+      L.tileLayer(`${ESRI_CANVAS}/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}`,
+                  { attribution: '&copy; Esri, HERE, Garmin, &copy; OpenStreetMap contributors',
+                    maxZoom: 16 }).addTo(map);
+      // Labels go on top of the base, so they are added second.
+      L.tileLayer(`${ESRI_CANVAS}/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}`,
+                  { attribution: '', maxZoom: 16 }).addTo(map);
       mapInstanceRef.current = map;
       setMapReady(true);
-      setTimeout(() => { map.invalidateSize(); loadDataForHour(); }, 100);
+      // Only resize here. The first data load is left to the effect that
+      // watches `mapReady`, so it goes through the same run guard as every
+      // other fetch — calling it directly bypassed that and was the last
+      // request still going out for a model the selected run does not have.
+      setTimeout(() => { map.invalidateSize(); }, 100);
     }, 100);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -287,7 +335,7 @@ function App() {
     if (!mapInstanceRef.current) return;
     const id = setTimeout(loadDataForHour, 300);
     return () => clearTimeout(id);
-  }, [selectedHour, selectedModel, selectedMember, selectedVariable, runEpoch, runHasSelectedModel]); // eslint-disable-line
+  }, [selectedHour, selectedModel, selectedMember, selectedVariable, runEpoch, runHasSelectedModel, runStatus, mapReady]); // eslint-disable-line
 
   // ── Redraw IDW / VSup when colormap or invert changes ────────────────────────
   useEffect(() => {
@@ -326,7 +374,7 @@ function App() {
       stopWindArrows(map, arrowsCanvasRef);
       stopStreamlines(animationFrameRef);
     }
-  }, [showWindArrows, showWindLines, selectedVariable, selectedHour, selectedModel, selectedMember, runEpoch, runHasSelectedModel]); // eslint-disable-line
+  }, [showWindArrows, showWindLines, selectedVariable, selectedHour, selectedModel, selectedMember, runEpoch, runHasSelectedModel, runStatus]); // eslint-disable-line
 
   // ── VSup Boxes overlay ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -341,7 +389,7 @@ function App() {
       if (canvasRef.current && uncertaintyMode === null) canvasRef.current.style.display = 'block';
       stopUncertainty(map, uncertaintyLayerRef, uncertaintyCanvasRef);
     }
-  }, [showUncertainty, selectedHour, selectedModel, selectedVariable, selectedColormap, invertUncertainty, numBuckets, flipColormap, gridOpacity, runEpoch, runHasSelectedModel]); // eslint-disable-line
+  }, [showUncertainty, selectedHour, selectedModel, selectedVariable, selectedColormap, invertUncertainty, numBuckets, flipColormap, gridOpacity, runEpoch, runHasSelectedModel, runStatus]); // eslint-disable-line
 
   // ── Bivariate / VSUP Fan overlay ─────────────────────────────────────────────
   useEffect(() => {
@@ -361,7 +409,7 @@ function App() {
       if (canvasRef.current && uncertaintyMode === null) canvasRef.current.style.display = 'block';
       stopBivariate(map, bivariateLayerRef);
     }
-  }, [showBivariate, showFanChart, selectedHour, selectedModel, selectedVariable, numBuckets, selectedColormap, invertUncertainty, flipColormap, gridOpacity, runEpoch, runHasSelectedModel]); // eslint-disable-line
+  }, [showBivariate, showFanChart, selectedHour, selectedModel, selectedVariable, numBuckets, selectedColormap, invertUncertainty, flipColormap, gridOpacity, runEpoch, runHasSelectedModel, runStatus]); // eslint-disable-line
 
   // ── Texture overlay ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -376,7 +424,7 @@ function App() {
       if (canvasRef.current && uncertaintyMode === null) canvasRef.current.style.display = 'block';
       stopTexture(map, textureLayerRef);
     }
-  }, [showTexture, selectedHour, selectedModel, selectedVariable, selectedColormap, textureStyle, numBuckets, flipColormap, gridOpacity, invertUncertainty, runEpoch, runHasSelectedModel]); // eslint-disable-line
+  }, [showTexture, selectedHour, selectedModel, selectedVariable, selectedColormap, textureStyle, numBuckets, flipColormap, gridOpacity, invertUncertainty, runEpoch, runHasSelectedModel, runStatus]); // eslint-disable-line
 
   // ── Data fetch ────────────────────────────────────────────────────────────────
   const loadDataForHour = async () => {
@@ -494,7 +542,7 @@ function App() {
       .finally(() => { if (!cancelled) setSsrLoading(false); });
 
     return () => { cancelled = true; };
-  }, [clickedPoint, selectedModel, selectedVariable, runEpoch, runHasSelectedModel]); // eslint-disable-line
+  }, [clickedPoint, selectedModel, selectedVariable, runEpoch, runHasSelectedModel, runStatus]); // eslint-disable-line
 
   // ── Observation coverage ──────────────────────────────────────────────────────
   // How far the truth reaches. Verification correctly returns nothing past the
@@ -513,7 +561,7 @@ function App() {
         if (!cancelled) { console.error('Observation coverage error:', err); setObsCoverage(null); }
       });
     return () => { cancelled = true; };
-  }, [currentModel.name, selectedVariable, runEpoch, runHasSelectedModel]);
+  }, [currentModel.name, selectedVariable, runEpoch, runHasSelectedModel, runStatus]);
 
   // ── Spatial metric computation ────────────────────────────────────────────────
   const computeSpatialMetric = async () => {
