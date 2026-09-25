@@ -725,14 +725,21 @@ function App() {
             <Icon size={15} />{!isNarrow && label}
           </button>
         ))}
-        {/* Persistent context: what you're currently looking at (hidden on narrow).
+        {/* Persistent context: what you're currently looking at.
             The run leads it, because it qualifies everything after it: the model
-            and lead time are only meaningful relative to an initialisation. */}
-        {!isNarrow && (
+            and lead time are only meaningful relative to an initialisation.
+
+            **The run survives on narrow; the rest of the badge does not.** It
+            used to live inside a single `!isNarrow` block, so below 760px the
+            whole control vanished — including, once a second run existed, the
+            only way to change run at all. Dropping the piece that says *which
+            forecast* while keeping the pieces it qualifies is the wrong trade,
+            so the model, variable and lead time collapse instead: those are
+            all reachable from Controls and the timeline, and the run is not. */}
         <span style={{ marginLeft: 'auto', marginRight: '16px', display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 12px', borderRadius: '20px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.75)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }}>
-          <RunSelector compact /> · {currentModel.name} · {selectedVariable === 'wind' ? 'Wind' : 'Precipitation'} · +{selectedHour}h
+          <RunSelector compact />
+          {!isNarrow && ` · ${currentModel.name} · ${selectedVariable === 'wind' ? 'Wind' : 'Precipitation'} · +${selectedHour}h`}
         </span>
-        )}
       </div>
 
       {/* ══ VISUALIZATION TAB ══ */}

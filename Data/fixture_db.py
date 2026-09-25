@@ -682,7 +682,16 @@ def build():
     create_database()
     conn = psycopg2.connect(**db_config())
     try:
-        return seed(conn)
+        counts = seed(conn)
+        # ANALYZE so the planner has statistics, which the real database gets
+        # from autovacuum and a fresh fixture never would. `/api/health`
+        # reports `reltuples` rather than counting 128M rows, and that is -1
+        # on a table nobody has analysed — so without this the fixture would
+        # report "no data" for a database that is fully seeded.
+        with conn.cursor() as cur:
+            cur.execute('ANALYZE')
+        conn.commit()
+        return counts
     finally:
         conn.close()
 

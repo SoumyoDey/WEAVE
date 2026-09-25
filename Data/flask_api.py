@@ -2932,7 +2932,23 @@ def health_check():
     try:
         conn   = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM forecast_data")
+        # The planner's estimate, not an exact count.
+        #
+        # `SELECT COUNT(*) FROM forecast_data` is a sequential scan, and that
+        # table is 128M rows: it took **20 seconds**, which is what the whole
+        # health check cost. A health endpoint that slow is worse than useless
+        # — DEPLOY.md's smoke test curls it, a proxy or load balancer times it
+        # out, and it gets slower with every run loaded.
+        #
+        # `reltuples` answers instantly and is accurate to within a percent
+        # after ANALYZE. Nothing needs the exact figure here: this number
+        # exists to say "the database is reachable and has data in it", and an
+        # estimate says that just as well. The key is named `_estimate` so no
+        # caller mistakes it for a count.
+        cursor.execute("""
+            SELECT GREATEST(reltuples, 0)::bigint
+            FROM pg_class WHERE oid = 'forecast_data'::regclass
+        """)
         count = cursor.fetchone()[0]
         # This handler uses a plain tuple cursor, so the run is resolved
         # positionally here rather than through `_resolve_init_time`, which
@@ -2949,7 +2965,7 @@ def health_check():
         return jsonify({
             "status": "healthy",
             "database": "connected",
-            "total_forecast_points": count,
+            "total_forecast_points_estimate": count,
             # Whether the loaded data still matches what the metric layer assumes
             # about the export. Re-exporting without updating the constant would
             # otherwise correct twice, silently and invisibly.

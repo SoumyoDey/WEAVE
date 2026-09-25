@@ -85,13 +85,19 @@ export function RunSelector({ compact = false }) {
     <label
       style={{ display: 'inline-flex', alignItems: 'center', gap: t.space(1.5) }}
     >
-      <span
-        style={{
-          fontSize: t.fontSize.sm, color: t.textMuted, whiteSpace: 'nowrap',
-        }}
-      >
-        Run
-      </span>
+      {/* The word is dropped in compact mode for the same reason the label
+          variant drops it: on a narrow header every ~30px matters, and the
+          option text ("8 Sep 06Z") plus the control's title already say what
+          this is. */}
+      {!compact && (
+        <span
+          style={{
+            fontSize: t.fontSize.sm, color: t.textMuted, whiteSpace: 'nowrap',
+          }}
+        >
+          Run
+        </span>
+      )}
       <select
         value={selectedRun ?? ''}
         onChange={(e) => selectRun(e.target.value)}

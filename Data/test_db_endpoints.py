@@ -62,7 +62,10 @@ class TestFixtureShape:
         DESIGN.md). The fixture must not smuggle one in."""
         d = db_client.get('/api/health').get_json()
         assert d['status'] == 'healthy'
-        assert d['total_forecast_points'] > 0
+        # An estimate from `reltuples`, not a count: counting forecast_data is
+        # a sequential scan over 128M rows and made this endpoint take 20s.
+        # The fixture runs ANALYZE after seeding so the statistic exists.
+        assert d['total_forecast_points_estimate'] > 0
 
 
 # ── The headline: one field, three storage conventions ────────────────────────
