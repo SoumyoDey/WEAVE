@@ -1,9 +1,10 @@
 # Design plan — more data, and selecting it
 
 Written 2026-08-14. **Status updated 2026-09-28: phases 1–4 are done and only
-phase 5 remains.** WEAVE now serves **two** runs — `2025-09-08 00Z` with three
-models, and `2025-09-08 06Z` with UKMO precipitation only — and the selector
-switches between them.
+phase 5 remains.** WEAVE serves **two** runs — `2025-09-08 00Z` with three
+models, and `2025-09-08 06Z` with **AIFS and UKMO** — and the selector switches
+between them. 06Z is the first run whose model list differs from another's,
+which is what made the two defects in `NEXT_STEPS.md` §17 reachable.
 
 | phase | state |
 |---|---|
@@ -14,11 +15,17 @@ switches between them.
 | 5. Scale / retention | **undecided — the only phase left.** Three decisions, not a build |
 
 **The one thing phase 4 did not close, and it is not in this document's list.**
-There is **no NetCDF → JSON converter for AIFS or GEFS** anywhere in this repo
-or on the cluster; `Data_convert_weave/React.py` handles UKMO only. That is why
-the second run is one model. The registry half of an ingest is reproducible now;
-the conversion half is missing, and **writing that converter is what a genuine
-multi-model second run needs** (`NEXT_STEPS.md` §14).
+There was **no NetCDF → JSON converter for AIFS or GEFS** anywhere in this repo
+or on the cluster; `Data_convert_weave/React.py` handles UKMO only. The registry
+half of an ingest was reproducible, the conversion half was missing, and that —
+not the schema — is what blocked a multi-model run.
+
+**AIFS precipitation is now closed:** `Data/convert_aifs.py` (`NEXT_STEPS.md`
+§16) reproduces the loaded 00Z run exactly, and built the 06Z AIFS run that
+landed on 2026-09-28. **GEFS still has no converter**, and its window
+conventions differ (3 h buckets at `h%6==3`, 6 h at `h%6==0`). AIFS *wind* is
+structurally supported but its values could not be confirmed against the loaded
+table, so it is not claimed.
 
 It is deliberately a design document rather than a task list: the schema decision
 in Phase 1 constrains everything after it, and getting it wrong is expensive.
@@ -357,14 +364,20 @@ conventions were so hard to reconstruct. Any expansion should make ingest
 > to make re-running a regrid safe (phase 4, item 1). That is a real cost of a
 > real fix, not overhead to remove.
 >
-> **First real marginal measurement, 2026-09-28.** The table above was taken
-> while one run was loaded. A second run has since landed and the database is
-> **39 GB**, so the second run cost about **1 GB** — against ~37 GB for the
-> first. That is not evidence the estimate was high: the second run is **one
-> model, one variable and 36 hours**, where the first is three models, two
-> variables and up to 384 hours. Scaled for what it contains it agrees with the
-> table. **Do not read "the second run only cost 1 GB" as headroom** — read it
-> as the cost of the smallest run this database can hold.
+> **Two real marginal measurements, 2026-09-28.** The table above was taken
+> while one run was loaded. Two partial runs have since landed at 06Z:
+>
+> | added | contents | cost |
+> |---|---|---|
+> | UKMO 06Z | 1 model, 1 variable, 36 h, 18 members | ~1 GB |
+> | AIFS 06Z | 1 model, 1 variable, **360 h**, 50 members | **~6 GB** |
+>
+> The database is now **45 GB**. Neither figure undercuts the ~37 GB estimate —
+> both are *single-model* runs, where the estimate is for three models and two
+> variables. AIFS alone at full lead time costs a sixth of a complete run, which
+> is about what its share should be. **Do not read the UKMO number as headroom:**
+> it is the cheapest run this database can hold, and the AIFS one is closer to
+> what a real addition looks like.
 >
 > **This strengthens the partitioning note rather than changing it.**
 > Partitioning by `init_time` would give each run its own indexes, so dropping

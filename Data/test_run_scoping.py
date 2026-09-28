@@ -225,3 +225,82 @@ class TestTheHttpContract:
             'models': ['AIFS'], 'lat': 36.0, 'lon': -75.5,
             'variable': 'precipitation', 'init_time': 'yesterday'})
         assert r.status_code == 400
+
+
+class TestTheMultiModelResolverConsultsTheRequest:
+    """`_run_pairs_sql` must let `_resolve_init_time` read the request body.
+
+    `_resolve_init_time` distinguishes `_UNSET` ("nobody said") from `None`
+    ("explicitly nothing"): only the first consults the request. `_run_pairs_sql`
+    defaulted `requested=None` and passed it through, so the `init_time` a caller
+    had already supplied was **discarded** on `/api/compare/timeseries` and
+    `/api/compare/spatial-agreement`.
+
+    That was invisible while every model had one run, because the fallback then
+    returned the right answer for the wrong reason. Loading a second AIFS run on
+    2026-09-28 turned it into a 400 telling a caller to supply the parameter it
+    had supplied.
+
+    These use a fake cursor rather than the fixture, because the fixture holds a
+    single run and the defect needs either two runs or -- as here -- an
+    init_time that does not match, which is the cheaper discriminator: the
+    fallback path cannot raise, so a raise proves the body was read.
+    """
+
+    BOGUS = '2001-01-01T00:00:00'
+
+    class Cursor:
+        """Answers `fetchone` from `rows`, and `fetchall` from `many`."""
+
+        def __init__(self, rows=(), many=()):
+            self.rows, self.many, self.executed = list(rows), list(many), []
+
+        def execute(self, sql, params=None):
+            self.executed.append(' '.join(sql.split()))
+
+        def fetchone(self):
+            return self.rows[0] if self.rows else None
+
+        def fetchall(self):
+            return list(self.many)
+
+    def test_an_init_time_in_the_body_is_honoured(self):
+        cur = self.Cursor(rows=[{'x': 1}])          # the run exists
+        with api.app.test_request_context(
+                '/api/compare/timeseries', method='POST',
+                json={'models': ['AIFS'], 'init_time': '2025-09-08T06:00:00'}):
+            _, _, resolved = api._run_pairs_sql(cur, ['AIFS'])
+        assert resolved == {'AIFS': datetime(2025, 9, 8, 6, 0, 0)}
+
+    def test_an_init_time_the_model_does_not_have_raises(self):
+        """The discriminating case. With `requested=None` this fell through to
+        the single-run fallback and returned that run instead, so a caller
+        asking for a run that does not exist was quietly given a different one.
+        """
+        cur = self.Cursor(rows=[],                               # no such run
+                          many=[{'initialization_time': datetime(2025, 9, 8)}])
+        with api.app.test_request_context(
+                '/api/compare/timeseries', method='POST',
+                json={'models': ['AIFS'], 'init_time': self.BOGUS}):
+            with pytest.raises(api.RunSelectionError, match='no AIFS run at init_time'):
+                api._run_pairs_sql(cur, ['AIFS'])
+
+    def test_ambiguity_still_raises_when_the_body_says_nothing(self):
+        """The guard this must not weaken: no init_time plus several runs is
+        still a refusal, not a guess at the newest."""
+        cur = self.Cursor(many=[{'initialization_time': datetime(2025, 9, 8, 6)},
+                                {'initialization_time': datetime(2025, 9, 8, 0)}])
+        with api.app.test_request_context(
+                '/api/compare/timeseries', method='POST', json={'models': ['AIFS']}):
+            with pytest.raises(api.RunSelectionError, match='2 loaded runs'):
+                api._run_pairs_sql(cur, ['AIFS'])
+
+    def test_an_explicit_none_still_means_no_init_time(self):
+        """`None` keeps its meaning for any caller that passes it deliberately;
+        the fix changed the *default*, not the semantics."""
+        cur = self.Cursor(many=[{'initialization_time': datetime(2025, 9, 8)}])
+        with api.app.test_request_context(
+                '/api/compare/timeseries', method='POST',
+                json={'models': ['AIFS'], 'init_time': self.BOGUS}):
+            _, _, resolved = api._run_pairs_sql(cur, ['AIFS'], requested=None)
+        assert resolved == {'AIFS': datetime(2025, 9, 8)}     # body ignored

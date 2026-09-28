@@ -12,6 +12,7 @@ import {
 } from '../api/comparisonApi';
 import { fetchSpatialMetric, fetchSpatialMetricPlot } from '../api/spatialApi';
 import { t } from '../theme';
+import { useRun } from '../state/RunContext';
 import { LoadingState, EmptyState } from './ui/PanelState';
 
 const MODEL_COLORS = { AIFS: '#3498db', GEFS: '#e74c3c', UKMO: '#2ecc71' };
@@ -469,7 +470,9 @@ export function ComparisonTab({
   const [compareMode, setCompareMode] = useState('point');   // 'point' | 'region'
   const [lat, setLat] = useState(defaultLocation ? String(defaultLocation.lat) : '');
   const [lon, setLon] = useState(defaultLocation ? String(defaultLocation.lon) : '');
-  const [selectedModels, setSelectedModels] = useState(['AIFS', 'GEFS', 'UKMO']);
+  // What the user has ticked. Not what gets used — see `selectedModels` below,
+  // which narrows this to the models the selected run actually holds.
+  const [pickedModels, setSelectedModels] = useState(['AIFS', 'GEFS', 'UKMO']);
   const [hourMin, setHourMin] = useState(0);
   const [hourMax, setHourMax] = useState(168);
   const [spatialHour, setSpatialHour] = useState(defaultHour || 6);
@@ -553,14 +556,50 @@ export function ComparisonTab({
   const validLocation = !isNaN(parsedLat) && !isNaN(parsedLon);
   const isRegionMode = compareMode === 'region';
   const hasRegion = !!selectedRegion?.bounds;
+  // Which models the selected run actually holds. `ControlsSidebar` already
+  // greys out the absent ones on the Visualization tab; this tab offered them,
+  // and the request then 400d with "no GEFS run at init_time ...". Found the
+  // day AIFS 06Z was loaded (2026-09-28) — the first run in this database whose
+  // model list differs from another run's, so nothing could have shown it
+  // earlier.
+  const { selectedRun, modelsFor, status: runStatus } = useRun();
+  // An empty list means "not known yet" (still loading, or /api/runs failed),
+  // which must not disable everything — a single-run backend answers
+  // unqualified requests, so the previous behaviour is the right fallback.
+  const runModels = selectedRun && runStatus === 'ready' ? modelsFor(selectedRun) : [];
+  const modelMissing = (m) => runModels.length > 0 && !runModels.includes(m);
+
+  /**
+   * The models this tab actually uses, everywhere.
+   *
+   * Deliberately shadows the state under the name the rest of the component
+   * already reads, rather than adding a second list beside it. Sixty-odd sites
+   * use this — every request body, every chart series, every summary table — and
+   * a parallel `effectiveModels` would be correct only at the sites someone
+   * remembered to change. One name cannot disagree with itself.
+   *
+   * Narrowed during render, not in an effect, so the first render after a run
+   * switch is already correct and no request goes out with the stale list.
+   */
+  const selectedModels = runModels.length > 0
+    ? pickedModels.filter(m => runModels.includes(m))
+    : pickedModels;
+
   const canRun = selectedModels.length >= 2 && hourMin < hourMax
     && (isRegionMode ? hasRegion : validLocation);
 
   // Handlers
   const toggleModel = (m) => {
+    if (modelMissing(m)) return;                  // not in this run; chip is disabled
     setSelectedModels(prev => {
       if (prev.includes(m)) {
-        if (prev.length <= 2) return prev; // min 2
+        // The floor counts the models this run can *use*, not the raw ticks.
+        // Counting ticks let a run with two models be emptied down to one
+        // usable model while the tick count still read three.
+        const usable = runModels.length > 0
+          ? prev.filter(x => runModels.includes(x))
+          : prev;
+        if (usable.length <= 2) return prev;      // min 2
         return prev.filter(x => x !== m);
       }
       return [...prev, m];
@@ -1046,15 +1085,23 @@ export function ComparisonTab({
             <div style={LABEL}>Models</div>
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
               {MODEL_NAMES.map(m => {
+                const missing = modelMissing(m);
                 const active = selectedModels.includes(m);
                 const color = MODEL_COLORS[m];
                 return (
                   <button
                     key={m}
                     onClick={() => toggleModel(m)}
+                    disabled={missing}
+                    aria-disabled={missing}
+                    title={missing
+                      ? `${m} is not loaded for the selected forecast run`
+                      : undefined}
                     style={{
+                      opacity: missing ? 0.4 : 1,
                       display: 'flex', alignItems: 'center', gap: '6px',
-                      padding: '6px 14px', borderRadius: '20px', cursor: 'pointer',
+                      padding: '6px 14px', borderRadius: '20px',
+                      cursor: missing ? 'not-allowed' : 'pointer',
                       fontSize: t.fontSize.base, fontWeight: t.fontWeight.semibold,
                       background: active ? `${color}22` : 'rgba(255,255,255,0.04)',
                       border: `1px solid ${active ? color : 'rgba(255,255,255,0.12)'}`,

@@ -785,8 +785,19 @@ def _resolve_init_time_uncached(cursor, model_name, requested):
     return rows[0]['initialization_time']
 
 
-def _run_pairs_sql(cursor, models, alias='u', requested=None):
+def _run_pairs_sql(cursor, models, alias='u', requested=_UNSET):
     """(predicate, params, resolved) restricting a multi-model query to one run each.
+
+    `requested` defaults to `_UNSET`, not `None`, and the difference is not
+    cosmetic. `_resolve_init_time` only consults the request body when it is
+    handed `_UNSET`; an explicit `None` means "no init_time was asked for" and
+    sends it to the single-run fallback instead. Defaulting to `None` here
+    therefore *discarded the `init_time` the caller had already sent*, and was
+    invisible for as long as every model had exactly one run — the fallback
+    returned the right answer for the wrong reason. It surfaced the moment a
+    second AIFS run was loaded (2026-09-28), as a 400 on
+    `/api/compare/timeseries` and `/api/compare/spatial-agreement` saying
+    init_time was required by a caller that had supplied it.
 
     The comparison endpoints select `model_name = ANY(...)`, and models are not
     required to share an initialisation time — so a single `init_time = %s` would

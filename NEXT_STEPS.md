@@ -17,6 +17,15 @@ in this repository.
 
 **Changes the rest of this document assumes**, newest first:
 
+- **2026-09-28 — AIFS 06Z is loaded and the run is multi-model** (§17), using
+  the converter in §16. Two defects fell out, both needing two runs whose
+  *model lists differ*: `_run_pairs_sql` was discarding the `init_time` callers
+  sent, and the Comparison tab offered a model the run does not hold. Both
+  fixed. `2025-09-08 06Z` now holds AIFS and UKMO.
+- **2026-09-28 — the AIFS converter exists** (§16), `Data/convert_aifs.py`. It
+  reproduces the loaded 00Z run exactly — all 17,915,148 member rows. **GEFS
+  still has none**, and AIFS *wind* is structurally supported but numerically
+  unconfirmed.
 - **2026-09-25 — the selector is date + cycle and scales past a dropdown**
   (§15), the basemap no longer demands an API key, and the run guard's last two
   leaks are closed. §14's "hidden below 760px" open item is fixed here. The
@@ -184,8 +193,8 @@ In priority order. Nothing here is half-done.
    not code: generate the password hash and point the hostname at the box. The
    Caddyfile is validated (Caddy v2.11.4, "Valid configuration"). **The host
    decision is also the data decision** — a fresh box starts with an empty
-   PostgreSQL and the database is **39 GB** (re-measured 2026-09-28; the extra
-   gigabyte over 38 is the partial second run) — see §10.
+   PostgreSQL and the database is **45 GB** (re-measured 2026-09-28 after the
+   AIFS 06Z load, §17) — see §10.
 1. **Nothing is blocked on a person any more.** PR #2 is merged (§1). What is
    left is either work, a decision that is yours, or blocked on data that is not
    in this repository — and each says which below.
@@ -1182,26 +1191,27 @@ What is actually in the database, as of 2026-09-21:
 
 | table | size |
 |---|---|
-| `forecast_data` | 25 GB |
-| `regridded_forecast_member` | 12 GB |
-| `ensemble_statistics` | 885 MB |
+| `forecast_data` | 29 GB |
+| `regridded_forecast_member` | 14 GB |
+| `ensemble_statistics` | 1040 MB |
 | `observation_data` | 499 MB |
-| `regridded_forecast_ens` | 444 MB |
+| `regridded_forecast_ens` | 486 MB |
 | `regridded_observation` | 33 MB |
-| **whole database** | **39 GB** |
+| **whole database** | **45 GB** |
 
-Re-measured 2026-09-28, and every row above moved. 36 GB on 2026-09-21 → 38 GB
-when the unique indexes that made a regrid re-run safe (§13) cost about 2 GB on
-the member table → **39 GB** once the second run landed (§14). That last
-gigabyte came from **one model and 36 hours**, which is the phase 5 storage
-argument in miniature: a partial run is not a cheap run.
+Re-measured 2026-09-28 after the AIFS 06Z load. The progression is the phase 5
+argument written out: 36 GB on 2026-09-21 → 38 GB when the unique indexes that
+made a regrid re-run safe (§13) cost ~2 GB → 39 GB once UKMO 06Z landed, one
+model and 36 hours for ~1 GB (§14) → **45 GB** once AIFS 06Z landed, one model
+and 360 hours for **~6 GB** (§17). Ten such runs is 60 GB on top of what is
+here, and that is still only *one model per run*.
 
 Three ways, cheapest first:
 
 1. **Serve from this machine's existing `weave_weather`.** Nothing moves. The
    truth field here is the corrected UTC one (§12), verified end to end. The
    beta ships as soon as a host can reach this database.
-2. **Dump and restore.** 39 GB, two thirds of it `forecast_data`. Worth asking whether
+2. **Dump and restore.** 45 GB, two thirds of it `forecast_data`. Worth asking whether
    the beta needs that table at all before moving it: the scored endpoints read
    the regridded tables and `regridded_observation`, which together are under
    10 GB.
@@ -1866,6 +1876,88 @@ legacy 3 dp deliberately, because it is checking against what is stored.
 `netCDF4` is imported lazily and is not in `Data/requirements.txt`, so the
 numeric-convention tests run in CI and the file-reading tests skip themselves
 there — the same bargain the PostgreSQL tests strike.
+
+## 17. AIFS 06Z is loaded, and it broke two things — 2026-09-28
+
+`2025-09-08 06Z` now holds **AIFS and UKMO**. It is the first initialisation in
+this database whose model list *differs from another run's*, and that is what
+made both defects below reachable. §14's three defects needed two runs to
+exist; these two needed two runs that **disagree about their models**.
+
+### What was loaded
+
+Converted with §16, scaled by `aifs react.py`, loaded, regridded. Every step
+checked against a number worked out beforehand rather than eyeballed:
+
+| stage | result |
+|---|---|
+| convert | 61 files → 3,172 JSON, 18,556,766 records, hour 0 empty as designed |
+| scale | 3,172/3,172 at ÷6 h (`h%6==0` throughout, as a 06Z cycle should be) |
+| load | **+17,806,364** `forecast_data`, **+375,201** `ensemble_statistics`, both exactly as predicted; 0 stats rows missing a std; 20.9 min |
+| regrid | **5,043,000** member + **100,860** ensemble rows on the 41×41 0.5° grid |
+| registry | `06Z AIFS precipitation, 6–360 h, scaled`, measured from stored rows |
+
+**`forecast_data` has no natural unique key** — only a surrogate pkey — so a
+second load would silently double every row, exactly the hazard `5d45a29` fixed
+for the regridded tables. The loader was therefore driven by a wrapper that
+refuses to start if AIFS rows already exist at that init, and that checks the
+delta afterwards. Worth rebuilding if this is ever done again; better still,
+give the table the unique index the regridded ones now have.
+
+Also: **do not pass `--truncate` to `regrid_members.py`** to redo one run. It
+deletes by model and variable across *every* init, so it would have taken the
+00Z AIFS regrid with it.
+
+### Defect 1 — `_run_pairs_sql` discarded the `init_time` it was given
+
+`/api/compare/timeseries` and `/api/compare/spatial-agreement` began returning
+**400 "AIFS has 2 loaded runs, so init_time is required"** to a frontend that
+was sending `init_time`.
+
+`_resolve_init_time` distinguishes `_UNSET` ("nobody said") from `None`
+("explicitly nothing"), and only consults the request body for the first.
+`_run_pairs_sql` declared `requested=None` and passed it straight through, so
+the body was never read. **Invisible for as long as every model had one run**,
+because the single-run fallback then returned the right answer for the wrong
+reason — and the resolver's own docstring asserted the frontend's parameter made
+it correct, which was false for these two endpoints.
+
+One-word fix, `None` → `_UNSET`. Pinned by four tests in `test_run_scoping.py`,
+two of which fail if the default goes back. The discriminating one asks for a
+run that does not exist and requires a raise: the fallback path *cannot* raise,
+so a raise proves the body was read — which works against the single-run
+fixture and needs no second run seeded.
+
+This is the "strict automatically at the moment strictness starts to matter"
+design working exactly as its docstring describes. It failed loudly, named
+`/api/runs`, and pointed straight at the bug.
+
+### Defect 2 — the Comparison tab offered a model the run lacks
+
+`ControlsSidebar` has greyed out absent models since phase 3. `ComparisonTab`
+did not, and its default selection is all three, so at 06Z it sent GEFS and got
+`no GEFS run at init_time 2025-09-08T06:00:00` — a 400 the user could not avoid,
+from a control that looked available.
+
+Disabling the chip is **not sufficient on its own**: the selection is state, and
+it starts as all three. The narrowing therefore shadows the state under the name
+the rest of the component already reads, rather than adding a second list beside
+it — sixty-odd sites use it, and a parallel variable would be right only where
+someone remembered. It is derived during render, not written back, so switching
+to a run that *has* GEFS restores the tick instead of having silently discarded
+it.
+
+The minimum-two floor now counts *usable* models rather than ticks; counting
+ticks read "three selected" at 06Z and allowed a deselect that left one.
+
+### Verified in the app
+
+`/api/runs` reports 06Z with both models and their own conventions (AIFS divisor
+6, UKMO null). Scores are genuinely run-scoped — domain-mean MAE at +6h is
+**0.332 at 00Z against 0.3583 at 06Z** for AIFS; identical numbers would have
+meant the filter was not applied. The Comparison tab renders AIFS against UKMO
+over 0–36 h with each model's accumulation convention labelled, GEFS dimmed with
+its reason, and all requests 200.
 
 ## Standing decisions — do not undo these by accident
 
