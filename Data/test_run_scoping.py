@@ -304,3 +304,91 @@ class TestTheMultiModelResolverConsultsTheRequest:
                 json={'models': ['AIFS'], 'init_time': self.BOGUS}):
             _, _, resolved = api._run_pairs_sql(cur, ['AIFS'], requested=None)
         assert resolved == {'AIFS': datetime(2025, 9, 8)}     # body ignored
+
+
+class TestTheRunIdLookupIsScopedToARun:
+    """`get_model_run_id` must resolve the run the *request* names.
+
+    It was `ORDER BY initialization_time DESC LIMIT 1` — a third inline copy of
+    the silent "latest run" lookup this migration exists to remove, which
+    survived both earlier removal passes. Five endpoints read it, so while the
+    scored endpoints honoured `init_time`, `/api/forecast-data` served the
+    newest run whatever the selector said: a request naming 00Z came back with
+    all 4,426 cells of 06Z and none of 00Z, with no error.
+
+    Fake cursors again, for the reason the class above uses them: the fixture
+    holds one run, and an `init_time` that does not match is the cheaper
+    discriminator since the fallback path cannot raise.
+    """
+
+    class Cursor:
+        def __init__(self, rows=(), many=()):
+            self.rows, self.many, self.executed = list(rows), list(many), []
+
+        def execute(self, sql, params=None):
+            self.executed.append((' '.join(sql.split()), params))
+
+        def fetchone(self):
+            return self.rows.pop(0) if self.rows else None
+
+        def fetchall(self):
+            return list(self.many)
+
+    def test_it_looks_up_the_run_by_init_time(self):
+        cur = self.Cursor(rows=[{'x': 1}, {'run_id': 42}])
+        with api.app.test_request_context(
+                '/api/forecast-data?init_time=2025-09-08T06:00:00'):
+            assert api.get_model_run_id(cur, 'AIFS') == 42
+        final_sql, params = cur.executed[-1]
+        assert 'initialization_time = %s' in final_sql, final_sql
+        assert params == ('AIFS', datetime(2025, 9, 8, 6, 0, 0))
+
+    def test_it_no_longer_orders_by_init_time_descending(self):
+        """The shape of the defect, not just its effect: any query that takes
+        the newest run is the thing being removed."""
+        cur = self.Cursor(rows=[{'x': 1}, {'run_id': 7}])
+        with api.app.test_request_context(
+                '/api/forecast-data?init_time=2025-09-08T00:00:00'):
+            api.get_model_run_id(cur, 'AIFS')
+        for sql, _ in cur.executed:
+            assert 'ORDER BY fr.initialization_time DESC' not in sql, sql
+
+    def test_an_init_time_the_model_does_not_have_raises(self):
+        """The discriminating case: the fallback cannot raise, so a raise proves
+        the request was read rather than ignored."""
+        cur = self.Cursor(rows=[], many=[{'initialization_time': datetime(2025, 9, 8)}])
+        with api.app.test_request_context('/api/forecast-data?init_time=2001-01-01T00:00:00'):
+            with pytest.raises(api.RunSelectionError, match='no AIFS run at init_time'):
+                api.get_model_run_id(cur, 'AIFS')
+
+    def test_ambiguity_raises_instead_of_taking_the_newest(self):
+        cur = self.Cursor(many=[{'initialization_time': datetime(2025, 9, 8, 6)},
+                                {'initialization_time': datetime(2025, 9, 8, 0)}])
+        with api.app.test_request_context('/api/forecast-data'):
+            with pytest.raises(api.RunSelectionError, match='2 loaded runs'):
+                api.get_model_run_id(cur, 'AIFS')
+
+    def test_a_single_loaded_run_is_still_defaulted_to(self):
+        """The deliberate departure from phase 2 that keeps existing callers
+        working: with one run there is nothing to pick between."""
+        cur = self.Cursor(rows=[{'run_id': 5}],
+                          many=[{'initialization_time': datetime(2025, 9, 8)}])
+        with api.app.test_request_context('/api/forecast-data'):
+            assert api.get_model_run_id(cur, 'AIFS') == 5
+
+    def test_a_model_with_no_runs_gives_none_not_an_error(self):
+        """The endpoints turn None into a 404, which is the right answer for a
+        model that was never loaded."""
+        cur = self.Cursor(rows=[], many=[])
+        with api.app.test_request_context('/api/forecast-data'):
+            assert api.get_model_run_id(cur, 'AIFS') is None
+
+    def test_the_cache_does_not_collapse_two_runs_onto_one(self):
+        """It was keyed on the model alone. One request can now legitimately ask
+        about two runs, and a model-keyed cache would answer the second from the
+        first."""
+        cur = self.Cursor(rows=[{'x': 1}, {'run_id': 1}, {'x': 1}, {'run_id': 2}])
+        with api.app.test_request_context('/api/forecast-data'):
+            a = api.get_model_run_id(cur, 'AIFS', '2025-09-08T00:00:00')
+            b = api.get_model_run_id(cur, 'AIFS', '2025-09-08T06:00:00')
+        assert (a, b) == (1, 2)

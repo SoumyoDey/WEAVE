@@ -618,29 +618,6 @@ def _ensemble_size(cursor, model_name):
     return n
 
 
-def get_model_run_id(cursor, model_name):
-    # Cache per-request in Flask g so repeated calls within the same HTTP
-    # request (e.g. multiple dispatch functions) hit the DB only once.
-    cache = g.get('run_id_cache')
-    if cache is None:
-        g.run_id_cache = {}
-        cache = g.run_id_cache
-    if model_name in cache:
-        return cache[model_name]
-    cursor.execute("""
-        SELECT fr.run_id
-        FROM forecast_runs fr
-        JOIN models m ON fr.model_id = m.model_id
-        WHERE m.model_name = %s
-        ORDER BY fr.initialization_time DESC
-        LIMIT 1
-    """, (model_name,))
-    result = cursor.fetchone()
-    run_id = result['run_id'] if result else None
-    cache[model_name] = run_id
-    return run_id
-
-
 def available_runs(cursor):
     """[(model, variable, init_time, ...)] from the run registry, newest first.
 
@@ -783,6 +760,59 @@ def _resolve_init_time_uncached(cursor, model_name, requested):
             f"{model_name} has {len(rows)} loaded runs, so init_time is required. "
             f"Newest is {rows[0]['initialization_time'].isoformat()}.")
     return rows[0]['initialization_time']
+
+
+def get_model_run_id(cursor, model_name, requested=_UNSET):
+    """The `forecast_runs.run_id` for the run **this request is about**.
+
+    Resolution is delegated to `_resolve_init_time`, so this shares one
+    implementation with every other run-scoped read: a supplied `init_time` is
+    honoured and validated, a single loaded run is defaulted to as a statement
+    of fact, and ambiguity raises rather than picking.
+
+    **This used to be `ORDER BY initialization_time DESC LIMIT 1`** — a third
+    inline copy of the silent "latest run" lookup that the `init_time` migration
+    exists to remove, and one that survived both earlier passes at removing it
+    (see `NEXT_STEPS.md` §8, which notes it took two). It was invisible while one
+    run was loaded and became a wrong answer the moment a second arrived: a
+    request naming 00Z was served 06Z data, all 4,426 cells of it, with no error
+    anywhere. Five endpoints read it, including `/api/forecast-data`, so **the
+    map ignored the run selector entirely** while the scored endpoints honoured
+    it — which is why this survived being "verified in the app".
+
+    Returning a run_id for a run that holds no rows for the requested variable
+    is correct, not a gap: `/api/wind-data` at a precipitation-only run should
+    answer empty rather than quietly serve another run's wind.
+    """
+    init_time = _resolve_init_time(cursor, model_name, requested)
+    if init_time is None:
+        return None
+
+    # Cache per-request in Flask g so repeated calls within the same HTTP
+    # request (e.g. multiple dispatch functions) hit the DB only once. Keyed on
+    # the run as well as the model, because one request can now legitimately ask
+    # about more than one.
+    key = (model_name, init_time)
+    cache = None
+    if has_request_context():
+        cache = g.get('run_id_cache')
+        if cache is None:
+            g.run_id_cache = {}
+            cache = g.run_id_cache
+        if key in cache:
+            return cache[key]
+
+    cursor.execute("""
+        SELECT fr.run_id
+        FROM forecast_runs fr
+        JOIN models m ON fr.model_id = m.model_id
+        WHERE m.model_name = %s AND fr.initialization_time = %s
+    """, (model_name, init_time))
+    result = cursor.fetchone()
+    run_id = result['run_id'] if result else None
+    if cache is not None:
+        cache[key] = run_id
+    return run_id
 
 
 def _run_pairs_sql(cursor, models, alias='u', requested=_UNSET):

@@ -22,8 +22,9 @@ in this repository.
   wind score paired a forecast with truth from eight days before it was
   initialised. Replaced from the HPC and now reproducible: MAE fell 70.5%.
   **Every AIFS wind figure written before this date is on the wrong forecast.**
-  Verifying it exposed **three further live defects** (§19), the worst being
-  that `/api/forecast-data` — the map — has never respected the run selector.
+  Verifying it exposed **three further defects** (§19). The worst — that
+  `/api/forecast-data`, the map, never respected the run selector — is **fixed**;
+  the GEFS wind duplication and `/api/spatial-metric`'s unread `hour` remain.
 - **2026-09-28 — AIFS 06Z is loaded and the run is multi-model** (§17), using
   the converter in §16. Two defects fell out, both needing two runs whose
   *model lists differ*: `_run_pairs_sql` was discarding the `init_time` callers
@@ -2065,11 +2066,11 @@ is indistinguishable at a glance from the defect above, and it appeared the
 first time wind was verified against a source that was in fact correct. Fixed
 and pinned by tests.
 
-## 19. Three defects the wind work exposed, NOT yet fixed — 2026-09-28
+## 19. Three defects the wind work exposed — 2026-09-28
 
-Found while verifying §18. All three are live.
+Found while verifying §18. **The first is now FIXED; the other two are live.**
 
-### The map has never respected the run selector
+### The map never respected the run selector — FIXED
 
 **`get_model_run_id` is `ORDER BY initialization_time DESC LIMIT 1`** — a third
 inline copy of the "silent latest run" pattern the `init_time` migration exists
@@ -2089,13 +2090,38 @@ Proven, not inferred: a request naming **00Z** returns **06Z** data — 4,426 of
 has been showing the newest run whatever the selector said, which makes the
 selector *misleading* rather than merely incomplete.
 
-Worse for wind: `/api/wind-data` resolves to the newest run, and for both AIFS
-and UKMO the newest run holds no wind. **UKMO's wind map has been blank since
-UKMO 06Z was loaded on 2026-09-24**, and AIFS's went blank when AIFS 06Z was
-loaded on 2026-09-28. GEFS still renders only because it has one run. This also
-means §18's replacement cannot be confirmed on the map until this is fixed.
+Worse for wind: `/api/wind-data` resolved to the newest run, and for both AIFS
+and UKMO the newest run holds no wind. **UKMO's wind map was blank from
+2026-09-24**, when UKMO 06Z was loaded, and AIFS's went blank on 2026-09-28 with
+AIFS 06Z. GEFS kept rendering only because it has one run.
 
-### GEFS wind is duplicated in the raw tables
+**The fix.** `get_model_run_id` now delegates to `_resolve_init_time` and looks
+the run up by `(model, init_time)`, so there is **one** resolution path for every
+run-scoped read: a supplied `init_time` is honoured and validated, a single
+loaded run is still defaulted to, and ambiguity raises. All five callers already
+had `except RunSelectionError`, so the refusal surfaces as a 400 naming
+`/api/runs` rather than a 500.
+
+Two details worth keeping. The per-request cache was keyed on the **model alone**
+and is now keyed on `(model, init_time)` — one request can legitimately ask about
+two runs, and the old key answered the second from the first. And the function
+had to **move** in the file: its new default is the `_UNSET` sentinel, and
+defaults are evaluated at definition time, so it now sits after the resolver it
+depends on rather than 100 lines before it.
+
+**Verified end to end, not inferred.** A request naming 00Z now returns the 00Z
+rows — 4,895 of 4,895 identical, 0 identical to 06Z — and the two runs return
+different payloads. In the app the wind map renders again for **AIFS** (0–11
+m/s) and **UKMO** (0–16 m/s) at 00Z, and 06Z correctly answers empty for wind
+because it holds none. Seven tests pin it in `test_run_scoping.py`; five fail if
+the latest-run lookup is restored, and the two that do not are the single-run
+default and the no-runs case, both deliberately unchanged.
+
+Returning a run that holds no rows for the requested variable is **correct, not
+a gap**: wind at a precipitation-only run should answer empty rather than
+quietly serve another run's wind.
+
+### GEFS wind is duplicated in the raw tables — STILL LIVE
 
 Every GEFS wind row exists **twice** in `forecast_data` and
 `ensemble_statistics` — 1,681 cells, 3,362 rows, all pairs holding *identical*
@@ -2110,7 +2136,7 @@ The fix is a unique index on `forecast_data` and `ensemble_statistics` plus a
 dedupe — the same treatment `5d45a29` gave the regridded tables, and the thing
 that would have prevented this.
 
-### `/api/spatial-metric` ignores the lead time it documents
+### `/api/spatial-metric` ignores the lead time it documents — STILL LIVE
 
 Its docstring says `hour (ssr only)`, and **no hour parameter is read anywhere
 in the endpoint**. Every metric is a lead-time aggregate, and
