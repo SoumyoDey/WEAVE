@@ -1,16 +1,24 @@
 # Design plan — more data, and selecting it
 
-Written 2026-08-14. **Status updated 2026-09-02: phases 1 and 2 are done, and the
-blocking issue below is closed.** WEAVE still serves one forecast run
-(2025-09-08 00Z, three models, two variables), but it no longer *assumes* it.
+Written 2026-08-14. **Status updated 2026-09-28: phases 1–4 are done and only
+phase 5 remains.** WEAVE now serves **two** runs — `2025-09-08 00Z` with three
+models, and `2025-09-08 06Z` with UKMO precipitation only — and the selector
+switches between them.
 
 | phase | state |
 |---|---|
 | 1. Schema + run registry | **done** — `Data/migrate_init_time.py`, applied |
 | 2. Backend `init_time`, no silent default | **done** — with one deliberate change, below |
-| 3. `/api/runs` and the selector | **endpoint done**, selector not built |
-| 4. Scripted ingest | **blocked** — `observation_data` has no loader in this repo |
-| 5. Scale / retention | undecided |
+| 3. `/api/runs` and the selector | **done 2026-09-24**, refined 2026-09-25 — `NEXT_STEPS.md` §15 |
+| 4. Scripted ingest | **done 2026-09-24** — per-run export convention; `NEXT_STEPS.md` §13 |
+| 5. Scale / retention | **undecided — the only phase left.** Three decisions, not a build |
+
+**The one thing phase 4 did not close, and it is not in this document's list.**
+There is **no NetCDF → JSON converter for AIFS or GEFS** anywhere in this repo
+or on the cluster; `Data_convert_weave/React.py` handles UKMO only. That is why
+the second run is one model. The registry half of an ingest is reproducible now;
+the conversion half is missing, and **writing that converter is what a genuine
+multi-model second run needs** (`NEXT_STEPS.md` §14).
 
 It is deliberately a design document rather than a task list: the schema decision
 in Phase 1 constrains everything after it, and getting it wrong is expensive.
@@ -348,6 +356,15 @@ conventions were so hard to reconstruct. Any expansion should make ingest
 > About 2 GB of the member table's index is the unique key added on 2026-09-24
 > to make re-running a regrid safe (phase 4, item 1). That is a real cost of a
 > real fix, not overhead to remove.
+>
+> **First real marginal measurement, 2026-09-28.** The table above was taken
+> while one run was loaded. A second run has since landed and the database is
+> **39 GB**, so the second run cost about **1 GB** — against ~37 GB for the
+> first. That is not evidence the estimate was high: the second run is **one
+> model, one variable and 36 hours**, where the first is three models, two
+> variables and up to 384 hours. Scaled for what it contains it agrees with the
+> table. **Do not read "the second run only cost 1 GB" as headroom** — read it
+> as the cost of the smallest run this database can hold.
 >
 > **This strengthens the partitioning note rather than changing it.**
 > Partitioning by `init_time` would give each run its own indexes, so dropping

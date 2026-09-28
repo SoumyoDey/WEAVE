@@ -1,6 +1,6 @@
 # Next steps
 
-State as of 2026-09-21. **PR #2 is merged** (`49ead8f`); `main` is the live
+State as of 2026-09-28. **PR #2 is merged** (`49ead8f`); `main` is the live
 branch and carries everything below.
 
 **The active workstream is the password-protected reviewer deployment** (§10),
@@ -17,8 +17,15 @@ in this repository.
 
 **Changes the rest of this document assumes**, newest first:
 
+- **2026-09-25 — the selector is date + cycle and scales past a dropdown**
+  (§15), the basemap no longer demands an API key, and the run guard's last two
+  leaks are closed. §14's "hidden below 760px" open item is fixed here. The
+  method note worth carrying: a control that is right at two runs is not
+  automatically right at sixty-eight, and there are **17 UKMO dates already on
+  the cluster**.
 - **2026-09-24 — a SECOND RUN is loaded** (§14): `2025-09-08 06Z`, UKMO only,
-  0–36 h. The selector is a real dropdown now. It surfaced three defects that
+  0–36 h. The selector became a live control (two of them, after §15). It
+  surfaced three defects that
   needed two runs to exist, and confirmed the AIFS/GEFS conversion stage does
   not exist anywhere.
 - **2026-09-24 — the export convention is per-run, and scoring reads it**
@@ -177,7 +184,8 @@ In priority order. Nothing here is half-done.
    not code: generate the password hash and point the hostname at the box. The
    Caddyfile is validated (Caddy v2.11.4, "Valid configuration"). **The host
    decision is also the data decision** — a fresh box starts with an empty
-   PostgreSQL and the database is 38 GB — see §10.
+   PostgreSQL and the database is **39 GB** (re-measured 2026-09-28; the extra
+   gigabyte over 38 is the partial second run) — see §10.
 1. **Nothing is blocked on a person any more.** PR #2 is merged (§1). What is
    left is either work, a decision that is yours, or blocked on data that is not
    in this repository — and each says which below.
@@ -218,7 +226,9 @@ In priority order. Nothing here is half-done.
    ~~Phase 3, the run-selector UI~~ **done 2026-09-24** — `RunProvider`, a header selector, and switch
    behaviour (invalidate, clamp lead time, grey out models a run lacks). Read
    that document's phase 3 for what shipped and the two departures from its
-   sketch.
+   sketch, then **§15 for what using it changed on 2026-09-25**: date and cycle
+   instead of combined tuples, a date control that changes shape above 12 dates,
+   and the two run-guard leaks that only appeared once a second run existed.
 
    **One part of it was not inert on the single run, contrary to the
    expectation recorded here for weeks.** Lead-time clamping is live now,
@@ -355,6 +365,21 @@ nothing about what it imported at startup: **restart every server after a schema
 change.** A stale webpack cache did the same thing to the dev server after a
 branch checkout swapped 78 files under it — `rm -rf node_modules/.cache`. In both
 cases the code was fine and only a process disagreed.
+
+**The same trap from the other end, 2026-09-28: a server can outlive the tool
+that started it, and then "nothing is running" is wrong.** The editor's preview
+manager listed no live servers while `flask_api.py` still held port 5000 with
+**`PPID 1`** — orphaned when its manager went away, so asking that manager to
+stop it was a no-op. It had been holding its connection pool open
+(`DB_POOL_MIN=2`) the whole time, and would have made the next start fail as a
+port conflict rather than an obvious "already running". **Ask the port, not the
+process manager:**
+
+```bash
+lsof -nP -iTCP:5000 -sTCP:LISTEN
+```
+
+Then kill the reloader parent and its child.
 
 ## 2. Drop the superseded table — DROPPED 2026-09-02
 
@@ -829,13 +854,14 @@ fallback. That is one less thing for DATA_EXPANSION_DESIGN.md to trip over.
   and its phase-5 exit grep passes while a literal is still on screen. The audit
   document is the live record; the plan is what was believed beforehand.
 - **`DATA_EXPANSION_DESIGN.md`** — selecting date and initialisation. **Phases
-  1–2 are done as of 2026-09-02 (§8)**, so the blocker this entry used to name —
-  no `init_time` column, valid time resolved from "the latest run" — is gone, and
-  that document's "do not load a second run" rule is retired. What remains is the
-  ingest (`observation_data` has no loader here) and the selector UI, which has
-  no user-visible value while one run is loaded. Like the audit plan above, treat
-  its phase text as what was believed beforehand: three of its instructions were
-  superseded by what shipped and are marked against each phase.
+  1–4 are done as of 2026-09-24**, so the two blockers this entry used to name
+  are both gone: `init_time` exists and no query resolves valid time from "the
+  latest run" (§8), and `observation_data` has a loader (§12). That document's
+  "do not load a second run" rule is retired, and a second run is loaded (§14).
+  **Only phase 5 (scale and retention) is left, and it is three decisions rather
+  than a build.** Like the audit plan above, treat its phase text as what was
+  believed beforehand: three of its instructions were superseded by what
+  shipped and are marked against each phase.
 
 ## 6. Lower priority
 
@@ -1157,22 +1183,25 @@ What is actually in the database, as of 2026-09-21:
 | table | size |
 |---|---|
 | `forecast_data` | 25 GB |
-| `regridded_forecast_member` | 11 GB |
-| `ensemble_statistics` | 809 MB |
+| `regridded_forecast_member` | 12 GB |
+| `ensemble_statistics` | 885 MB |
 | `observation_data` | 499 MB |
-| `regridded_forecast_ens` | 421 MB |
+| `regridded_forecast_ens` | 444 MB |
 | `regridded_observation` | 33 MB |
-| **whole database** | **38 GB** |
+| **whole database** | **39 GB** |
 
-Up from 36 GB on 2026-09-21: the unique indexes that made a regrid re-run safe
-(§13) cost about 2 GB on the member table.
+Re-measured 2026-09-28, and every row above moved. 36 GB on 2026-09-21 → 38 GB
+when the unique indexes that made a regrid re-run safe (§13) cost about 2 GB on
+the member table → **39 GB** once the second run landed (§14). That last
+gigabyte came from **one model and 36 hours**, which is the phase 5 storage
+argument in miniature: a partial run is not a cheap run.
 
 Three ways, cheapest first:
 
 1. **Serve from this machine's existing `weave_weather`.** Nothing moves. The
    truth field here is the corrected UTC one (§12), verified end to end. The
    beta ships as soon as a host can reach this database.
-2. **Dump and restore.** 38 GB, two thirds of it `forecast_data`. Worth asking whether
+2. **Dump and restore.** 39 GB, two thirds of it `forecast_data`. Worth asking whether
    the beta needs that table at all before moving it: the scored endpoints read
    the regridded tables and `regridded_observation`, which together are under
    10 GB.
@@ -1639,13 +1668,101 @@ data.
 
 ### Two things left open
 
-- **The run selector is hidden below 760px**, because it lives inside the
-  header badge that collapses on narrow windows. The run is the one piece of
-  context that qualifies everything else on screen, so hiding it is the wrong
-  trade — but moving it is a layout decision rather than a bug fix.
-- **Observations stop at 2025-09-08 23:30 UTC**, so the 06Z run verifies to
-  about +17.5 h rather than its full 36. Extending it means loading 09-09 IMERG
-  and ERA5, both of which are on Explorer (§11).
+- ~~**The run selector is hidden below 760px**~~ **fixed 2026-09-25** (§15).
+  It lived inside the header badge that collapses on narrow windows. The run is
+  the one piece of context that qualifies everything else on screen, so hiding
+  it was the wrong trade.
+- **Observations stop at 2025-09-08 23:30 UTC** — re-confirmed against
+  `regridded_observation` on 2026-09-28 — so the 06Z run verifies to about
+  +17.5 h rather than its full 36. **A short series here is the correct result,
+  not a loading failure.** Extending it means loading 09-09 IMERG and ERA5, both
+  of which are on Explorer (§11).
+
+## 15. The selector made usable, and made to scale — 2026-09-25
+
+Four changes, all of which came out of *looking at* the app once two runs
+existed rather than from the design document. `99f247a`, `3fe8015`, `de6b546`,
+`52d36d1`.
+
+### Date and cycle, not combined tuples
+
+The first selector offered one list of whole runs — `8 Sep 00Z`, `8 Sep 06Z`.
+That was chosen on a real argument: two coupled dropdowns can express a pair
+that does not exist, a date selected and then a cycle that date does not have.
+
+**The argument is right and the conclusion was wrong.** The fix is to derive the
+cycle list from the selected date, which makes an impossible pair
+*unrepresentable* rather than merely validated. The combined list also does not
+scale — four cycles a day is sixteen flat entries for four days, with no
+structure to help anyone read them.
+
+Changing date **keeps the cycle where the new date has it** and falls back to
+that date's newest otherwise, so comparing 12Z across days does not snap to 00Z
+on every move.
+
+### The date control changes shape with the archive
+
+`DATE_LIST_MAX = 12` in `src/components/RunSelector.jsx`:
+
+| dates loaded | control | why |
+|---|---|---|
+| ≤ 12 | `<select>` | shows exactly which days exist; asking for one that does not is impossible |
+| > 12 | `<input type="date">` | constant-size however far the archive grows, and jumps straight to a day |
+
+The dropdown's guarantee is genuinely worth having while the list is short,
+which is why it was kept rather than replaced. It stops being worth a list
+nobody can scan.
+
+**The cost of the date input is stated and handled, not hidden.** `min` and
+`max` bound the range and **say nothing about holes inside it**, so a date input
+cannot grey out the days an archive is missing. A date with no runs is therefore
+**refused and named** — "no runs on 9 Sep 2025" — with the selection left
+unchanged. Snapping to the nearest neighbour would have been smoother and would
+show a different day than the one asked for, which is the same class of quiet
+wrongness as the 4-hour IMERG shift (§12).
+
+Cycles need none of this: four a day is four options whatever the archive does.
+
+**This is a now-problem, not a hypothetical.** 17 UKMO dates are already on the
+cluster, which at four cycles each is 68 runs.
+
+**Where the next limit is, so it is not mistaken for this one:** at some
+hundreds of runs `/api/runs` becomes the bottleneck, because it returns a
+`detail` entry per run and `RunProvider` holds all of it. That endpoint is what
+to paginate. Do not re-attack the selector for it.
+
+### The run guard leaked twice before it held
+
+Switching runs produced 400s, because requests were still going out for a model
+the newly-selected run does not have. Three attempts, and the first two are
+worth recording as *wrong*:
+
+1. Allow requests while the run list is loading — leaked, because `src/api/run.js`
+   resolves independently of the provider.
+2. Allow them when no run is selected yet — leaked for the same reason.
+3. **Wait for `runStatus === 'ready'`.** This one holds:
+   `runHasSelectedModel = runStatus === 'error' || (runStatus === 'ready' && (runModels.length === 0 || runModels.includes(selectedModel)))`.
+
+Separately, **map initialisation bypassed the guard entirely** by calling
+`loadDataForHour()` itself instead of going through the gated effects. A guard
+that every path but one respects is not a guard.
+
+### The "API KEY REQUIRED" watermark was the basemap
+
+Stamped across the map in the tiles themselves: a provider refusing anonymous
+use and writing its refusal into what it served. Not a WEAVE bug and not
+recoverable in app code. Swapped to keyless Esri `World_Light_Gray_Base` and
+`_Reference` (`src/App.js:292`) — note the `{z}/{y}/{x}` ordering, which is not
+the usual `{z}/{x}/{y}`. **If a watermark or blank tiles reappear, read the tile
+URL before suspecting app state.**
+
+### `/api/health` no longer counts 128M rows to say hello
+
+It ran `count(*)` on `forecast_data` and took **20 seconds**. Now
+`SELECT GREATEST(reltuples, 0)::bigint FROM pg_class WHERE oid = 'forecast_data'::regclass`
+→ **0.187 s**, reported as `total_forecast_points_estimate` because an estimate
+is what `reltuples` is. A health check that scans a table is a health check that
+fails under exactly the load it exists to report on.
 
 ## Standing decisions — do not undo these by accident
 
