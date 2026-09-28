@@ -1634,20 +1634,25 @@ on Explorer — 37 hourly NetCDF files, 2 MB — converted by
 
 ### The pipeline is not reproducible for AIFS or GEFS
 
-**There is no NetCDF → JSON converter for them.** `React.py` handles UKMO only
+**There was no NetCDF → JSON converter for them.** `React.py` handles UKMO only
 (it reads `total_rainfall_rate` and multiplies by 3.6e6); `aifs react.py`,
 despite the name, is JSON → JSON rescaling that sits *downstream* of the
 missing stage. Searched both this machine — all five WEAVE folders — and the
-cluster: it exists nowhere. That stage was run off-machine and was not kept.
+cluster: it existed nowhere. That stage was run off-machine and was not kept.
 
-This is the concrete thing behind `DATA_EXPANSION_DESIGN.md`'s "manual and
+This was the concrete thing behind `DATA_EXPANSION_DESIGN.md`'s "manual and
 partly off-machine". Phase 4's work made the *registry* half reproducible; the
-conversion half is still missing, and writing that converter is what a genuine
+conversion half was missing, and writing that converter is what a genuine
 multi-model second run needs.
 
 The source data is there: AIFS has 16 runs (4 dates × 4 cycles) already cut to
-`conus_east`, at ~32 MB per cycle. It is the converter that is absent, not the
+`conus_east`, at ~32 MB per cycle. It was the converter that was absent, not the
 data.
+
+**AIFS precipitation is now closed — see §16.** `Data/convert_aifs.py` (in the
+repository, unlike the converters it joins) reproduces the loaded run exactly.
+**GEFS is still missing its converter**, and so is anything that would convert
+AIFS *wind* with confidence.
 
 ### Three defects this surfaced, all of which needed two runs to exist
 
@@ -1763,6 +1768,104 @@ It ran `count(*)` on `forecast_data` and took **20 seconds**. Now
 → **0.187 s**, reported as `total_forecast_points_estimate` because an estimate
 is what `reltuples` is. A health check that scans a table is a health check that
 fails under exactly the load it exists to report on.
+
+## 16. The AIFS converter — WRITTEN 2026-09-28
+
+`Data/convert_aifs.py`, with `Data/test_convert_aifs.py`. This is the stage §14
+found missing. **It lives in the repository**, unlike `React.py` and
+`aifs react.py`, for the reason `load_observations.py` does: a stage kept
+outside the tree is a stage that gets lost, and that is exactly how this one was
+lost.
+
+It converts `AIFS/regional_data/conus_east/precipitation/<date>/init_<HH>/pf/*.nc`
+into the JSON `load_to_postgres.py` reads. **It does not divide by the emit
+interval** — `aifs react.py` owns that. Doing it in both places would make every
+precipitation score a sixth of what it should be, with nothing to show for it.
+
+### Verified against the run already loaded
+
+`--verify` reproduces AIFS `2025-09-08 00Z` through the legacy scaling and gets
+**all 17,915,148 member rows and all 378,737 mean/std rows exactly** — 3,000 of
+3,000 (hour, member) slices agreeing cell-for-cell and value-for-value, nothing
+one-sided in either direction. About 100 seconds.
+
+Byte-identical output proves little by itself, since a silent fallback produces
+it too, so each convention below was established by *breaking* it and watching
+the reproduction fail. That is what makes them findings rather than guesses.
+
+### The conventions, none of which were guessable
+
+| convention | why it matters |
+|---|---|
+| `tp(number, latitude, longitude)` | the domain is **81×81**, so a transposed read is completely silent — the IMERG trap again. Axes are resolved by dimension *name*; the tests use a non-square grid |
+| member = **array index**, not `number` | `number` is 1..50, the database is 0..49. Using `number` shifts every member by one, invisibly |
+| units are **already mm** | `kg m**-2`. Applying UKMO's ×3.6e6 would inflate rainfall by six orders of magnitude |
+| drop `tp < 0.01 mm` | the loaded run's own boundary, exactly: everything dropped is ≤ 0.00977 mm, everything kept ≥ 0.01074 mm, **no overlap** |
+| `round(round(tp, 3)/6, 3)` | double rounding. `round(tp/6, 3)` misses 343 of 4,001 cells in one slice |
+| `mean`/`std` in **float32** | numpy preserves the dtype; widening first moves the last digit |
+| `std` is **population** (`ddof=0`) | `ddof=1` mismatches 362,979 of 378,737 rows |
+| `std` only where `mean` survives | the loader applies `std` with an `UPDATE` keyed on the statistics row, so the rest is discarded in silence |
+
+Two of those explain things that look like bugs and are not. **No stored value
+is 0.001**, because 0.01 mm over 6 h rounds to 0.002 mm/h — the observed
+minimum. And **hour 0 is legitimately absent**: a cumulative total is zero at
+initialisation, so 0 of 6,561 cells clear the threshold and the file is empty.
+
+### The float32 comparison that cost a cell
+
+One cell — (44.75, −83.0) at +6h — has a mean of **exactly** `float32(0.01)`.
+`mean_array < 0.01` in numpy is **False** there, because the Python float is
+cast down to the array's float32 where it compares equal; `float(mean) < 0.01`
+is **True**, because that float32 is 0.00999999977 in float64. The stored run
+follows the float64 comparison.
+
+Still true under numpy 2.4's NEP 50 promotion, which was checked rather than
+assumed. The fix was not a better comparison but **removing the second one**:
+`std` is now filtered by the mean's surviving keys, so the two cannot disagree.
+
+### AIFS wind is NOT closed, and the reason is not this script
+
+`wind_u10`/`wind_v10` have an identical layout, and the loaded wind table has
+exactly the shape this converter produces: **61 h × 50 members × 6,561 cells =
+20,011,050 rows**, every cell kept (zeros and negatives are real readings, so no
+threshold), 3 decimals. The cell sets match perfectly.
+
+**The values do not.** At `2025-09-08 00Z` +120h, cell (25.0, −85.0), the
+database holds **−5.567** where the source has **−4.050**, and no member index
+reproduces it. Both variables were extracted minutes apart on 2025-10-09, so
+staleness does not explain it — the loaded AIFS wind has some other provenance
+that is not on the cluster under that name.
+
+So wind conversion here is **structurally right and numerically unconfirmed**.
+The script prints that when handed a non-accumulated variable rather than
+leaving it to be discovered. Anyone loading AIFS wind for a new run should know
+they cannot check it against the old one.
+
+### A new run will not be bit-identical to the old one, by design
+
+Verified end to end on `2025-09-08 06Z` (not loaded): 61 files → **18,556,766
+records** → `aifs react.py` → filenames the loader parses, members 0–49 plus
+mean and std, payload keys `lat`/`lon`/`value`.
+
+But the scaled value comes out as **0.0172**, at four decimals, where the loaded
+00Z run carries three. That is not drift in the converter: `aifs react.py` was
+*fixed* to round to 4 dp, and the loaded run went through the old 3 dp version
+(`aifs react.py.orig-backup`). The difference is 0.00005 mm/h — far below any
+threshold, colour band or score in the app — but it is real, and the reason a
+new run cannot be compared to the old one byte-for-byte. `--verify` applies the
+legacy 3 dp deliberately, because it is checking against what is stored.
+
+### What this does and does not unblock
+
+- **Unblocked:** a second AIFS *precipitation* run, reproducibly, from any of
+  the 16 cycles on the cluster.
+- **Still blocked:** GEFS, which has no converter at all and different window
+  conventions (3 h buckets at `h%6==3`, 6 h at `h%6==0` — see `aifs react.py`).
+- **Unresolved:** where the loaded AIFS wind came from.
+
+`netCDF4` is imported lazily and is not in `Data/requirements.txt`, so the
+numeric-convention tests run in CI and the file-reading tests skip themselves
+there — the same bargain the PostgreSQL tests strike.
 
 ## Standing decisions — do not undo these by accident
 
