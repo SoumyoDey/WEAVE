@@ -17,6 +17,13 @@ in this repository.
 
 **Changes the rest of this document assumes**, newest first:
 
+- **2026-09-28 — the AIFS wind was the WRONG FORECAST RUN, and is fixed** (§18).
+  The field stored at `2025-09-08 00Z` was the `2025-09-16` run, so every AIFS
+  wind score paired a forecast with truth from eight days before it was
+  initialised. Replaced from the HPC and now reproducible: MAE fell 70.5%.
+  **Every AIFS wind figure written before this date is on the wrong forecast.**
+  Verifying it exposed **three further live defects** (§19), the worst being
+  that `/api/forecast-data` — the map — has never respected the run selector.
 - **2026-09-28 — AIFS 06Z is loaded and the run is multi-model** (§17), using
   the converter in §16. Two defects fell out, both needing two runs whose
   *model lists differ*: `_run_pairs_sql` was discarding the `init_time` callers
@@ -193,8 +200,8 @@ In priority order. Nothing here is half-done.
    not code: generate the password hash and point the hostname at the box. The
    Caddyfile is validated (Caddy v2.11.4, "Valid configuration"). **The host
    decision is also the data decision** — a fresh box starts with an empty
-   PostgreSQL and the database is **45 GB** (re-measured 2026-09-28 after the
-   AIFS 06Z load, §17) — see §10.
+   PostgreSQL and the database is **52 GB** (re-measured 2026-09-28 after the
+   AIFS wind replacement, §18; ~7 GB of that is reclaimable dead tuples) — see §10.
 1. **Nothing is blocked on a person any more.** PR #2 is merged (§1). What is
    left is either work, a decision that is yours, or blocked on data that is not
    in this repository — and each says which below.
@@ -1191,27 +1198,34 @@ What is actually in the database, as of 2026-09-21:
 
 | table | size |
 |---|---|
-| `forecast_data` | 29 GB |
-| `regridded_forecast_member` | 14 GB |
-| `ensemble_statistics` | 1040 MB |
+| `forecast_data` | 32 GB |
+| `regridded_forecast_member` | 18 GB |
+| `ensemble_statistics` | 1117 MB |
 | `observation_data` | 499 MB |
-| `regridded_forecast_ens` | 486 MB |
+| `regridded_forecast_ens` | 548 MB |
 | `regridded_observation` | 33 MB |
-| **whole database** | **45 GB** |
+| **whole database** | **52 GB** |
 
 Re-measured 2026-09-28 after the AIFS 06Z load. The progression is the phase 5
 argument written out: 36 GB on 2026-09-21 → 38 GB when the unique indexes that
 made a regrid re-run safe (§13) cost ~2 GB → 39 GB once UKMO 06Z landed, one
-model and 36 hours for ~1 GB (§14) → **45 GB** once AIFS 06Z landed, one model
-and 360 hours for **~6 GB** (§17). Ten such runs is 60 GB on top of what is
-here, and that is still only *one model per run*.
+model and 36 hours for ~1 GB (§14) → 45 GB once AIFS 06Z landed, one model and
+360 hours for ~6 GB (§17) → **52 GB** after the AIFS wind replacement (§18).
+Ten single-model runs is 60 GB on top of what is here.
+
+**That last 7 GB is mostly dead tuples, not data.** The replacement deleted 40M
+rows and inserted 40M, and `regridded_forecast_member` still carries **6.2M dead
+tuples** with `ensemble_statistics` at 766k. Autovacuum frees that for reuse but
+does not shrink the files; only `VACUUM FULL` does, and it takes an exclusive
+lock. Expect this after any bulk replacement here — the same note §12 records
+for `observation_data`.
 
 Three ways, cheapest first:
 
 1. **Serve from this machine's existing `weave_weather`.** Nothing moves. The
    truth field here is the corrected UTC one (§12), verified end to end. The
    beta ships as soon as a host can reach this database.
-2. **Dump and restore.** 45 GB, two thirds of it `forecast_data`. Worth asking whether
+2. **Dump and restore.** 52 GB, two thirds of it `forecast_data`. Worth asking whether
    the beta needs that table at all before moving it: the scored endpoints read
    the regridded tables and `regridded_observation`, which together are under
    10 GB.
@@ -1953,11 +1967,157 @@ ticks read "three selected" at 06Z and allowed a deselect that left one.
 ### Verified in the app
 
 `/api/runs` reports 06Z with both models and their own conventions (AIFS divisor
-6, UKMO null). Scores are genuinely run-scoped — domain-mean MAE at +6h is
-**0.332 at 00Z against 0.3583 at 06Z** for AIFS; identical numbers would have
-meant the filter was not applied. The Comparison tab renders AIFS against UKMO
-over 0–36 h with each model's accumulation convention labelled, GEFS dimmed with
-its reason, and all requests 200.
+6, UKMO null). **The scored endpoints are genuinely run-scoped** — AIFS
+domain-aggregate MAE is **0.332 at 00Z against 0.3583 at 06Z**; identical
+numbers would have meant the filter was not applied. The Comparison tab renders
+AIFS against UKMO over 0–36 h with each model's accumulation convention
+labelled, GEFS dimmed with its reason, and all requests 200.
+
+**Two corrections to what this section first claimed** (§19 has the causes).
+That MAE pair was written as "at +6h"; it is a **lead-time aggregate**, because
+`/api/spatial-metric` reads no hour parameter at all. And "verified in the app"
+was too broad: it rests on the *scored* endpoints, which are correct. The
+**map** was never run-scoped, and testing one and generalising to the other is
+exactly the step that let it stay hidden.
+
+## 18. The AIFS wind was the wrong forecast run — FIXED 2026-09-28
+
+**The field stored as AIFS wind at `2025-09-08 00Z` was the `2025-09-16` run.**
+Observations only cover 2025-09-08, so every AIFS wind score had been pairing a
+forecast against truth from **eight days before it was initialised**. Not biased
+— meaningless. This is a worse defect than the 4-hour IMERG shift (§12), which
+at least compared the right forecast to the wrong hour.
+
+### How it was found, after four wrong guesses
+
+The cell set matched the cluster source *perfectly* — same 0.25° grid, same 61
+hours, same 50 members, every key present on both sides — while every value
+differed. Each cheap explanation was tried and measured, not reasoned about:
+
+| hypothesis | mean abs difference |
+|---|---|
+| some other member index | 1.83 (best of 50) |
+| a spatial shift or transpose | 2.10 (best of 49 offsets) |
+| the ensemble mean | 2.05 |
+| the ensemble std | 5.22 |
+
+A real match is ~0.0005, from 3-decimal rounding. What finally found it was
+matching the stored field's **mean and standard deviation** against every date,
+cycle and member in the tree — which hit `20250916 init_00 +120h member 0` at
+−3.4933 / 3.2443 exactly — then confirming cell-for-cell against the preserved
+rows: **0 mismatches** across two hours and two members, 6,561 cells each.
+
+**The reusable lesson: shape agreement is not provenance.** A field can be a
+real forecast, correctly converted, on the right grid, with the right member
+count, and still be the *wrong forecast*. Only matching values against a named
+source settles it. Every structural check passed here and all of them were
+consistent with data that was unusable.
+
+Also worth keeping: the search that failed looked only inside `20250908`. The
+answer was one directory along. That is the third time this project has been
+bitten by a search whose scope, not whose method, was wrong.
+
+### What was done
+
+Replaced from `AIFS/regional_data/conus_east/wind_{u,v}10/20250908/init_00/pf`
+via `convert_aifs.py` (§16). Deletes for both components ran in **one
+transaction**, because a failure between them would compose wind *speed* from
+two different forecasts — √(u²+v²) of mismatched fields is a plausible number
+with nothing wrong on its face.
+
+| stage | result |
+|---|---|
+| convert | 20,811,492 records per component (20,011,050 members + 400,221 mean + 400,221 std) |
+| replace | exactly those counts landed, both components, 0 statistics rows without a std, 50.8 min |
+| regrid | 5,127,050 member + 102,541 ensemble rows per component, registered `0–360h unscaled` |
+| verify | **both components reproduce the source exactly** — `--verify` clean on members and statistics |
+
+The superseded rows are preserved outside the repo as
+**`weave_aifs_wind_prev_20260928.sql.gz`** (177 MB, all 40,022,100 rows), since
+they are the only copy of the field every AIFS wind figure to date was computed
+from. `forecast_data` has no unique key, so the replacement was driven through a
+wrapper that asserts the delta rather than trusting it.
+
+### The score change
+
+Domain-aggregate, identical call before and after:
+
+| metric | before (the 0916 field) | after (the real 0908 run) | change |
+|---|---|---|---|
+| bias | −0.7117 | −0.1387 | 80% smaller |
+| MAE | 2.2386 | **0.6595** | **−70.5%** |
+| RMSE | 2.4754 | **0.7838** | **−68.3%** |
+| CRPS | 1.7322 | **0.5093** | **−70.6%** |
+
+**Every AIFS wind figure written before 2026-09-28 is on the wrong forecast**,
+including anything in `METRICS_AUDIT.md`. Precipitation is unaffected.
+
+**One thing not to misread:** §12 used wind as the *control* that proved the
+4-hour shift was IMERG's alone, and that conclusion still stands — it concerned
+the observation side, and wind truth genuinely did not move. The forecast side
+was wrong the whole time. Two different facts about the same variable.
+
+### `--verify` divides accumulations only
+
+Wind is stored as exported (`unscaled` in the registry), so applying the 6 h
+divisor to it made every value differ while the cell set matched exactly. That
+is indistinguishable at a glance from the defect above, and it appeared the
+first time wind was verified against a source that was in fact correct. Fixed
+and pinned by tests.
+
+## 19. Three defects the wind work exposed, NOT yet fixed — 2026-09-28
+
+Found while verifying §18. All three are live.
+
+### The map has never respected the run selector
+
+**`get_model_run_id` is `ORDER BY initialization_time DESC LIMIT 1`** — a third
+inline copy of the "silent latest run" pattern the `init_time` migration exists
+to remove, and one that survived both earlier removal passes (§8 notes it took
+two). Five endpoints call it:
+
+| endpoint | honours the selected run? |
+|---|---|
+| `/api/spatial-metric` | yes |
+| `/api/forecast-data` (the map) | **no** — byte-identical for 00Z and 06Z |
+| `/api/point-timeseries` | **no** |
+| `/api/wind-data` | **no** |
+| `/api/spread-skill` | unconfirmed (400 on the params tried) |
+
+Proven, not inferred: a request naming **00Z** returns **06Z** data — 4,426 of
+4,426 cells identical to 06Z, **0** identical to 00Z. So the Visualization map
+has been showing the newest run whatever the selector said, which makes the
+selector *misleading* rather than merely incomplete.
+
+Worse for wind: `/api/wind-data` resolves to the newest run, and for both AIFS
+and UKMO the newest run holds no wind. **UKMO's wind map has been blank since
+UKMO 06Z was loaded on 2026-09-24**, and AIFS's went blank when AIFS 06Z was
+loaded on 2026-09-28. GEFS still renders only because it has one run. This also
+means §18's replacement cannot be confirmed on the map until this is fixed.
+
+### GEFS wind is duplicated in the raw tables
+
+Every GEFS wind row exists **twice** in `forecast_data` and
+`ensemble_statistics` — 1,681 cells, 3,362 rows, all pairs holding *identical*
+values (max within-cell gap 0). The no-unique-key hazard, already realised.
+
+The **regridded tables are clean** (ratio 1.000), because the regrid keys by
+member and cell and overwrote with the same value, so scores are unaffected. But
+`/api/wind-data` self-joins `ensemble_statistics` u against v, which squares it:
+it returns **6,724 points for 1,681 cells, a ratio of 4.00**.
+
+The fix is a unique index on `forecast_data` and `ensemble_statistics` plus a
+dedupe — the same treatment `5d45a29` gave the regridded tables, and the thing
+that would have prevented this.
+
+### `/api/spatial-metric` ignores the lead time it documents
+
+Its docstring says `hour (ssr only)`, and **no hour parameter is read anywhere
+in the endpoint**. Every metric is a lead-time aggregate, and
+`?forecast_hour=24` is silently discarded as an unknown query param. Two figures
+in these records were labelled per-hour on the strength of it and were really
+aggregates; both are corrected in place. Either read the parameter or remove it
+from the docstring.
 
 ## Standing decisions — do not undo these by accident
 

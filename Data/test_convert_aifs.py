@@ -325,3 +325,32 @@ class TestConvertingAFolder:
         assert totals['files'] == 3
         # 3 hours x (2 members + mean + std) x 35 cells
         assert totals['records'] == 3 * 4 * 35
+
+
+class TestTheVerifyDivisorFollowsTheVariable:
+    """`--verify` must divide accumulations only.
+
+    Wind is stored as exported -- the registry records it `unscaled` -- so
+    dividing it by the 6 h emit interval made every value differ while the cell
+    set matched perfectly. That is indistinguishable from bad data at a glance,
+    and it appeared the first time wind was verified against a source that was
+    in fact correct.
+    """
+
+    def test_precipitation_is_an_accumulation(self):
+        assert 'tp' in ca.ACCUMULATED
+
+    @pytest.mark.parametrize('name', ['u10', 'v10'])
+    def test_wind_components_are_not(self, name):
+        assert name not in ca.ACCUMULATED
+
+    def test_convert_file_thresholds_accumulations_only(self, tmp_path):
+        """The same distinction, on the write path: a field of 0.005 survives as
+        wind and is dropped as precipitation."""
+        small = np.full((1, 5, 7), 0.005, dtype=np.float32)
+        wind = write_nc(tmp_path / 'a-6h-enfo-pf_u10.nc', small, name='u10')
+        rain = write_nc(tmp_path / 'b-6h-enfo-pf_tp.nc', small, name='tp')
+        w = ca.convert_file(wind, tmp_path / 'ow', write_stats=False)
+        r = ca.convert_file(rain, tmp_path / 'or', write_stats=False)
+        assert w['a-6h-enfo-pf_u10_member_00.json'] == 35
+        assert r['b-6h-enfo-pf_tp_member_00.json'] == 0

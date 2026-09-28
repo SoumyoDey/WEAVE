@@ -98,18 +98,40 @@ it too — so the conventions above were each established by *perturbing* them a
 confirming the reproduction breaks. That is what makes the 0.01 mm threshold and
 the double rounding findings rather than guesses.
 
-Wind is NOT verified this way
------------------------------
-`wind_u10`/`wind_v10` have the identical file layout and the loaded wind table
-has exactly the shape this script would produce — 61 hours x 50 members x 6,561
-cells = 20,011,050 rows, every cell kept, zeros and negatives included, 3
-decimals. But the *values* do not match: at 2025-09-08 00Z +120h, cell
-(25.0, -85.0), the database holds -5.567 where the source has -4.050, and no
-member index reproduces it. The two variables were extracted minutes apart, so
-staleness does not explain it; the loaded AIFS wind simply has some other
-provenance. Wind conversion here is therefore **structurally right and
-numerically unconfirmed** — usable for new runs, not evidence about the old one.
-The script says so at runtime rather than leaving it to be discovered.
+Wind, and the wrong-run defect it uncovered
+-------------------------------------------
+Wind now reproduces exactly too — all 61 hours of both components, members and
+statistics — but only after the field in the database was **replaced**, because
+what was there had been loaded from the wrong forecast run.
+
+The symptom was that `wind_u10`/`wind_v10` had the identical file layout and the
+stored table had exactly the shape this script produces (61 hours x 50 members x
+6,561 cells = 20,011,050 rows, every cell kept, zeros and negatives included, 3
+decimals) while every *value* differed: at `2025-09-08 00Z` +120h cell
+(25.0, -85.0) the database held -5.567 where the source has -4.050. No member
+index, spatial shift, ensemble mean or ensemble std accounted for it — each was
+tried, and the closest was ~1.8 mean absolute error where a real match is
+~0.0005.
+
+**It was the `2025-09-16` run filed as `2025-09-08`.** Found by matching the
+stored field's mean and standard deviation against every date, cycle and member
+in the tree, then confirmed cell-for-cell against the preserved rows. Since
+observations only cover 2025-09-08, every AIFS wind score had been pairing a
+forecast with truth from eight days *before* it was initialised. Replacing it
+moved domain-aggregate MAE 2.2386 -> 0.6595, RMSE 2.4754 -> 0.7838 and CRPS
+1.7322 -> 0.5093. The superseded rows are kept outside the repo as
+`weave_aifs_wind_prev_20260928.sql.gz`.
+
+**The lesson for this script**: the cell set matching perfectly proved only that
+the *grid* was right. Shape agreement is not provenance, and a field can be a
+real forecast, correctly converted, and still be the wrong forecast. Only
+matching values against a named source settles it, which is what `--verify`
+does.
+
+**`--verify` applies the divisor only to accumulations.** Wind is stored as
+exported — the registry records it `unscaled` — so dividing it by 6 made every
+value differ while the cell set matched exactly, which looks exactly like bad
+data and is not.
 
 Usage
 -----
@@ -375,9 +397,14 @@ def verify(source, model='AIFS', variable='precipitation', init_time=None,
         hour = forecast_hour(path.name)
         values, lats, lons, name = read_field(path)
         threshold = MIN_PRECIP_MM if name in ACCUMULATED else None
+        # **Only accumulations were scaled on the way in.** Wind is stored as
+        # exported — the registry records it `unscaled` — so dividing it here
+        # made every value differ while the cell set matched exactly, which is
+        # what a scaling error looks like and is easy to misread as bad data.
+        effective_divisor = divisor if name in ACCUMULATED else 1.0
 
-        def scaled(records):
-            return {(r['lat'], r['lon']): round(r['value'] / divisor, LEGACY_DECIMALS)
+        def scaled(records, _d=effective_divisor):
+            return {(r['lat'], r['lon']): round(r['value'] / _d, LEGACY_DECIMALS)
                     for r in records}
 
         args = [model, variable, hour] + ([init_time] if init_time else [])
@@ -493,9 +520,9 @@ def main(argv=None):
     if probe:
         _, _, _, name = read_field(probe[0])
         if name not in ACCUMULATED:
-            print(f'NOTE: {name} is not an accumulation. No threshold is applied, and '
-                  f'this path is NOT verified against the loaded run — the stored AIFS '
-                  f'wind does not match this source (see the module docstring).\n')
+            print(f'NOTE: {name} is not an accumulation, so no threshold is applied and '
+                  f'no divisor belongs downstream — the registry records wind '
+                  f'`unscaled`. Do not run this output through `aifs react.py`.\n')
 
     convert_folder(args.source, args.out, args.threshold, args.decimals,
                    write_stats=not args.no_stats)
