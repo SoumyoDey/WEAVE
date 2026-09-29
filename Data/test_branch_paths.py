@@ -49,11 +49,16 @@ class TestRowsThatGetSkipped:
         filter is the thing worth pinning. Written after a first version of this
         test fed NULLs through a fake cursor, which ignores WHERE clauses, and
         "found" a crash the database makes impossible.
+
+        Uses `mae`, not `ssr_agg`. On 2026-09-29 the three spread metrics moved
+        off this query onto the member grid (`NEXT_STEPS.md` §21), so `ssr_agg`
+        no longer reads `regridded_forecast_ens` at all and would pin nothing
+        here. The metrics that still read it are the ones this guards.
         """
         cur = fake_db({**RUN,
                        "FROM regridded_forecast_ens": [fcst(6), fcst(12)],
                        "FROM regridded_observation": [obs(6), obs(12)]})
-        r = client.get(f"/api/spatial-metric?metric=ssr_agg&model=AIFS"
+        r = client.get(f"/api/spatial-metric?metric=mae&model=AIFS"
                        f"&variable=precipitation&{BOX_QS}")
         assert r.status_code == 200
         reads = [sql for sql, _ in cur.executed if "regridded_forecast_ens" in sql]
@@ -296,3 +301,63 @@ class TestSpatialAgreementCache:
         second = client.post("/api/compare/spatial-agreement", json=body)
         assert first.status_code == second.status_code
         assert first.get_json() == second.get_json()
+
+
+class TestTheSpreadMetricsReadTheMemberGrid:
+    """`crps`, `ssr_agg` and `brier` come off the MEMBER table, not the aggregate.
+
+    They were on the aggregate path until 2026-09-29, where
+    `_rebin_to_common_window` returns `std = None` for any record it has to
+    combine — the spread of a mean is not the mean of spreads. UKMO is hourly,
+    so every record gets combined, so all three maps were **empty for UKMO at
+    every lead time and every run**: 0 cells against AIFS's 1,559 and GEFS's
+    1,435, while `ssr` and `correlation` (already on the member grid) returned
+    1,461 and 1,520 for the same model.
+
+    `_member_cases_by_cell` was built for exactly this and these three were
+    missed. Pinned by which table they read, because the symptom was an empty
+    map rather than an error and nothing else would notice.
+    """
+
+    ROUTES = {
+        # Must precede the general observation route: `_observation_record_end`
+        # runs `SELECT MAX(obs_time) AS t FROM regridded_observation`, and the
+        # first matching route wins.
+        "MAX(obs_time) AS t": [{"t": INIT + timedelta(hours=48)}],
+        **RUN,
+        "FROM regridded_forecast_member": [
+            {"forecast_hour": 6, "latitude": 36.0, "longitude": -75.5,
+             "ensemble_member": m, "value": 1.0 + 0.1 * m} for m in range(4)],
+        "FROM regridded_observation": [obs(6)],
+    }
+
+    @pytest.mark.parametrize("metric", ["crps", "ssr_agg", "brier"])
+    def test_it_queries_the_member_table(self, client, fake_db, metric):
+        cur = fake_db(dict(self.ROUTES))
+        r = client.get(f"/api/spatial-metric?metric={metric}&model=UKMO"
+                       f"&variable=precipitation&{BOX_QS}")
+        assert r.status_code == 200, r.get_json()
+        assert any("regridded_forecast_member" in sql for sql, _ in cur.executed), \
+            f"{metric} did not read the member grid"
+
+    @pytest.mark.parametrize("metric", ["crps", "ssr_agg", "brier"])
+    def test_it_does_not_fall_back_to_the_aggregate_spread(self, client, fake_db, metric):
+        """The aggregate table is where the spread is unrecoverable. Reading it
+        at all would put the hourly-model hole back."""
+        cur = fake_db(dict(self.ROUTES))
+        client.get(f"/api/spatial-metric?metric={metric}&model=UKMO"
+                   f"&variable=precipitation&{BOX_QS}")
+        offenders = [sql for sql, _ in cur.executed
+                     if "FROM regridded_forecast_ens" in sql]
+        assert not offenders, offenders
+
+    def test_the_metrics_that_do_not_need_spread_stay_on_the_aggregate(self, client, fake_db):
+        """Only the spread metrics moved. `mae` reading the member grid would be
+        a needless cost: members x cells x hours to compute a mean the aggregate
+        table already stores."""
+        cur = fake_db({**RUN,
+                       "FROM regridded_forecast_ens": [fcst(6)],
+                       "FROM regridded_observation": [obs(6)]})
+        client.get(f"/api/spatial-metric?metric=mae&model=AIFS"
+                   f"&variable=precipitation&{BOX_QS}")
+        assert any("FROM regridded_forecast_ens" in sql for sql, _ in cur.executed)

@@ -71,20 +71,43 @@ TARGETS = [
     ('ensemble_statistics', 'stat_id',
      ('run_id', 'variable_id', 'forecast_hour', 'latitude', 'longitude'),
      'uq_ensemble_statistics_natural_key'),
+    # The observation tables, added 2026-09-29 before extending the record.
+    # One reading per (source, time, cell): `observation_data` carries
+    # precipitation and the wind components in the SAME row per source, so the
+    # variable is not part of its key, whereas the regridded table is one row
+    # per variable.
+    ('observation_data', 'obs_id',
+     ('source', 'obs_time', 'latitude', 'longitude'),
+     'uq_observation_data_natural_key'),
+    ('regridded_observation', 'id',
+     ('source', 'variable_name', 'obs_time', 'latitude', 'longitude'),
+     'uq_regridded_observation_natural_key'),
 ]
 
 # Columns that must agree before duplicates are collapsed.
 PAYLOAD = {'forecast_data': ('value',),
-           'ensemble_statistics': ('mean_value', 'std_dev')}
+           'ensemble_statistics': ('mean_value', 'std_dev'),
+           'observation_data': ('precipitation', 'wind_u', 'wind_v', 'wind_speed'),
+           'regridded_observation': ('value', 'source_points')}
+
+# Tables keyed on a run, which the per-(run, variable) scoping below assumes.
+# The observation tables have neither column, so they are scanned whole — which
+# is affordable because they are small next to `forecast_data`.
+RUN_SCOPED = {'forecast_data', 'ensemble_statistics'}
 
 
 def duplicate_groups(cur, table, natural_key):
     """[(run_id, variable_id, groups, rows)] for pairs that hold duplicates.
 
     Scoped per (run_id, variable_id) so each aggregation stays index-covered
-    rather than sorting the whole table.
+    rather than sorting the whole table. The observation tables have no such
+    columns, so they are checked in one pass with `(None, None)` standing in.
     """
     keys = ', '.join(natural_key)
+    if table not in RUN_SCOPED:
+        cur.execute(f'SELECT count(*), count(DISTINCT ({keys})) FROM {table}')
+        rows, distinct = cur.fetchone()
+        return [(None, None, rows - distinct, rows)] if rows != distinct else []
     cur.execute(f'SELECT DISTINCT run_id, variable_id FROM {table} ORDER BY 1, 2')
     found = []
     for run_id, variable_id in cur.fetchall():
@@ -96,6 +119,18 @@ def duplicate_groups(cur, table, natural_key):
         if rows != distinct:
             found.append((run_id, variable_id, rows - distinct, rows))
     return found
+
+
+def _scope(table, run_id, variable_id):
+    """(WHERE clause, params) narrowing to one (run, variable), or the whole table.
+
+    The forecast tables are narrowed so each aggregation stays index-covered
+    instead of sorting 146M rows; the observation tables have no run columns and
+    are small enough to scan whole.
+    """
+    if table in RUN_SCOPED:
+        return 'WHERE run_id = %s AND variable_id = %s', (run_id, variable_id)
+    return '', ()
 
 
 def copies_disagree(cur, table, natural_key, run_id, variable_id):
@@ -111,31 +146,33 @@ def copies_disagree(cur, table, natural_key, run_id, variable_id):
     keys = ', '.join(natural_key)
     checks = ' + '.join(
         f"(count(DISTINCT coalesce({c}::text, '<null>')) - 1)" for c in PAYLOAD[table])
+    scope, params = _scope(table, run_id, variable_id)
     cur.execute(f"""
         SELECT coalesce(sum(extra), 0) FROM (
             SELECT GREATEST({checks}, 0) AS extra
             FROM {table}
-            WHERE run_id = %s AND variable_id = %s
+            {scope}
             GROUP BY {keys}
             HAVING count(*) > 1
         ) per_group
-    """, (run_id, variable_id))
+    """, params)
     return int(cur.fetchone()[0])
 
 
 def dedupe(cur, table, surrogate, natural_key, run_id, variable_id):
     """Delete all but the lowest surrogate id in each group. Returns the count."""
     keys = ', '.join(natural_key)
+    scope, params = _scope(table, run_id, variable_id)
     cur.execute(f"""
         DELETE FROM {table}
         WHERE {surrogate} IN (
             SELECT {surrogate} FROM (
                 SELECT {surrogate},
                        row_number() OVER (PARTITION BY {keys} ORDER BY {surrogate}) AS rn
-                FROM {table} WHERE run_id = %s AND variable_id = %s
+                FROM {table} {scope}
             ) ranked WHERE rn > 1
         )
-    """, (run_id, variable_id))
+    """, params)
     return cur.rowcount
 
 

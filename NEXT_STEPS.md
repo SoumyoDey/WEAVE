@@ -2314,6 +2314,62 @@ meaning "already a rate, divisor 1 always" — the vocabulary currently offers
 only `scaled` and `unscaled`, and neither is true here. That is a decision about
 the registry's vocabulary, so it is recorded rather than taken.
 
+## 21. Three spread metrics never worked for an hourly model — FIXED 2026-09-29
+
+`crps`, `ssr_agg` and `brier` returned **0 cells for UKMO at every lead time and
+every run**, while `ssr` and `correlation` returned 1,461 and 1,520 for the same
+model and AIFS and GEFS were populated throughout. Found while building the
+first three-model comparison, because UKMO's CRPS column was empty.
+
+**The cause.** Those three used `_fetch_fcst_obs_pairs_spatial`, the aggregate
+path, where `_rebin_to_common_window` returns `std = None` for any record it has
+to combine — the spread of a mean is not the mean of spreads. UKMO is hourly, so
+*every* record gets combined onto the 6-hour window, so the spread was never
+recoverable and every spread metric skipped every record. AIFS passes through
+untouched (its records already span 6 h); GEFS survives on its `h%6==0` records.
+
+**`_member_cases_by_cell` was built for exactly this.** Its docstring says so:
+"an hourly model had no spread there at all and every spread metric came back
+empty. Re-binning each MEMBER first and pooling afterwards gives the exact
+spread of the 6 h means." It was wired into the `ssr` map, the `correlation`
+map, and the two point endpoints. **These three were missed** — an incomplete
+migration rather than a wrong claim, since the record only ever said "both
+spread-dependent maps", and `ssr` and `correlation` are those two.
+
+**The fix is an adapter, not three rewrites.** `_member_pairs_by_cell` returns
+the aggregate path's exact shape — `{(lat, lon): [(hour, mean, std, obs)]}` —
+sourced from the member grid, so the metric arithmetic is untouched and only
+where `std` comes from changes.
+
+| metric | AIFS cells | GEFS | UKMO |
+|---|---|---|---|
+| `crps` | **1681** (was 1559) | 1435 (unchanged) | **1521** (was **0**) |
+| `ssr_agg` | **1582** (was 1438) | 1321 (unchanged) | **1519** (was **0**) |
+| `brier` | **1681** (was 1559) | 1435 (unchanged) | **1521** (was **0**) |
+
+**AIFS gained cells as well**, and that is the second half of the defect: the
+aggregate path reconstructs a cumulative model's increment spread as
+sqrt(sigma(h)^2 - sigma(h-p)^2), which **comes out negative for ~13% of AIFS
+records** and those were silently dropped. GEFS's coverage is unchanged but its
+*values* move, because the spread is now exact rather than approximated (31%
+high where the approximation resolved at all).
+
+**Every AIFS, GEFS and UKMO figure for these three metrics changes**, including
+`METRICS_AUDIT.md` §0's point CRPS column.
+
+### Still on the aggregate path, deliberately and not
+
+`mae`, `bias`, `rmse` and the categorical metrics stay there on purpose: they
+never read `std`, and the member grid is members x cells x hours to compute a
+mean the aggregate table already stores.
+
+**But `COMPARE_REGION_METRIC_FNS` has the same hole.** The Comparison tab's
+region mode maps `ssr_agg`, `crps` and `brier` to the same three functions and
+builds its pairs from `_fetch_fcst_obs_pairs_spatial` once for every metric, so
+**UKMO's spread metrics are still empty in region mode**. Fixing it means
+sourcing pairs per metric rather than once, since swapping them wholesale would
+move `mae`/`bias`/`csi` too. Left as its own change.
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in

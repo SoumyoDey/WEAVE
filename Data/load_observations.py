@@ -182,13 +182,22 @@ def _clip(lats, lons, bbox):
     return ai, oi
 
 
-def era5_rows(path, bbox=None):
+def era5_rows(path, bbox=None, start=None, end=None):
     """Rows for one ERA5 netCDF holding `u10` and `v10`.
 
     `wind_speed` is computed per point with `np.hypot`, which is the stored
     convention (see the module docstring). Values are read as float32 -- what
     ERA5 ships -- and widened to Python floats, so a float8 column round-trips
     them exactly and `--verify` can demand equality rather than a tolerance.
+
+    `start`/`end` (inclusive dates) restrict which timesteps are emitted.
+    **Needed because the file is a whole period, not a day.**
+    `subsets/conus_east.nc` holds 4,416 hourly steps covering 2025-07-01 to
+    2025-12-31, so an unrestricted load inserts 28.98M rows where 19 days needs
+    2.98M -- and, since `observation_data` gained a natural key on 2026-09-29,
+    it would also collide with the 24 hours of 09-08 already stored and abort
+    the whole COPY. Filtering here rather than after reading keeps the row list
+    from being built at all.
     """
     import xarray as xr
 
@@ -203,6 +212,21 @@ def era5_rows(path, bbox=None):
 
         u_all = ds['u10'].values
         v_all = ds['v10'].values
+
+    if start is not None or end is not None:
+        stamps = np.array([np.datetime64(t, 's').astype(datetime).date()
+                           for t in times])
+        keep = np.ones(stamps.shape, dtype=bool)
+        if start is not None:
+            keep &= stamps >= start
+        if end is not None:
+            keep &= stamps <= end
+        if not keep.any():
+            raise SystemExit(
+                f'{path}: no timesteps between {start} and {end}; the file covers '
+                f'{stamps.min()} to {stamps.max()}')
+        times, u_all, v_all = times[keep], u_all[keep], v_all[keep]
+        print(f'ERA5 window {start}..{end}: {keep.sum()} of {keep.size} timesteps')
 
     ai, oi = _clip(lats, np.array([_to_negative_lon(float(x)) for x in lons]), bbox)
     lat_keys = [_coord(x) for x in lats[ai]]
@@ -417,6 +441,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--era5', help='netCDF holding u10 and v10')
+    parser.add_argument('--era5-start', help='first date to load (YYYY-MM-DD), '
+                                             'inclusive; ERA5 files hold months')
+    parser.add_argument('--era5-end', help='last date to load (YYYY-MM-DD), inclusive')
     parser.add_argument('--imerg', help='glob for half-hourly IMERG V07 granules')
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--verify', action='store_true',
@@ -446,7 +473,12 @@ def main():
     batches = []
     if args.era5:
         print(f"ERA5  {args.era5}")
-        batches.append((ERA5_SOURCE, era5_rows(args.era5, bbox)))
+        era5_start = (datetime.strptime(args.era5_start, '%Y-%m-%d').date()
+                      if args.era5_start else None)
+        era5_end = (datetime.strptime(args.era5_end, '%Y-%m-%d').date()
+                    if args.era5_end else None)
+        batches.append((ERA5_SOURCE,
+                        era5_rows(args.era5, bbox, era5_start, era5_end)))
     if args.imerg:
         paths = glob.glob(args.imerg)
         if not paths:

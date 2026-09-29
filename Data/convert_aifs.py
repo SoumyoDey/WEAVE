@@ -147,6 +147,7 @@ import argparse
 import json
 import re
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -179,6 +180,12 @@ HOUR_IN_NAME = re.compile(r'-(\d+)h-')
 # 3.40282346638529e+38) rather than a reading.
 SENTINEL = 1e30
 
+# For the `time` scalar, which holds the initialisation.
+EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+# The init time AIFS filenames embed: `conus_east_20250916000000-6h-...`.
+INIT_IN_NAME = re.compile(r'_(\d{14})-')
+
 # Variables that are accumulations, and so get the threshold. Wind is
 # instantaneous: a 0 m/s component is a real measurement and a negative one is
 # half the domain, so thresholding it would delete data.
@@ -193,6 +200,38 @@ def forecast_hour(filename):
     """Lead time from the filename, or None if it does not carry one."""
     match = HOUR_IN_NAME.search(filename)
     return int(match.group(1)) if match else None
+
+
+def init_time_of(path):
+    """The initialisation time from the file's own `time` scalar, or None.
+
+    **Added 2026-09-29, after the fact.** The AIFS wind stored at `2025-09-08`
+    was the `2025-09-16` run (`NEXT_STEPS.md` §18, §20), and `time` said so in
+    every one of those files. Nothing read it. `convert_gefs.py` and
+    `convert_ukmo.py` were written with this check from the start; this brings
+    the first converter up to the same standard, so all three refuse to convert
+    a directory whose files disagree and print the run they found.
+    """
+    try:
+        import netCDF4 as nc
+    except ImportError:                                # pragma: no cover
+        return None
+    with nc.Dataset(path, 'r') as ds:
+        if 'time' not in ds.variables:
+            return None
+        return EPOCH + timedelta(seconds=float(np.asarray(ds.variables['time'][:])))
+
+
+def init_time_in_name(path):
+    """The 14-digit stamp AIFS filenames carry, or None.
+
+    Cross-checked against the file's `time` rather than trusted: the whole
+    point is that a name and its contents can disagree.
+    """
+    match = INIT_IN_NAME.search(Path(path).name)
+    if not match:
+        return None
+    return datetime.strptime(match.group(1), '%Y%m%d%H%M%S').replace(tzinfo=timezone.utc)
 
 
 def read_field(path):
@@ -344,7 +383,19 @@ def convert_folder(source, out_dir, threshold=None, decimals=VALUE_DECIMALS,
 
     print(f'{len(files)} file(s) in {source}')
     totals = {'files': 0, 'records': 0, 'empty': []}
+    inits, named = {}, {}
     for path in files:
+        stamp = init_time_of(path)
+        if stamp is not None:
+            inits.setdefault(stamp, []).append(path.name)
+        in_name = init_time_in_name(path)
+        if in_name is not None and stamp is not None and in_name != stamp:
+            raise ConversionError(
+                f'{path.name}: the filename says {in_name:%Y-%m-%d %H:%MZ} and the '
+                f'file says {stamp:%Y-%m-%d %H:%MZ}. This is the §18 defect, caught '
+                f'at the source instead of three weeks later.')
+        if in_name is not None:
+            named.setdefault(in_name, []).append(path.name)
         written = convert_file(path, out_dir, threshold, decimals, write_stats)
         totals['files'] += 1
         totals['records'] += sum(written.values())
@@ -354,8 +405,19 @@ def convert_folder(source, out_dir, threshold=None, decimals=VALUE_DECIMALS,
         print(f'  +{forecast_hour(path.name):>4}h  {len(written):3d} files, '
               f'{sum(written.values()):>8,} records', flush=True)
 
+    if len(inits) > 1:
+        raise ConversionError(
+            'this directory holds more than one initialisation time: '
+            + '; '.join(f'{t:%Y-%m-%d %H:%MZ} ({len(v)} file(s))'
+                        for t, v in inits.items()))
+
     print(f'\nwrote {totals["records"]:,} records from {totals["files"]} file(s) '
           f'to {out_dir}')
+    if inits:
+        (init,) = inits
+        print(f'\n*** INITIALISATION TIME, READ FROM THE FILES: '
+              f'{init:%Y-%m-%d %H:%M}Z ***')
+        print(f'    Load with init_time="{init:%Y-%m-%d %H:%M:%S}".')
     if totals['empty']:
         print(f'hours with no member records: {totals["empty"]} — expected at hour 0 '
               f'for a cumulative field, since nothing has accumulated yet')

@@ -1205,6 +1205,54 @@ def _member_cases_by_cell(cursor, model_name, variable, init_time,
     return out
 
 
+def _member_pairs_by_cell(cursor, model_name, variable, init_time,
+                          min_lat, max_lat, min_lon, max_lon,
+                          hour_min=0, hour_max=168):
+    """`_fetch_fcst_obs_pairs_spatial`'s shape, but with spread from the MEMBERS.
+
+    Returns {(lat, lon): [(hour, mean_rate, std_rate, obs_rate), ...]}, which is
+    exactly what the pairs-based metric functions already consume — so the
+    metric arithmetic is untouched and only the source of `std_rate` changes.
+
+    **Why this exists.** The aggregate path re-bins records onto the common
+    6-hour window, and `_rebin_to_common_window` returns `std = None` for any
+    record it has to combine, because the spread of a mean is not the mean of
+    spreads. UKMO is hourly, so *every* record gets combined, so every
+    spread-dependent metric skipped every record and the CRPS, aggregate-SSR and
+    Brier maps came back **empty for UKMO at every lead time and every run** —
+    an empty field rather than a stated reason.
+
+    `_member_cases_by_cell` was built to fix precisely this (see its docstring)
+    and was wired into the `ssr` and `correlation` maps and the two point
+    endpoints. These three were left behind. Measured 2026-09-29: `ssr` and
+    `correlation` returned 1,461 and 1,520 cells for UKMO while `crps`,
+    `ssr_agg` and `brier` returned 0, with AIFS and GEFS populated throughout.
+
+    It also makes AIFS's spread **exact** rather than approximated. The
+    aggregate path reconstructs a cumulative model's increment spread as
+    sqrt(sigma(h)^2 - sigma(h-p)^2), which assumes independent increments, comes
+    out negative for ~13% of AIFS records and 31% high where it does resolve.
+    So AIFS and GEFS numbers move here too, in the direction the member-grid
+    migration already established for `ssr`.
+    """
+    hours = None
+    if hour_min is not None and hour_max is not None:
+        hours = set(range(int(hour_min), int(hour_max) + 1))
+    cases = _member_cases_by_cell(cursor, model_name, variable, init_time,
+                                  min_lat, max_lat, min_lon, max_lon, hours=hours)
+    pairs = {}
+    for cell, by_hour in cases.items():
+        entries = []
+        for hour, case in sorted(by_hour.items()):
+            # `error` is the signed forecast-minus-observation the aggregate
+            # path's consumers reconstruct as (mean_rate - obs_rate); carrying
+            # `obs` keeps that identity true.
+            entries.append((hour, case['ens_mean'], case['spread'], case['obs']))
+        if entries:
+            pairs[cell] = entries
+    return pairs
+
+
 def _compute_ssr_points(cursor, model_name, variable, init_time, hour,
                         min_lat, max_lat, min_lon, max_lon):
     """SSR per cell at one lead time, from the member grid.
@@ -1604,10 +1652,15 @@ def _dispatch_rmse(cursor, run_id, variable_id, init_time, args,
 
 def _dispatch_crps(cursor, run_id, variable_id, init_time, args,
                    min_lat, max_lat, min_lon, max_lon, obs_col):
+    # Member-derived pairs: the aggregate path cannot produce a spread for an
+    # hourly model, so this map was empty for UKMO. See _member_pairs_by_cell.
+    model = args.get('model', 'AIFS')
+    variable = args.get('variable', 'precipitation')
+    lo, hi = int(args.get('hour_min', 0)), int(args.get('hour_max', 168))
     return _compute_crps_points_rf(
-        cursor, args.get('model', 'AIFS'), args.get('variable', 'precipitation'),
-        min_lat, max_lat, min_lon, max_lon,
-        int(args.get('hour_min', 0)), int(args.get('hour_max', 168)),
+        cursor, model, variable, min_lat, max_lat, min_lon, max_lon, lo, hi,
+        pairs=_member_pairs_by_cell(cursor, model, variable, init_time,
+                                    min_lat, max_lat, min_lon, max_lon, lo, hi),
     ), {}
 
 def _dispatch_csi(cursor, run_id, variable_id, init_time, args,
@@ -1643,11 +1696,14 @@ def _dispatch_far(cursor, run_id, variable_id, init_time, args,
 def _dispatch_brier(cursor, run_id, variable_id, init_time, args,
                     min_lat, max_lat, min_lon, max_lon, obs_col):
     thr = _resolve_threshold_rate(args)
+    model = args.get('model', 'AIFS')
+    variable = args.get('variable', 'precipitation')
+    lo, hi = int(args.get('hour_min', 0)), int(args.get('hour_max', 168))
     return _compute_brier_points_rf(
-        cursor, args.get('model', 'AIFS'), args.get('variable', 'precipitation'),
-        min_lat, max_lat, min_lon, max_lon,
-        int(args.get('hour_min', 0)), int(args.get('hour_max', 168)),
+        cursor, model, variable, min_lat, max_lat, min_lon, max_lon, lo, hi,
         threshold_rate=thr,
+        pairs=_member_pairs_by_cell(cursor, model, variable, init_time,
+                                    min_lat, max_lat, min_lon, max_lon, lo, hi),
     ), {}
 
 
@@ -1688,10 +1744,13 @@ def _compute_ssr_agg_points_rf(cursor, model_name, variable,
 
 def _dispatch_ssr_agg(cursor, run_id, variable_id, init_time, args,
                       min_lat, max_lat, min_lon, max_lon, obs_col):
+    model = args.get('model', 'AIFS')
+    variable = args.get('variable', 'precipitation')
+    lo, hi = int(args.get('hour_min', 0)), int(args.get('hour_max', 168))
     return _compute_ssr_agg_points_rf(
-        cursor, args.get('model', 'AIFS'), args.get('variable', 'precipitation'),
-        min_lat, max_lat, min_lon, max_lon,
-        int(args.get('hour_min', 0)), int(args.get('hour_max', 168)),
+        cursor, model, variable, min_lat, max_lat, min_lon, max_lon, lo, hi,
+        pairs=_member_pairs_by_cell(cursor, model, variable, init_time,
+                                    min_lat, max_lat, min_lon, max_lon, lo, hi),
     ), {}
 
 
