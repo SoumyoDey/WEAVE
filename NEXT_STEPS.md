@@ -22,9 +22,11 @@ in this repository.
   wind score paired a forecast with truth from eight days before it was
   initialised. Replaced from the HPC and now reproducible: MAE fell 70.5%.
   **Every AIFS wind figure written before this date is on the wrong forecast.**
-  Verifying it exposed **three further defects** (§19). The worst — that
-  `/api/forecast-data`, the map, never respected the run selector — is **fixed**;
-  the GEFS wind duplication and `/api/spatial-metric`'s unread `hour` remain.
+  Verifying it exposed **three further defects** (§19). Two are fixed: the map
+  never respected the run selector, and GEFS wind was duplicated in the raw
+  tables (now deduplicated, with the unique keys those tables always lacked).
+  `/api/spatial-metric` documents an `hour` parameter it never reads — still
+  live.
 - **2026-09-28 — AIFS 06Z is loaded and the run is multi-model** (§17), using
   the converter in §16. Two defects fell out, both needing two runs whose
   *model lists differ*: `_run_pairs_sql` was discarding the `init_time` callers
@@ -201,8 +203,8 @@ In priority order. Nothing here is half-done.
    not code: generate the password hash and point the hostname at the box. The
    Caddyfile is validated (Caddy v2.11.4, "Valid configuration"). **The host
    decision is also the data decision** — a fresh box starts with an empty
-   PostgreSQL and the database is **52 GB** (re-measured 2026-09-28 after the
-   AIFS wind replacement, §18; ~7 GB of that is reclaimable dead tuples) — see §10.
+   PostgreSQL and the database is **58 GB** (re-measured 2026-09-28 after the
+   raw-table unique keys, §19) — see §10.
 1. **Nothing is blocked on a person any more.** PR #2 is merged (§1). What is
    left is either work, a decision that is yours, or blocked on data that is not
    in this repository — and each says which below.
@@ -1199,13 +1201,13 @@ What is actually in the database, as of 2026-09-21:
 
 | table | size |
 |---|---|
-| `forecast_data` | 32 GB |
+| `forecast_data` | 38 GB |
 | `regridded_forecast_member` | 18 GB |
-| `ensemble_statistics` | 1117 MB |
+| `ensemble_statistics` | 1375 MB |
 | `observation_data` | 499 MB |
 | `regridded_forecast_ens` | 548 MB |
 | `regridded_observation` | 33 MB |
-| **whole database** | **52 GB** |
+| **whole database** | **58 GB** |
 
 Re-measured 2026-09-28 after the AIFS 06Z load. The progression is the phase 5
 argument written out: 36 GB on 2026-09-21 → 38 GB when the unique indexes that
@@ -1214,7 +1216,12 @@ model and 36 hours for ~1 GB (§14) → 45 GB once AIFS 06Z landed, one model an
 360 hours for ~6 GB (§17) → **52 GB** after the AIFS wind replacement (§18).
 Ten single-model runs is 60 GB on top of what is here.
 
-**That last 7 GB is mostly dead tuples, not data.** The replacement deleted 40M
+52 GB → **58 GB** came from the unique keys the raw tables always lacked (§19):
+6.4 GB on `forecast_data`, 258 MB on `ensemble_statistics`. That is the price of
+making a double load impossible, against 10.9M duplicate rows it has already
+cost once.
+
+**Some of this is dead tuples, not data.** The replacement deleted 40M
 rows and inserted 40M, and `regridded_forecast_member` still carries **6.2M dead
 tuples** with `ensemble_statistics` at 766k. Autovacuum frees that for reuse but
 does not shrink the files; only `VACUUM FULL` does, and it takes an exclusive
@@ -1226,7 +1233,7 @@ Three ways, cheapest first:
 1. **Serve from this machine's existing `weave_weather`.** Nothing moves. The
    truth field here is the corrected UTC one (§12), verified end to end. The
    beta ships as soon as a host can reach this database.
-2. **Dump and restore.** 52 GB, two thirds of it `forecast_data`. Worth asking whether
+2. **Dump and restore.** 58 GB, two thirds of it `forecast_data`. Worth asking whether
    the beta needs that table at all before moving it: the scored endpoints read
    the regridded tables and `regridded_observation`, which together are under
    10 GB.
@@ -2068,7 +2075,8 @@ and pinned by tests.
 
 ## 19. Three defects the wind work exposed — 2026-09-28
 
-Found while verifying §18. **The first is now FIXED; the other two are live.**
+Found while verifying §18. **Two are FIXED; `/api/spatial-metric`'s unread
+`hour` parameter is still live.**
 
 ### The map never respected the run selector — FIXED
 
@@ -2121,20 +2129,65 @@ Returning a run that holds no rows for the requested variable is **correct, not
 a gap**: wind at a precipitation-only run should answer empty rather than
 quietly serve another run's wind.
 
-### GEFS wind is duplicated in the raw tables — STILL LIVE
+### GEFS wind was duplicated in the raw tables — FIXED
 
-Every GEFS wind row exists **twice** in `forecast_data` and
-`ensemble_statistics` — 1,681 cells, 3,362 rows, all pairs holding *identical*
-values (max within-cell gap 0). The no-unique-key hazard, already realised.
+Every GEFS wind row existed **twice** in `forecast_data` and
+`ensemble_statistics`, all pairs holding *identical* values. The no-unique-key
+hazard, already realised — and it had been there long enough that nobody knew.
 
-The **regridded tables are clean** (ratio 1.000), because the regrid keys by
-member and cell and overwrote with the same value, so scores are unaffected. But
-`/api/wind-data` self-joins `ensemble_statistics` u against v, which squares it:
-it returns **6,724 points for 1,681 cells, a ratio of 4.00**.
+`/api/wind-data` self-joins `ensemble_statistics` u against v, which **squared**
+it: 6,724 points for 1,681 cells, a ratio of 4.00. That join is what made a
+silent 2x visible at all.
 
-The fix is a unique index on `forecast_data` and `ensemble_statistics` plus a
-dedupe — the same treatment `5d45a29` gave the regridded tables, and the thing
-that would have prevented this.
+**The regridded tables were clean** (ratio 1.000), so no score was ever wrong.
+That is luck, not design: the regrid keys by member and cell and overwrote with
+an identical value, so two copies that *disagreed* would have been resolved by
+whichever it happened to read last.
+
+**The audit came first, and mattered.** Checking every (model, variable, run)
+pair rather than the one slice that raised the alarm showed the duplication was
+confined to GEFS wind — 5,295,150 duplicate rows per component in
+`forecast_data`, 176,505 in `ensemble_statistics`, and **exactly zero
+everywhere else**. All 5,295,150 groups were exactly two rows with identical
+values (0 differing, 0 with an unexpected count, max within-cell gap 0), so
+collapsing them could not lose information.
+
+**`Data/migrate_raw_unique_keys.py`** deduplicates and adds the constraint.
+Idempotent, `--dry-run`, and it **refuses to collapse any group whose copies
+disagree** — that would be a different defect and picking a winner would hide
+it. Scoped per (run, variable) so a clean database is a no-op rather than a
+rewrite of 146M rows.
+
+| table | deleted | index |
+|---|---|---|
+| `forecast_data` | 10,590,300 | `uq_forecast_data_natural_key`, 6,431 MB in 136 s |
+| `ensemble_statistics` | 353,010 | `uq_ensemble_statistics_natural_key`, 258 MB in 4 s |
+
+Three decisions inside it worth keeping:
+
+- **`NULLS NOT DISTINCT`.** `ensemble_member` is NULL on the deterministic path
+  and PostgreSQL treats NULLs as distinct by default, so a plain unique index
+  would have left exactly half the hole open. Needs PostgreSQL 15+; CI runs
+  `postgres:15` and the dev box 15.18, checked before relying on it.
+- **The existing index could not be reused.** `idx_forecast_data_member_lookup`
+  covers this key *plus `value`*, so a unique constraint there would reject
+  exact duplicates while still permitting two rows with the same key and
+  **contradictory** values — the worse case.
+- **It went into `schema.sql`**, so a fresh install and the fixture both get it.
+  `idx_forecast_data_member_lookup` exists in production and in no DDL file,
+  which is how drift like this starts.
+
+**Verified.** Counts exactly halved; every statistic of the surviving field
+unchanged (n 3,362 → 1,681 with identical mean, std, min and max); a duplicate
+insert is now refused by name; `/api/wind-data` is ratio **1.00** for all three
+models. The index building at all re-proves the dedupe was total, since a unique
+index cannot be created over duplicate data. Nine tests sit beside the
+regridded-table ones in `test_regrid_idempotency.py`; four fail if the index is
+dropped from `schema.sql`.
+
+**Afterwards:** `VACUUM (ANALYZE)` on both tables, which matters beyond space —
+`/api/health` reports `reltuples`, and deleting 10.9M rows left that estimate
+stale. `forecast_data` is now 135,592,767 rows, down from 146,183,067.
 
 ### `/api/spatial-metric` ignores the lead time it documents — STILL LIVE
 

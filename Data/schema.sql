@@ -46,6 +46,24 @@ CREATE INDEX idx_forecast_data_lat_lon ON forecast_data(latitude, longitude);
 CREATE INDEX idx_forecast_data_run_var_hour ON forecast_data(run_id, variable_id, forecast_hour);
 CREATE INDEX idx_forecast_data_run_var_hour_member ON forecast_data(run_id, variable_id, forecast_hour, ensemble_member);
 
+-- One reading per (run, variable, hour, member, cell). The loaders write with
+-- plain INSERTs and there was nothing to stop a second pass appending a whole
+-- second copy -- which happened: GEFS wind was loaded twice and sat at 2x for
+-- months, in the raw tables only. `/api/wind-data` self-joins the statistics
+-- table u against v and turned that into 4.00x.
+--
+-- `idx_forecast_data_run_var_hour_member` looks similar and is NOT a substitute:
+-- it is not unique and omits the cell. `idx_forecast_data_member_lookup` (live
+-- only) covers this key plus `value`, so a unique constraint there would still
+-- allow two rows with the same key and contradictory values.
+--
+-- NULLS NOT DISTINCT because `ensemble_member` is NULL for the deterministic
+-- path; by default PostgreSQL treats NULLs as distinct and those rows would
+-- still be duplicable. Needs PostgreSQL 15+, which CI and the dev box both run.
+CREATE UNIQUE INDEX uq_forecast_data_natural_key ON forecast_data
+    (run_id, variable_id, forecast_hour, ensemble_member, latitude, longitude)
+    NULLS NOT DISTINCT;
+
 -- 5. Precomputed ensemble statistics table
 CREATE TABLE ensemble_statistics (
     stat_id BIGSERIAL PRIMARY KEY,
@@ -67,6 +85,13 @@ CREATE TABLE ensemble_statistics (
 -- Create indexes
 CREATE INDEX idx_ensemble_stats_lat_lon ON ensemble_statistics(latitude, longitude);
 CREATE INDEX idx_ensemble_stats_run_var_hour ON ensemble_statistics(run_id, variable_id, forecast_hour);
+
+-- One statistics row per (run, variable, hour, cell); see the note on
+-- forecast_data above. This table is the one that made the duplication visible,
+-- because /api/wind-data joins it to itself.
+CREATE UNIQUE INDEX uq_ensemble_statistics_natural_key ON ensemble_statistics
+    (run_id, variable_id, forecast_hour, latitude, longitude)
+    NULLS NOT DISTINCT;
 
 -- 6. Point observations (sparse gauge/station obs). This WAS the truth source
 --    for the SSR and correlation metrics, joined to ensemble_statistics by

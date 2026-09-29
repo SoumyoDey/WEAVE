@@ -148,3 +148,107 @@ class TestClearSliceScopesItself:
         assert count(target) == 0
         assert count(other) == before_other      # untouched
         conn.rollback()
+
+
+class TestTheRawTablesHaveNaturalKeysToo:
+    """`forecast_data` and `ensemble_statistics` cannot hold the same row twice.
+
+    The regridded tables got `uq_rfm_natural_key`/`uq_rfe_natural_key` in
+    `5d45a29`; the raw tables were left with only a surrogate id, so the loaders'
+    plain INSERTs could append a whole second copy of a run. **That happened** --
+    GEFS wind was loaded twice and sat at 2x in both raw tables, which
+    `/api/wind-data` squared to 4.00x through its u-against-v self-join. The
+    regridded tables absorbed it by luck, not design: the regrid keys by member
+    and cell and overwrote with an identical value, so two copies that
+    *disagreed* would have been resolved by whichever it read last.
+
+    `migrate_raw_unique_keys.py` deduplicated and added the indexes;
+    `schema.sql` carries them, so these run against the fixture and fail if
+    either is removed from the DDL.
+    """
+
+    @pytest.mark.parametrize('table,index', [
+        ('forecast_data', 'uq_forecast_data_natural_key'),
+        ('ensemble_statistics', 'uq_ensemble_statistics_natural_key'),
+    ])
+    def test_the_unique_index_exists(self, conn, table, index):
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT idx.indisunique
+                FROM pg_index idx
+                JOIN pg_class i ON i.oid = idx.indexrelid
+                WHERE i.relname = %s
+            """, (index,))
+            row = cur.fetchone()
+        assert row is not None, f'{index} is missing from {table}'
+        assert row[0] is True, f'{index} exists but is not unique'
+
+    def test_the_forecast_key_includes_the_cell_and_the_member(self):
+        """`idx_forecast_data_run_var_hour_member` looks similar and is not a
+        substitute: not unique, and it omits latitude/longitude, so it would
+        treat every cell of an hour as one row."""
+        with open('schema.sql') as fh:
+            ddl = fh.read()
+        block = ddl.split('uq_forecast_data_natural_key', 1)[1].split(';', 1)[0]
+        for column in ('run_id', 'variable_id', 'forecast_hour',
+                       'ensemble_member', 'latitude', 'longitude'):
+            assert column in block, f'{column} missing from the natural key'
+
+    def test_the_key_treats_nulls_as_equal(self):
+        """`ensemble_member` is NULL on the deterministic path. PostgreSQL
+        treats NULLs as distinct by default, which would leave those rows
+        duplicable and the hole only half closed."""
+        with open('schema.sql') as fh:
+            ddl = fh.read()
+        block = ddl.split('uq_forecast_data_natural_key', 1)[1].split(';', 1)[0]
+        assert 'NULLS NOT DISTINCT' in block
+
+    def test_inserting_the_same_forecast_row_twice_is_refused(self, conn):
+        import psycopg2
+        with conn.cursor() as cur:
+            cur.execute("""SELECT run_id, variable_id, forecast_hour,
+                                  ensemble_member, latitude, longitude, value
+                           FROM forecast_data LIMIT 1""")
+            row = cur.fetchone()
+        assert row is not None, 'fixture seeded no forecast_data rows'
+        with pytest.raises(psycopg2.errors.UniqueViolation):
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO forecast_data
+                        (run_id, variable_id, forecast_hour, ensemble_member,
+                         latitude, longitude, value)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, row)
+        conn.rollback()
+
+    def test_inserting_the_same_statistics_row_twice_is_refused(self, conn):
+        import psycopg2
+        with conn.cursor() as cur:
+            cur.execute("""SELECT run_id, variable_id, forecast_hour,
+                                  latitude, longitude, mean_value
+                           FROM ensemble_statistics LIMIT 1""")
+            row = cur.fetchone()
+        assert row is not None, 'fixture seeded no ensemble_statistics rows'
+        with pytest.raises(psycopg2.errors.UniqueViolation):
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO ensemble_statistics
+                        (run_id, variable_id, forecast_hour, latitude,
+                         longitude, mean_value)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, row)
+        conn.rollback()
+
+    def test_two_members_of_the_same_cell_are_still_allowed(self, conn):
+        """Guards the guard: a key that omitted `ensemble_member` would make the
+        ensemble itself a constraint violation."""
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT count(DISTINCT ensemble_member)
+                FROM forecast_data
+                WHERE forecast_hour = (SELECT MIN(forecast_hour) FROM forecast_data)
+                GROUP BY run_id, variable_id, forecast_hour, latitude, longitude
+                ORDER BY 1 DESC LIMIT 1
+            """)
+            most = cur.fetchone()[0]
+        assert most > 1, 'the fixture should hold several members per cell'
