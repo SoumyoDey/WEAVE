@@ -17,6 +17,12 @@ in this repository.
 
 **Changes the rest of this document assumes**, newest first:
 
+- **2026-09-29 — the 09-08 run is a MIXTURE of two forecasts** (§20). §18's AIFS
+  wind was not isolated: **four of six model/variable combinations were the
+  09-16 run**, including all three models' wind and GEFS precipitation. Only
+  AIFS and UKMO precipitation are genuinely 09-08. GEFS is now loaded as its own
+  `2025-09-16` run via the new `Data/convert_gefs.py`, which reads the
+  initialisation time out of the files and prints it.
 - **2026-09-28 — the AIFS wind was the WRONG FORECAST RUN, and is fixed** (§18).
   The field stored at `2025-09-08 00Z` was the `2025-09-16` run, so every AIFS
   wind score paired a forecast with truth from eight days before it was
@@ -2219,6 +2225,94 @@ rather than describing it.
 **Two figures in these records remain corrected**, and for an unchanged reason:
 they were requested with `forecast_hour`, so they were never per-hour. The
 comparisons themselves stand, because both sides of each used the same call.
+
+## 20. The 09-08 run is a MIXTURE of two forecasts — 2026-09-29
+
+§18 found the AIFS wind was the `2025-09-16` run filed as `2025-09-08`. It was
+not an isolated mistake. **Four of six model/variable combinations were the
+09-16 run**, each verified cell-for-cell against source, with UKMO
+precipitation matching 09-08 exactly as the control that the method can tell the
+two dates apart:
+
+| model | variable | actually from | evidence |
+|---|---|---|---|
+| AIFS | precipitation | **2025-09-08** | 17,915,148 rows exactly (§16) |
+| UKMO | precipitation | **2025-09-08** | 1,449/1,449 cells, ×3.6e6 |
+| AIFS | wind | 2025-09-16 | fixed in §18 |
+| GEFS | precipitation | 2025-09-16 | 455/456/707 cells at two hours |
+| GEFS | wind | 2025-09-16 | 1,681 cells × 4 members |
+| UKMO | wind | 2025-09-16 | 7,597 cells × 4 members, two hours |
+
+**The likely mechanism:** the cluster holds GEFS only for 09-16 to 09-20. GEFS
+and the wind variables were evidently downloaded in a later batch and loaded
+onto the existing 09-08 run row. Nothing in the pipeline had ever read the
+initialisation time stored *inside* the data.
+
+**What this invalidates:** every wind score for all three models, and every GEFS
+precipitation score — including the audit's conclusion that GEFS is much the
+worst model. Its MAE of 0.5256 against AIFS's 0.332, its CSI of 0.0109 at 6 mm,
+and "GEFS has no events at all at 25 mm/6h" are artefacts of scoring a different
+week. Only AIFS and UKMO precipitation survive.
+
+### GEFS is now loaded as its own 2025-09-16 run
+
+`Data/convert_gefs.py` (new) completes the converter set, so every forecast
+table can be rebuilt from source. GEFS 09-08 **does not exist on the cluster**,
+so relabelling it truthfully was chosen over preserving the fiction.
+
+| stage | result |
+|---|---|
+| convert | 1,729,714 tp + 5,648,160 u + 5,648,160 v records; init read from the files as 09-16 00Z |
+| scale | 2,560 files, **÷6 for the 1,280 `h%6==0` and ÷3 for the rest** — the fixed per-window rule |
+| load | precipitation 1,520,352 / stats 104,681; wind 5,295,150 each — all exact, 14.4 min |
+| regrid | 3,932,310 + 5,295,150 × 2 member rows |
+
+Verified in the app: `/api/runs` reports three runs, the selector offers **two
+dates** for the first time, AIFS and UKMO grey out at 09-16 with a reason, and
+the map renders valid `Tue Sep 16 06:00 UTC` at +6h.
+
+**Scores at 09-16 are empty, and that is correct.** Observations cover only
+09-08, so `/api/observation-coverage` answers `record_end_lead_hours: -168.5` —
+a negative lead, stating that the record ends a week *before* the run begins.
+An honest empty, not a failure.
+
+### Conventions `convert_gefs.py` had to establish
+
+- **Longitude is 0-360** (275 → 295 for a domain stored as −85 → −65). Left
+  alone, every row lands outside the domain and joins with **nothing** — the
+  most destructive convention here and the one with no visible symptom.
+- **The threshold is `> 0.01 mm`, and differs from AIFS's `>= 0.01`.** Measured
+  over 4 hours × 30 members: 78,995 cells kept with raw minimum 0.02, 3,211
+  dropped with raw maximum 0.01, no overlap. A first pass read one hour, saw a
+  kept minimum of 0.1 mm and concluded there was no threshold at all. GEFS
+  quantises to 0.01, so `> 0.01` and `>= 0.02` fit identically and which was
+  originally written is not recoverable.
+- **`step` and `time` live in the file** and are both used: `step` is
+  cross-checked against the filename's `fNNN`, and `time` gives the
+  initialisation, which the converter **prints** and refuses to mix. That check
+  is the whole point — it is what would have caught this defect at the moment it
+  was introduced.
+- **The output filename must be rebuilt.** GEFS sources are `..._f003.nc`, and
+  both downstream stages parse `-(\d+)h-`. `aifs react.py` skipped all 2,560
+  files and said so; `load_to_postgres.py` does
+  `int(match.group(1)) if match else 0` and would have loaded **every GEFS row
+  at hour 0** — eighty hours of forecast in one, with no error.
+
+### OPEN: the registry cannot describe a per-window export
+
+The registry holds **one** `export_divisor_h` per run, and
+`_increment_divisor` returns `period / exported`. For the legacy flat ÷3 that is
+right: 3/3 = 1 for a 3-hour bucket, 6/3 = 2 for a 6-hour one that was halved.
+
+The new GEFS run was scaled **per window**, so it is already mm/h — and
+`record()` wrote `scaled, export_divisor_h = 3` from the module constant
+anyway. At `h%6==0` scoring would therefore divide by 2 a second time.
+
+**Inert today**, because 09-16 has no observations so nothing reads it. It stops
+being inert the moment 09-16 IMERG is loaded. The fix is a third convention
+meaning "already a rate, divisor 1 always" — the vocabulary currently offers
+only `scaled` and `unscaled`, and neither is true here. That is a decision about
+the registry's vocabulary, so it is recorded rather than taken.
 
 ## Standing decisions — do not undo these by accident
 
