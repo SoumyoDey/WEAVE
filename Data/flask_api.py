@@ -2188,10 +2188,39 @@ def get_spread_skill():
 
 @app.route('/api/spatial-metric', methods=['GET'])
 def get_spatial_metric():
-    """
-    Computes spatial SSR or Spread-Skill Correlation maps for a bounding box.
-    Params: metric (ssr|correlation), model, variable, hour (ssr only),
-            min_lat, max_lat, min_lon, max_lon
+    """Per-cell metric maps over a bounding box.
+
+    Eleven metrics, not the two this docstring used to name: the authority is
+    `SPATIAL_METRIC_REGISTRY`, and an unknown key is refused with the list.
+
+    **Lead time is not one parameter, and which one applies depends on the
+    metric.** Each dispatcher is handed `request.args` and reads its own:
+
+    ==================================  ======================================
+    `ssr`                               `hour` — a single lead time, default 6,
+                                        echoed back in the response
+    `correlation`                       neither; correlated over every hour the
+                                        run holds
+    the other nine (`bias`, `mae`,      `hour_min` / `hour_max` — a *range*,
+    `rmse`, `crps`, `csi`, `pod`,       because these are scored over a window
+    `far`, `brier`, `ssr_agg`)          rather than at an instant
+    ==================================  ======================================
+
+    So `?hour=` is silently inert on `mae`, and `?hour_min=&hour_max=` is
+    silently inert on `ssr`. Both are correct and neither is discoverable from
+    the response, which is why the table above is here. **On 2026-09-28 this was
+    briefly recorded as a defect** — "documents an hour it never reads" — after
+    a grep of this function found no `args.get('hour')`. It is in the
+    dispatchers, which receive `request.args`. `NEXT_STEPS.md` keeps that
+    retraction, because the mistake was method rather than code: resolve the
+    helper before concluding what a parameter does.
+
+    Thresholds are per-variable and also read by the dispatchers:
+    `threshold_ms` (default 10.0) for wind, `threshold_mm_6h` (default 25.0,
+    divided by 6) for precipitation.
+
+    Params: metric, model, variable, init_time, min_lat, max_lat, min_lon,
+            max_lon, plus the lead-time and threshold arguments above.
     """
     metric     = request.args.get('metric', 'ssr')
     model_name = request.args.get('model', 'AIFS')

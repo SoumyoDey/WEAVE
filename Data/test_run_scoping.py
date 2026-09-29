@@ -392,3 +392,60 @@ class TestTheRunIdLookupIsScopedToARun:
             a = api.get_model_run_id(cur, 'AIFS', '2025-09-08T00:00:00')
             b = api.get_model_run_id(cur, 'AIFS', '2025-09-08T06:00:00')
         assert (a, b) == (1, 2)
+
+
+class TestWhichLeadTimeArgumentEachMetricReads:
+    """`/api/spatial-metric` takes `hour` for `ssr` and `hour_min`/`hour_max`
+    for almost everything else, and the wrong one is silently inert.
+
+    Recorded as a defect on 2026-09-28 -- "documents an hour it never reads" --
+    on the strength of a grep of the endpoint body, which has no
+    `args.get('hour')` because the dispatchers read their own arguments from the
+    `request.args` they are handed. Retracted the same day. Pinned here so the
+    contract is asserted rather than described, since neither the response nor
+    the function body makes it visible.
+    """
+
+    SINGLE_HOUR = {'ssr'}
+    NO_LEAD_ARGUMENT = {'correlation'}
+
+    def test_every_registered_metric_is_accounted_for(self):
+        """So a new metric cannot be added without deciding which it takes.
+
+        Asserting that the three sets cover the registry would be vacuous —
+        `ranged` is the complement, so it holds by construction. What is worth
+        asserting is that the two named sets are really *in* the registry, and
+        that the complement is non-empty, which is what makes the test below
+        exercise anything.
+        """
+        registered = set(api.SPATIAL_METRIC_REGISTRY)
+        assert self.SINGLE_HOUR <= registered, self.SINGLE_HOUR - registered
+        assert self.NO_LEAD_ARGUMENT <= registered, self.NO_LEAD_ARGUMENT - registered
+        ranged = registered - self.SINGLE_HOUR - self.NO_LEAD_ARGUMENT
+        assert len(ranged) == 9, sorted(ranged)
+        assert len(registered) == 11, sorted(registered)
+
+    def test_ssr_reads_a_single_hour(self):
+        src = inspect.getsource(api._dispatch_ssr)
+        assert "args.get('hour'" in src
+        assert 'hour_min' not in src
+
+    def test_the_ranged_metrics_read_a_window_not_an_hour(self):
+        for name in set(api.SPATIAL_METRIC_REGISTRY) - self.SINGLE_HOUR - self.NO_LEAD_ARGUMENT:
+            src = inspect.getsource(api.SPATIAL_METRIC_REGISTRY[name])
+            assert 'hour_min' in src and 'hour_max' in src, f'{name} reads no window'
+            assert "args.get('hour'" not in src, f'{name} reads a single hour too'
+
+    def test_the_cache_key_covers_both_spellings(self):
+        """Otherwise two different questions would share one cached answer --
+        the failure this project has already had once, when a cache version
+        watched only forecasts and served stale scores after a truth swap."""
+        for arg in ('hour', 'hour_min', 'hour_max', 'threshold_ms', 'threshold_mm_6h'):
+            assert arg in api.SPATIAL_METRIC_CACHE_ARGS, arg
+
+    def test_the_docstring_states_which_is_which(self):
+        """It said "metric (ssr|correlation)" while eleven were registered, and
+        named `hour` without mentioning the window nine metrics use."""
+        doc = api.get_spatial_metric.__doc__
+        assert 'hour_min' in doc and 'hour_max' in doc
+        assert 'ssr' in doc

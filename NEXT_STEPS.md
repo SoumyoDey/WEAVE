@@ -22,11 +22,11 @@ in this repository.
   wind score paired a forecast with truth from eight days before it was
   initialised. Replaced from the HPC and now reproducible: MAE fell 70.5%.
   **Every AIFS wind figure written before this date is on the wrong forecast.**
-  Verifying it exposed **three further defects** (§19). Two are fixed: the map
+  Verifying it exposed **two further defects, both now fixed** (§19): the map
   never respected the run selector, and GEFS wind was duplicated in the raw
-  tables (now deduplicated, with the unique keys those tables always lacked).
-  `/api/spatial-metric` documents an `hour` parameter it never reads — still
-  live.
+  tables (now deduplicated, with the unique keys those tables always lacked). A
+  third — `/api/spatial-metric` ignoring a documented `hour` — **was my error and
+  is withdrawn**; only its docstring was wrong.
 - **2026-09-28 — AIFS 06Z is loaded and the run is multi-model** (§17), using
   the converter in §16. Two defects fell out, both needing two runs whose
   *model lists differ*: `_run_pairs_sql` was discarding the `init_time` callers
@@ -2073,10 +2073,11 @@ is indistinguishable at a glance from the defect above, and it appeared the
 first time wind was verified against a source that was in fact correct. Fixed
 and pinned by tests.
 
-## 19. Three defects the wind work exposed — 2026-09-28
+## 19. Two defects the wind work exposed, and one I imagined — 2026-09-28
 
-Found while verifying §18. **Two are FIXED; `/api/spatial-metric`'s unread
-`hour` parameter is still live.**
+Found while verifying §18. **Two were real and are FIXED. The third was my own
+error and is withdrawn** — kept here rather than deleted, because the way I
+reached it is the reusable part.
 
 ### The map never respected the run selector — FIXED
 
@@ -2189,14 +2190,35 @@ dropped from `schema.sql`.
 `/api/health` reports `reltuples`, and deleting 10.9M rows left that estimate
 stale. `forecast_data` is now 135,592,767 rows, down from 146,183,067.
 
-### `/api/spatial-metric` ignores the lead time it documents — STILL LIVE
+### `/api/spatial-metric` ignores the lead time it documents — WITHDRAWN, this was my error
 
-Its docstring says `hour (ssr only)`, and **no hour parameter is read anywhere
-in the endpoint**. Every metric is a lead-time aggregate, and
-`?forecast_hour=24` is silently discarded as an unknown query param. Two figures
-in these records were labelled per-hour on the strength of it and were really
-aggregates; both are corrected in place. Either read the parameter or remove it
-from the docstring.
+**There is no defect here.** `ssr` reads `hour` exactly as its docstring said —
+1,439 points at `hour=6`, 1,430 at `hour=12`, 0 at `hour=24` — and the other
+nine metrics read `hour_min`/`hour_max`, which also work (`mae` over 0–6 h is
+0.2567 against 0.3320 over 0–24 h). Thresholds are read per-variable too.
+
+**How I got it wrong**, because the method matters more than the conclusion:
+
+1. I sent `forecast_hour`, which is not the parameter. The frontend sends `hour`.
+2. I tested it on `mae`, which legitimately takes a *range* rather than an
+   instant, so a single hour is inert there by design.
+3. The real error: I grepped `args.get` inside the endpoint body, found no
+   `hour`, and concluded nothing read it. **`request.args` is passed into the
+   dispatchers**, which read their own arguments.
+
+That third step is this document's own standing trap — *"a grep cannot settle it
+alone; resolve the helper before claiming anything"* — applied to
+`FROM {_frm}` and not applied here.
+
+**What was really wrong was the docstring**, and that is now fixed: it named two
+metrics of eleven and mentioned `hour` without the window that nine of them use.
+It now carries a table of which metric reads which, because sending the wrong
+one is silently inert and invisible in the response. Six tests pin the contract
+rather than describing it.
+
+**Two figures in these records remain corrected**, and for an unchanged reason:
+they were requested with `forecast_hour`, so they were never per-hour. The
+comparisons themselves stand, because both sides of each used the same call.
 
 ## Standing decisions — do not undo these by accident
 
@@ -2233,6 +2255,19 @@ the same way — a real signal, misread as to cause.
    an independent reanalysis. That is expected, not diagnostic.
 4. **Do not infer a constant from a filename.** The `_scaled` folder name led to
    a guessed divisor of 6; the actual script said 3, which inverted the fix.
+5. **Shape agreement is not provenance.** The AIFS wind matched the source on
+   grid, hours, member count and every cell key, and was a different forecast
+   run entirely (§18). Structural checks all passed and were all consistent with
+   unusable data; only matching *values* against a named source settled it.
+6. **A parameter that appears unread may be read by a callee.** Grepping
+   `/api/spatial-metric` for `args.get('hour')` found nothing and produced a
+   confident, wrong defect report — `request.args` is handed to the dispatchers
+   (§19). This is trap 2 in the list above, reached from a different direction:
+   **resolve the helper before concluding what anything does.**
+7. **Name the parameter you actually sent.** The same report used
+   `forecast_hour` against an endpoint that takes `hour`, and an unknown query
+   parameter is silently ignored rather than refused — so the evidence looked
+   like a bug in the endpoint instead of a typo in the request.
 
 The pattern throughout: a fingerprint in the data reliably shows *that* something
 is wrong, and reliably cannot say *which* explanation produced it. Three raw
