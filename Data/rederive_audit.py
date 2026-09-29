@@ -49,6 +49,16 @@ FULL_LABEL = '25-45 N, 85-65 W (the whole analysis grid)'
 HOURS = {'hour_min': 0, 'hour_max': 168}
 MODELS = ['AIFS', 'GEFS', 'UKMO']
 
+# Which forecast run every figure below describes.
+#
+# **This became load-bearing on 2026-09-28**, when AIFS and UKMO each gained a
+# second run. Until then the API defaulted to the only run and this script could
+# omit the parameter; now an unqualified request is refused as ambiguous, which
+# is the `init_time` migration working as designed. The audit has always
+# described `2025-09-08 00Z` — the full three-model run — so that is the default,
+# and it is printed above every table rather than assumed.
+INIT_TIME = '2025-09-08 00:00:00'
+
 
 def _client():
     # The cache would answer from a previous run's data version and is exactly
@@ -57,25 +67,50 @@ def _client():
     return api.app.test_client()
 
 
+def _check(payload, what):
+    """Fail on an error response instead of rendering it as blank cells.
+
+    The first version of this script read figures out of the payload with
+    `.get(...)` chains, so a refused request produced a table of empty cells and
+    carried on. That output is worse than a crash: it looks like a result, and
+    an audit's whole purpose is that its numbers can be trusted. On 2026-09-28
+    it printed six blank rows of point scores before falling over two sections
+    later.
+    """
+    if not isinstance(payload, dict):
+        raise SystemExit(f'{what}: expected an object, got {type(payload).__name__}')
+    if 'error' in payload:
+        raise SystemExit(f'{what}: {payload["error"]}\n'
+                         f'  hint: {payload.get("hint", "")}\n'
+                         f'  (this script pins init_time={INIT_TIME!r}; '
+                         f'pass --init-time to describe a different run)')
+    return payload
+
+
 def point_scores(c, md):
     rows = []
     for variable in ('precipitation', 'wind'):
-        d = c.post('/api/compare/skill',
-                   json={'models': MODELS, 'variable': variable,
-                         **POINT, **HOURS}).get_json()
+        d = _check(c.post('/api/compare/skill',
+                          json={'models': MODELS, 'variable': variable,
+                                'init_time': INIT_TIME,
+                                **POINT, **HOURS}).get_json(),
+                   f'compare/skill {variable}')
         for m in MODELS:
             s = d.get('models', {}).get(m, {}).get('summary', {})
             rows.append((variable, m, s.get('bias'), s.get('mae'),
                          s.get('rmse'), s.get('crps'), s.get('ssr_agg')))
-    _emit('Point scores', f'/api/compare/skill at {POINT_LABEL}, hours 0-168',
+    _emit('Point scores',
+          f'/api/compare/skill at {POINT_LABEL}, hours 0-168, run {INIT_TIME}',
           ['variable', 'model', 'bias', 'mae', 'rmse', 'crps', 'ssr_agg'], rows, md)
 
 
 def pooled_vs_cell_mean(c, md):
     """Finding 8: the two estimators genuinely differ, and by how much."""
-    d = c.post('/api/compare/region-metrics',
-               json={'models': MODELS, 'variable': 'precipitation',
-                     'metrics': ['mae', 'rmse'], **HOURS, **FULL}).get_json()
+    d = _check(c.post('/api/compare/region-metrics',
+                      json={'models': MODELS, 'variable': 'precipitation',
+                            'metrics': ['mae', 'rmse'], 'init_time': INIT_TIME,
+                            **HOURS, **FULL}).get_json(),
+               'compare/region-metrics mae+rmse')
     rows = []
     for m in MODELS:
         p, cm = d['models'][m], d['cell_means'][m]
@@ -84,7 +119,8 @@ def pooled_vs_cell_mean(c, md):
         ratio = round(p['mae'] / cm['mae'], 3) if cm['mae'] else None
         rows.append((m, 'mae', p['mae'], cm['mae'], ratio, d['n_cells'][m]))
     _emit('Pooled vs per-cell estimators (finding 8)',
-          f'/api/compare/region-metrics over {FULL_LABEL}, hours 0-168',
+          f'/api/compare/region-metrics over {FULL_LABEL}, hours 0-168, '
+          f'run {INIT_TIME}',
           ['model', 'metric', 'pooled', 'cell mean', 'ratio', 'n cells'], rows, md,
           note='RMSE differs by Jensen (sqrt is concave). MAE is linear, so the '
                'two agree wherever every cell contributes the same number of '
@@ -95,15 +131,18 @@ def categorical_by_threshold(c, md):
     """The same estimator split, on a metric that needs events to exist."""
     rows = []
     for thr in (25, 6, 3, 1):
-        d = c.post('/api/compare/region-metrics',
-                   json={'models': MODELS, 'variable': 'precipitation',
-                         'metrics': ['csi'], 'threshold_mm_6h': thr,
-                         **HOURS, **FULL}).get_json()
+        d = _check(c.post('/api/compare/region-metrics',
+                          json={'models': MODELS, 'variable': 'precipitation',
+                                'metrics': ['csi'], 'threshold_mm_6h': thr,
+                                'init_time': INIT_TIME,
+                                **HOURS, **FULL}).get_json(),
+                   f'compare/region-metrics csi thr={thr}')
         for m in MODELS:
             rows.append((thr, m, d['models'][m].get('csi'),
                          d['cell_means'][m].get('csi')))
     _emit('Pooled vs per-cell CSI, by threshold',
-          f'/api/compare/region-metrics over {FULL_LABEL}, hours 0-168',
+          f'/api/compare/region-metrics over {FULL_LABEL}, hours 0-168, '
+          f'run {INIT_TIME}',
           ['thr mm/6h', 'model', 'pooled CSI', 'cell-mean CSI'], rows, md,
           note='At 25 mm/6h GEFS has no events at all, so its CSI is 0 by '
                'definition rather than by performance — a threshold has to '
@@ -115,14 +154,22 @@ def per_cell_distribution(c, md):
     for variable in ('precipitation', 'wind'):
         for m in MODELS:
             qs = '&'.join(f'{k}={v}' for k, v in FULL.items())
-            r = c.get(f'/api/spatial-metric?metric=mae&model={m}'
-                      f'&variable={variable}&{qs}').get_json()
+            r = _check(c.get(f'/api/spatial-metric?metric=mae&model={m}'
+                             f'&variable={variable}&{qs}'
+                             f'&init_time={INIT_TIME.replace(" ", "%20")}'
+                             f'&hour_min={HOURS["hour_min"]}'
+                             f'&hour_max={HOURS["hour_max"]}').get_json(),
+                       f'spatial-metric mae {m} {variable}')
             v = [p['value'] for p in r.get('points', []) if p.get('value') is not None]
-            if v:
-                rows.append((variable, m, len(v), round(st.mean(v), 4),
-                             round(st.median(v), 4), round(max(v), 4)))
+            # An empty result is itself a finding, so it is reported rather than
+            # skipped: a row silently absent reads as "not measured".
+            rows.append((variable, m, len(v),
+                         round(st.mean(v), 4) if v else None,
+                         round(st.median(v), 4) if v else None,
+                         round(max(v), 4) if v else None))
     _emit('Per-cell MAE distribution',
-          f'/api/spatial-metric metric=mae over {FULL_LABEL}',
+          f'/api/spatial-metric metric=mae over {FULL_LABEL}, hours 0-168, '
+          f'run {INIT_TIME}',
           ['variable', 'model', 'n cells', 'mean', 'median', 'max'], rows, md)
 
 
@@ -141,20 +188,26 @@ def domain_means(md):
         """, FULL)
         for src, mean, n in cur.fetchall():
             rows.append(('observed', src, float(mean), n))
+        # `init_time` is not optional here even though the table would answer
+        # without it: with two runs loaded an unfiltered average blends them,
+        # and the result is a number that belongs to no forecast. Nothing would
+        # have complained — this is the failure the migration exists to prevent,
+        # reached through a direct query rather than an endpoint.
         cur.execute("""
             SELECT model_name, round(avg(mean_value)::numeric, 4), count(*)
             FROM regridded_forecast_ens
             WHERE variable_name = 'precipitation'
+              AND init_time = %(init_time)s
               AND latitude BETWEEN %(min_lat)s AND %(max_lat)s
               AND longitude BETWEEN %(min_lon)s AND %(max_lon)s
             GROUP BY model_name ORDER BY model_name
-        """, FULL)
+        """, dict(FULL, init_time=INIT_TIME))
         for m, mean, n in cur.fetchall():
             rows.append(('forecast (as stored)', m, float(mean), n))
     finally:
         cur.close()
         api.return_db_connection(conn)
-    _emit('Domain means', f'{FULL_LABEL}, every stored record',
+    _emit('Domain means', f'{FULL_LABEL}, every stored record of run {INIT_TIME}',
           ['side', 'source/model', 'mean', 'n rows'], rows, md,
           note="AIFS's forecast figure is a CUMULATIVE total, not a rate, so it "
                "is not comparable with the others — the audit's in-family check "
@@ -216,10 +269,20 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--markdown', action='store_true',
                     help='emit markdown tables for pasting into the audit')
+    # `global` has to precede every use of the name in this function, so the
+    # default is spelled via the module rather than read directly.
+    global INIT_TIME
+    ap.add_argument('--init-time', default=INIT_TIME,
+                    help='the run to describe (default %(default)s). Every '
+                         'figure is per-run, and with more than one loaded an '
+                         'unqualified request is refused rather than guessed.')
     args = ap.parse_args()
+    INIT_TIME = args.init_time
     c = _client()
     if args.markdown:
         print('<!-- generated by Data/rederive_audit.py — do not hand-edit -->')
+        print(f'<!-- run {INIT_TIME}, regenerate with: '
+              f'python rederive_audit.py --markdown --init-time "{INIT_TIME}" -->')
     truth_field_stencils(args.markdown)
     point_scores(c, args.markdown)
     pooled_vs_cell_mean(c, args.markdown)
