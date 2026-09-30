@@ -361,6 +361,15 @@ def _infer_scaled_export_divisor(ratios, min_samples=100):
 # cannot double as the default.
 FROM_CONSTANT = object()
 
+# `exported` may also be this, meaning the export already divided each record by
+# **its own** window, so the stored value is a rate and the divisor is 1.
+#
+# Restated from `run_registry.PER_WINDOW` rather than imported: these two
+# modules do not depend on each other and this one is the lower-level of the
+# two. `test_run_registry.py` pins that the literals agree, which is the same
+# bargain `fixture_db.py` strikes with the conventions it restates.
+PER_WINDOW = 'per_window'
+
 
 def _increment_divisor(model_name, period, exported=FROM_CONSTANT):
     """Hours to divide a stored precipitation value (or a differenced cumulative
@@ -385,6 +394,10 @@ def _increment_divisor(model_name, period, exported=FROM_CONSTANT):
     """
     if exported is FROM_CONSTANT:
         exported = SCALED_EXPORT_DIVISOR_HOURS.get(model_name)
+    if exported == PER_WINDOW:
+        # Divided by its own window already; dividing again by `period` would
+        # halve every 6-hour bucket of a per-window export.
+        return 1.0
     if exported:
         return period / exported
     return period

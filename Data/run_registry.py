@@ -77,7 +77,31 @@ TABLE = 'forecast_run_registry'
 # stored value is an amount or a native rate that needs no undoing.
 SCALED   = 'scaled'
 UNSCALED = 'unscaled'
-CONVENTIONS = (SCALED, UNSCALED)
+
+# `RATE` means the export already divided each record by **its own** window, so
+# the stored value is a rate and nothing remains to undo.
+#
+# Added 2026-09-30 because the other two cannot describe it. `SCALED` carries one
+# divisor for the whole run, and `_increment_divisor` computes `period /
+# divisor` — right for a fixed factor, wrong here, because the factor *is* the
+# period and varies per record. `UNSCALED` would divide a rate by its window a
+# second time.
+#
+# The case that forced it: GEFS 09-16 was scaled through the FIXED `aifs
+# react.py`, which divides the `h%6==3` buckets by 3 and the `h%6==0` buckets by
+# 6. `record()` wrote `scaled, 3` from the module constant anyway, so every
+# 6-hour bucket would have been halved again. Harmless only while 09-16 had no
+# observations; loading them on 2026-09-29 ended that.
+RATE = 'rate'
+
+CONVENTIONS = (SCALED, UNSCALED, RATE)
+
+# What `resolve_divisor` returns for `RATE`. A string rather than a sentinel
+# object so it survives the same round trips the convention does, and
+# **restated** in `metrics.PER_WINDOW` rather than imported — these two modules
+# do not depend on each other, and `test_run_registry.py` pins that the literals
+# agree. The fixture takes the same approach for the same reason.
+PER_WINDOW = 'per_window'
 
 
 class UnknownConventionError(Exception):
@@ -161,6 +185,11 @@ def record(cur, model_name, variable_name, init_time,
         if found is not None:
             convention, export_divisor_h = found
 
+    if convention == RATE and export_divisor_h is not None:
+        raise ValueError(
+            f'{model_name}/{variable_name}: {RATE!r} means each record was '
+            f'divided by its own window, so a single export_divisor_h of '
+            f'{export_divisor_h} cannot be true of the run')
     if convention is not None and convention not in CONVENTIONS:
         raise ValueError(f'unknown convention {convention!r}; '
                          f'expected one of {CONVENTIONS}')
@@ -253,6 +282,10 @@ def resolve_divisor(cur, model_name, variable_name, init_time):
             f'it is.')
     if convention == UNSCALED:
         return None
+    if convention == RATE:
+        # Already a rate. Not None — that means unscaled, which would divide it
+        # by its window a second time.
+        return PER_WINDOW
     if divisor is None:
         raise UnknownConventionError(
             f'{model_name}/{variable_name} at {init_time} is marked {SCALED!r} '

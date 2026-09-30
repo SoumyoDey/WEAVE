@@ -267,3 +267,73 @@ class TestTheBackfillLeftNothingUndeclared:
         from metrics import SCALED_EXPORT_DIVISOR_HOURS
         for model, divisor in SCALED_EXPORT_DIVISOR_HOURS.items():
             assert reg.resolve_divisor(cur, model, 'precipitation', RUN) == divisor
+
+
+class TestTheRateConvention:
+    """`rate` means each record was divided by its OWN window already.
+
+    Added 2026-09-30 because the other two cannot describe that. `scaled` holds
+    one divisor for the whole run and `_increment_divisor` computes
+    `period / divisor` — right for a fixed factor, wrong when the factor *is*
+    the period; `unscaled` would divide a rate by its window a second time.
+
+    The case that forced it: GEFS 09-16 had been scaled through the current
+    per-window `aifs react.py` while `record()` wrote `scaled, 3` from the
+    module constant, so every 6-hour bucket was halved again — MAE read 0.1864
+    where the correctly-labelled value is 0.2318.
+
+    The stored data was afterwards re-scaled to the legacy flat /3 so the units
+    stay uniform across runs, and the two representations give **identical**
+    scores once each is labelled truthfully. So nothing in the database uses
+    `rate` today. It stays because the repository's scaler is the per-window
+    version: the next GEFS load through it produces per-window data, and without
+    this the registry would mislabel it exactly as before.
+    """
+
+    class ExplodingCursor:
+        def execute(self, *a, **k):
+            raise AssertionError('should have been rejected before any SQL')
+
+    def test_rate_is_a_known_convention(self):
+        assert reg.RATE in reg.CONVENTIONS
+
+    def test_the_two_modules_agree_on_the_sentinel(self):
+        """`metrics` restates it rather than importing — the two modules do not
+        depend on each other. This is what makes that safe."""
+        import metrics
+        assert reg.PER_WINDOW == metrics.PER_WINDOW
+
+    def test_the_hyphenated_spelling_is_still_not_a_convention(self):
+        """`per_window` is the sentinel `resolve_divisor` returns; `rate` is the
+        convention. Neither is `per-window`, which an older test already uses as
+        its example of an unknown one."""
+        assert 'per-window' not in reg.CONVENTIONS
+        assert reg.PER_WINDOW not in reg.CONVENTIONS
+
+    def test_a_rate_run_needs_no_further_division(self):
+        """At BOTH window lengths. The 6-hour case is the one that was wrong."""
+        import metrics
+        for period in (1, 3, 6):
+            assert metrics._increment_divisor('GEFS', period,
+                                              metrics.PER_WINDOW) == 1.0
+
+    def test_the_legacy_flat_divisor_still_compensates(self):
+        """Guards the guard: the stored data really is flat /3 and its 6-hour
+        buckets really do need halving. Breaking this to fix `rate` would move
+        every GEFS figure in the database."""
+        import metrics
+        assert metrics._increment_divisor('GEFS', 3, 3.0) == 1.0
+        assert metrics._increment_divisor('GEFS', 6, 3.0) == 2.0
+
+    def test_unscaled_still_divides_by_the_window(self):
+        import metrics
+        assert metrics._increment_divisor('UKMO', 1, None) == 1
+        assert metrics._increment_divisor('UKMO', 6, None) == 6
+
+    def test_rate_with_a_divisor_is_refused(self):
+        """A single divisor cannot be true of a per-window export, so accepting
+        one would let the contradiction straight back in."""
+        with pytest.raises(ValueError, match='divided by its own window'):
+            reg.record(self.ExplodingCursor(), 'NEW', 'precipitation',
+                       '2025-09-09T00:00:00',
+                       convention=reg.RATE, export_divisor_h=3.0)

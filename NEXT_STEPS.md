@@ -2370,6 +2370,59 @@ builds its pairs from `_fetch_fcst_obs_pairs_spatial` once for every metric, so
 sourcing pairs per metric rather than once, since swapping them wholesale would
 move `mae`/`bias`/`csi` too. Left as its own change.
 
+## 22. The registry gained a third convention, and the data went back to the legacy one — 2026-09-30
+
+Two related decisions, and the second one reverses the visible effect of the
+first while keeping its guard.
+
+### `rate`, because two conventions could not describe a third thing
+
+`_increment_divisor` returns the hours to divide a stored value by:
+`period` for `unscaled`, `period / divisor` for `scaled`. Neither can express
+**"each record was already divided by its own window"** — there the factor *is*
+the period, so a single `export_divisor_h` cannot be true of the run.
+
+GEFS 09-16 was scaled through the current per-window `aifs react.py` while
+`record()` wrote `scaled, 3` from the module constant. Every `h%6==0` bucket was
+therefore halved a second time at scoring, which read as **MAE 0.1864** where the
+truthful value is **0.2318** — a 24% understatement that made GEFS look like the
+best model at 09-16. Inert only while 09-16 had no observations; loading them on
+2026-09-29 ended that.
+
+`RATE` is now a convention, `resolve_divisor` returns the sentinel
+`PER_WINDOW` for it, and `_increment_divisor` answers **1.0** at every window
+length. `metrics.PER_WINDOW` **restates** `run_registry.PER_WINDOW` rather than
+importing it — the two modules do not depend on each other — and a test pins
+that the literals agree, the same bargain `fixture_db.py` strikes. Recording
+`rate` *with* a divisor is refused, because that is the contradiction again.
+
+### The stored units then went back to the legacy convention
+
+Keeping two conventions in one database is worse than either. Measured, the two
+GEFS runs differed in both respects:
+
+| run | rule | stored decimals |
+|---|---|---|
+| 09-08 | `round(value / 3, 3)` — flat | 3 |
+| 09-16 (as loaded) | `round(value / window, 4)` — per-window | 4 |
+
+So 09-16 was re-scaled from the *unscaled* converted JSON with the legacy rule,
+reloaded, re-regridded, and the registry put back to `scaled, 3`. Both runs are
+now flat /3 at 3 decimals.
+
+**The change is score-neutral, which is the point.** Per-window data labelled
+`rate` and legacy data labelled `scaled, 3` give **identical** scores — MAE
+0.2318, RMSE 0.4840, CRPS 0.1769 either way. The 0.1864 was purely the
+mislabelling. Uniformity therefore costs nothing and removes a standing trap.
+
+### `rate` stays in the code, and this is why
+
+Nothing in the database uses it now. It is not dead: **the repository's
+`aifs react.py` is the per-window version**, so the next GEFS load through the
+current pipeline produces per-window data. Without `rate` the registry would
+label that `scaled, 3` and reintroduce exactly this defect. Whoever loads GEFS
+must either scale with the legacy flat /3, as here, or record `rate`.
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in
