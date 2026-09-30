@@ -1805,6 +1805,9 @@ def get_forecast_data():
         run_id = get_model_run_id(cursor, model_name)
         if not run_id:
             return jsonify({'error': f'No data found for model {model_name}'}), 404
+        # Which run this is, for the export divisor below. The same resolver
+        # `get_model_run_id` just used, so it cannot name a different run.
+        _map_init = _resolve_init_time(cursor, model_name)
 
         # The map is labelled mm/h, so it has to BE mm/h. The three models do not
         # share a record convention (AIFS cumulates, GEFS buckets, UKMO is already
@@ -1846,7 +1849,14 @@ def get_forecast_data():
             by_cell, truncated = _cap_cells(by_cell)
             result = []
             for (lat, lon), series in by_cell.items():
-                rec = _precip_rate_series(model_name, _fill_predecessor(series)).get(forecast_hour)
+                # Same reason as compare/timeseries: the map must read the
+                # registry, or it draws a different rate from the one the
+                # scores use. `_resolve_init_time` is the resolver
+                # `get_model_run_id` above already went through, so this names
+                # the same run rather than re-deciding which one.
+                rec = _precip_rate_series(
+                    model_name, _fill_predecessor(series),
+                    exported=_export_divisor(model_name, _map_init)).get(forecast_hour)
                 # A None std is the unrecoverable-increment-spread case; it is
                 # dropped rather than shown as zero (see _precip_rate_series).
                 if rec is None or rec[idx] is None:
@@ -3221,7 +3231,14 @@ def compare_timeseries():
 
         result = {}
         for m, series in raw_by_model.items():
-            rates = _precip_rate_series(m, series, is_wind)
+            # The run's own divisor, not the module constant. `_runs` already
+            # holds each model's resolved init_time, so there is nothing to look
+            # up twice. Before this the chart read
+            # `SCALED_EXPORT_DIVISOR_HOURS`, which is per *model*, so a run
+            # whose export differed from the constant would have been drawn at
+            # the wrong rate while every scored number beside it was right.
+            rates = _precip_rate_series(m, series, is_wind,
+                                        exported=_export_divisor(m, _runs.get(m)))
             result[m] = [
                 {
                     'hour':     hour,

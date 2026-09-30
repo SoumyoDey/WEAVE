@@ -2423,6 +2423,56 @@ current pipeline produces per-window data. Without `rate` the registry would
 label that `scaled, 3` and reintroduce exactly this defect. Whoever loads GEFS
 must either scale with the legacy flat /3, as here, or record `rate`.
 
+## 23. The map and the scores now read one divisor — 2026-09-30
+
+There were **two sources of truth** for the export divisor:
+
+| path | read from |
+|---|---|
+| every scored metric | `forecast_run_registry` — **per run** |
+| `/api/forecast-data` (the map) | `SCALED_EXPORT_DIVISOR_HOURS` — **per model, global** |
+| `/api/compare/timeseries` (the forecast chart) | the same module constant |
+
+Five scored call sites already passed `exported=_export_divisor(...)`; these two
+did not, so they fell back to the constant. They agreed with the scores only
+while every loaded run happened to match it.
+
+**They did not have to.** Labelling GEFS 09-16 `rate` moved the score
+0.23182 → 0.34311 while the map stayed at 0.23402 — the two screens showing
+different rates for the same forecast, with nothing to indicate which was
+right. §22's re-scaling removed the *occasion*; this removes the *possibility*.
+
+Both now read the registry. `compare_timeseries` already had `_runs`, the
+resolved model→init_time map, so nothing is looked up twice. The map calls
+`_resolve_init_time`, the same resolver `get_model_run_id` goes through
+immediately above, so it cannot name a different run than the rows it just
+fetched.
+
+**Verified by making the registry lie.** With the fix, flipping GEFS 09-16 to
+`rate` moves the map 0.23402 → 0.46804 *and* the score 0.23182 → 0.34311; both
+are then wrong, which is the point — a mislabel corrupts consistently instead of
+splitting the two screens. Restoring `scaled, 3` returns both.
+
+### What is stored, and what the map draws — for reference
+
+| model | variable | stored | to reach mm/h |
+|---|---|---|---|
+| AIFS | precipitation | cumulative since init, ÷6 | difference consecutive records |
+| GEFS | precipitation | bucket total ÷3 (3 h or 6 h bucket) | ÷2 more at `h%6==0` |
+| UKMO | precipitation | already mm/h (m/s × 3.6e6) | nothing |
+| all | wind u, v | instantaneous m/s | nothing |
+
+Checked at one cell, +12 h: AIFS stored 0.1730 → 0.2740 differences to 0.1010
+and the map returns 0.1010; GEFS stored 5.7530 halves to 2.8765 and the map
+returns 2.8765; UKMO stored 8.9265 passes through and the map returns 8.9265.
+**The "mm/h" on the legend is honest for all three.**
+
+AIFS's storage is the one that surprises: the raw rows climb with lead
+(0.059 → 0.187 across +6 h to +36 h at one cell) because they are a running
+total, not a rate. Differencing works because
+`C(h)/6 − C(h−6)/6 == (C(h) − C(h−6))/6`, which is the mean rate over that
+window.
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in
