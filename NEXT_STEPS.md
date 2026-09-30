@@ -203,6 +203,13 @@ commits. See §1 for how and why it went in without review.
 
 In priority order. Nothing here is half-done.
 
+**Every model/variable in the database is now the run it claims to be**, as of
+2026-09-30 (§24). That was not true for five of the nine combinations at
+`2025-09-08 00Z` before then, and §20 had recorded two of them as already fixed.
+If you are about to trust a number, the provenance question is settled; the
+*written* records are not — `METRICS_AUDIT.md` §0 still reports figures derived
+from the mislabelled rows.
+
 0. **The reviewer deployment is the live task** (§10). **Both prerequisites are
    fixed as of 2026-09-17** — one origin behind one `basic_auth`, and pool
    defaults that are safe at every tier and checked at startup. What is left is
@@ -2473,6 +2480,100 @@ total, not a rate. Differencing works because
 `C(h)/6 − C(h−6)/6 == (C(h) − C(h−6))/6`, which is the mean rate over that
 window.
 
+## 24. The 09-08 mixture is fully unwound — 2026-09-30
+
+§20 found four of six model/variable combinations at `2025-09-08 00Z` were the
+09-16 run, and recorded three as fixed. **Two of those three were not.** Loading
+GEFS as its own 09-16 run created the correct run but never removed the 09-08
+copies, so the count was five, not one:
+
+| model | variable | was | now |
+|---|---|---|---|
+| GEFS | precipitation | 09-16 data under the 09-08 label | **deleted** |
+| GEFS | wind u/v | 09-16 data under the 09-08 label | **deleted** |
+| UKMO | wind u/v | 09-16 data under the 09-08 label | **replaced** from 09-08 source |
+
+**It had stopped being harmless.** §20 reasoned these were inert because 09-16
+had no truth to score against. Extending the observation record (§21) inverted
+that: `regridded_observation` now spans `09-08 00:00`..`09-26 23:30`, so the
+09-08 label was being scored against 09-08 truth while holding the 09-16
+forecast. A fix recorded as complete had been quietly producing wrong numbers in
+every tab for a day.
+
+### Proof before deletion, not after
+
+`scratchpad/prove_duplicates.py` full-joins each suspect against the 09-16 run
+on `(hour, lat, lon, member)` over **every** hour, not the two hours §20
+sampled. All five came back with 0 unmatched keys and 0 differing values across
+54,501,912 rows — so the 09-08 copies carried nothing the 09-16 rows did not,
+which is what made deletion safe rather than a judgement call.
+
+**Three controls ran in the same pass**, and they matter more than the suspects:
+a check that reports everything identical is broken, not reassuring. AIFS
+precipitation differed in 17,154,506 cells, AIFS wind in 20,008,725 of
+20,011,050 — independently confirming §18's replacement took — and UKMO
+precipitation's 8,027,146 "unmatched" is the *entire* row count of both runs,
+because the precipitation and wind loaders round coordinates differently
+(`35.1562` vs `35.15625`, the open item below) and the two runs share no keys at
+all.
+
+### GEFS is deleted, not relabelled
+
+GEFS does not exist on the cluster for 09-08, so absence is the only truthful
+state. 27,575,044 rows across six tables — `forecast_data` 12,110,652,
+`ensemble_statistics` 457,691, `regridded_forecast_member` 14,522,610,
+`regridded_forecast_ens` 484,087, `forecast_run_registry` 3, and the
+`forecast_runs` row itself.
+
+**Dropping the run row is the part that makes the app honest.** With it gone the
+selector greys GEFS out at 09-08 with a reason — the same path
+`ComparisonTab.run.test.js` already covers for a model a run lacks — instead of
+serving the wrong week silently.
+
+### UKMO wind is replaced, and verified against the file
+
+155 NetCDF files per component whose `forecast_reference_time` reads
+`2025-09-08 00:00Z` at leads 0..198h. `convert_ukmo.py` wrote 23,550,700 records
+each (= 21,195,630 members + 1,177,535 mean + 1,177,535 std), the load
+reproduced those counts exactly in 42.2 min, and `--verify` over all 155 hours
+reports **0 slices differing and 0 stat hours differing** for both components.
+The same check before the replacement reported 7,594 of 7,597 cells differing in
+every member.
+
+Regrid: 4,243,590 member + 235,755 ensemble rows per component
+(155 × 18 × 1,521).
+
+### Why it survived four weeks and three checks
+
+The 09-08 00Z run's valid times run to `20250916T0600Z`, so its last files are
+named for the same date as the 09-16 run's *first*. Both runs have the same
+grid, the same 18 members, the same 0..198h leads and the same 21,195,630 rows.
+Every structural check passes on the wrong data. This is lesson 5 below
+("shape agreement is not provenance") arriving for the third time — and the
+registry's `loaded_at` was the one field that hinted at it: all five mislabelled
+entries carried the identical `2026-09-02 12:46:20.378681` backfill stamp.
+
+### What confirms the replacement is the right week
+
+Not the row counts — those were identical before and after. The error growth
+against ERA5:
+
+| lead | +12h | +24h | +48h | +96h | +198h |
+|---|---|---|---|---|---|
+| MAE (m/s) | 0.9662 | 0.8812 | 1.0268 | 1.4329 | 2.6591 |
+
+Monotone decay of skill after the first day is what a forecast scored against
+its own valid times looks like. The wrong week gives a flat curve at a higher
+level, because there is no forecast–truth relationship left to decay. **Add this
+to the verification kit: for any run whose provenance is in doubt, plot MAE
+against lead before trusting it.**
+
+### Still open after this
+
+`METRICS_AUDIT.md` §0 is stale in a new way. The stored data is now correct; the
+audit still reports figures derived from the mislabelled rows, so every wind
+number and every GEFS number in it describes data that no longer exists.
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in
@@ -2521,6 +2622,17 @@ the same way — a real signal, misread as to cause.
    `forecast_hour` against an endpoint that takes `hour`, and an unknown query
    parameter is silently ignored rather than refused — so the evidence looked
    like a bug in the endpoint instead of a typo in the request.
+8. **"Fixed" is a claim about the database, not about the commit.** §20 recorded
+   GEFS as relabelled and the wind as replaced. Loading the correct run had in
+   fact left the wrong rows in place, and nothing re-read the tables to notice
+   (§24). Verify a data fix by querying for the *old* state and finding it
+   absent, not by confirming the new state is present — both can be true at once.
+9. **MAE against lead time is a provenance test.** Row counts, grids, member
+   counts and lead ranges were identical between the two runs and told nothing
+   apart. A forecast scored against its own valid times loses skill
+   monotonically with lead; the wrong week gives a flat curve at a higher level.
+   Cheaper than any of the correlation work in §24 and it answers the actual
+   question.
 
 The pattern throughout: a fingerprint in the data reliably shows *that* something
 is wrong, and reliably cannot say *which* explanation produced it. Three raw

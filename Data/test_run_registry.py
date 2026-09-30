@@ -128,6 +128,32 @@ def writable():
 FUTURE_RUN = '2099-01-01 06:00:00'
 
 
+def _a_loaded_run(cur, model_name, variable_name):
+    """An `init_time` the registry actually holds for this model and variable.
+
+    These tests used to name `2025-09-08 00:00:00` for every model. That broke
+    on 2026-09-30 when GEFS was removed from that run: the GEFS rows stored
+    there were the 09-16 forecast under the wrong label, and GEFS does not
+    exist on the cluster for 09-08 at all, so the *correct* database has no GEFS
+    at that init (`NEXT_STEPS.md` §24). Four tests then failed against a
+    database that had just been fixed.
+
+    What they mean to pin is the read path — that a declared run resolves to its
+    own divisor and that two runs can disagree — not which dates happen to be
+    loaded. So they ask the registry rather than asserting an inventory, and
+    skip if a combination is absent instead of failing.
+    """
+    cur.execute(f"""
+        SELECT init_time FROM {reg.TABLE}
+         WHERE model_name = %s AND variable_name = %s
+         ORDER BY init_time LIMIT 1
+    """, (model_name, variable_name))
+    row = cur.fetchone()
+    if row is None:
+        pytest.skip(f'{model_name}/{variable_name} is not loaded in any run')
+    return row['init_time']
+
+
 class TestTheUpsertIsIdempotent:
     """Phase 4, item 1: every step re-runnable without duplicating rows.
 
@@ -176,6 +202,7 @@ class TestTwoRunsCanDisagree:
     """
 
     def test_a_re_export_records_its_own_divisor_and_leaves_the_old_run_alone(self, writable):
+        loaded = _a_loaded_run(writable, 'GEFS', 'precipitation')
         reg.record(writable, 'GEFS', 'precipitation', FUTURE_RUN,
                    n_members=30, hour_min=0, hour_max=240,
                    convention=reg.SCALED, export_divisor_h=6.0)
@@ -183,14 +210,15 @@ class TestTwoRunsCanDisagree:
         # The new run says 6h...
         assert reg.resolve_divisor(writable, 'GEFS', 'precipitation', FUTURE_RUN) == 6.0
         # ...while the loaded run still says 3h, untouched.
-        assert reg.resolve_divisor(writable, 'GEFS', 'precipitation', RUN) == 3.0
+        assert reg.resolve_divisor(writable, 'GEFS', 'precipitation', loaded) == 3.0
 
     def test_a_model_can_become_unscaled_in_a_later_run(self, writable):
+        loaded = _a_loaded_run(writable, 'GEFS', 'precipitation')
         reg.record(writable, 'GEFS', 'precipitation', FUTURE_RUN,
                    n_members=30, hour_min=0, hour_max=240,
                    convention=reg.UNSCALED)
         assert reg.resolve_divisor(writable, 'GEFS', 'precipitation', FUTURE_RUN) is None
-        assert reg.resolve_divisor(writable, 'GEFS', 'precipitation', RUN) == 3.0
+        assert reg.resolve_divisor(writable, 'GEFS', 'precipitation', loaded) == 3.0
 
 
 class TestAnUndeclaredModelIsRecordedHonestly:
@@ -204,13 +232,20 @@ class TestAnUndeclaredModelIsRecordedHonestly:
             reg.resolve_divisor(writable, 'ECMWF_IFS', 'precipitation', FUTURE_RUN)
 
 
+# The earliest loaded run, and the one AIFS and UKMO have held since the start.
+# GEFS is deliberately NOT at this init — see `_a_loaded_run` and §24 — so any
+# assertion about GEFS must go through that helper rather than naming this.
 RUN = '2025-09-08 00:00:00'
 
 
 class TestResolvingAgainstTheLoadedRun:
     def test_the_scaled_models_resolve_to_their_divisors(self, cur):
-        assert reg.resolve_divisor(cur, 'AIFS', 'precipitation', RUN) == 6.0
-        assert reg.resolve_divisor(cur, 'GEFS', 'precipitation', RUN) == 3.0
+        """Each model against a run that actually holds it. AIFS and GEFS have
+        different divisors *and*, since §24, no init in common — which is the
+        per-run storage this module exists for, seen from the read side."""
+        for model, divisor in (('AIFS', 6.0), ('GEFS', 3.0)):
+            run = _a_loaded_run(cur, model, 'precipitation')
+            assert reg.resolve_divisor(cur, model, 'precipitation', run) == divisor
 
     def test_unscaled_resolves_to_None_which_is_an_answer(self, cur):
         """None here means "nothing to undo" and is a successful resolution.
@@ -266,7 +301,8 @@ class TestTheBackfillLeftNothingUndeclared:
         one of them is silently wrong about the loaded run."""
         from metrics import SCALED_EXPORT_DIVISOR_HOURS
         for model, divisor in SCALED_EXPORT_DIVISOR_HOURS.items():
-            assert reg.resolve_divisor(cur, model, 'precipitation', RUN) == divisor
+            run = _a_loaded_run(cur, model, 'precipitation')
+            assert reg.resolve_divisor(cur, model, 'precipitation', run) == divisor
 
 
 class TestTheRateConvention:
