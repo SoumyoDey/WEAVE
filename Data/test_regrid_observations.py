@@ -26,10 +26,15 @@ run the real SQL over coordinates chosen to put native points exactly on the
 cell boundaries, which is the only place the artifact can appear.
 
 Whether the *loaded* table is a correct partition of the *loaded* native data is
-a question about data rather than code, and `regrid_observations.py --compare`
-already answers it by rebuilding and measuring the difference. See §31.
+a separate question — about data rather than code — and it is still asked, by
+`TestTheLoadedTruthFieldIsCoherent` at the end of this file. That class is
+**local-only by design**: it reads `weave_weather`, which CI does not have, and
+says so when it skips. `regrid_observations.py --compare` measures the same
+thing in more detail, but only when someone runs it; the audit runs unprompted.
+See §31.
 """
 import math
+import os
 
 import pytest
 
@@ -171,13 +176,11 @@ class TestGuards:
 # on these very coordinates. Without it, "every cell has 25" might be true of
 # any rule, and the checkerboard test would be decoration.
 #
-# What is NOT tested here any more is whether the *loaded* `regridded_observation`
-# is a correct partition of the *loaded* `observation_data`. That is a question
-# about data, not about code, and it already has a tool:
-#     python regrid_observations.py --compare
-# which measures a rebuild against the stored table and prints the difference.
-# Asserting it from the suite only worked on a machine that had the live
-# database, which is what put these four in CI's skip list to begin with.
+# What this section does NOT cover is whether the *loaded*
+# `regridded_observation` is a correct partition of the *loaded*
+# `observation_data` — a question about data rather than code. That is audited
+# separately by `TestTheLoadedTruthFieldIsCoherent` at the end of this file,
+# which is local-only because only a development machine has the data to read.
 
 # IMERG's native lattice is 0.1 degrees with centres at odd multiples of 0.05,
 # so the .25 and .75 boundaries ARE native coordinates — which is exactly why
@@ -380,4 +383,170 @@ class TestCoverage:
             conn.close()
         assert forecast, 'no forecast cells — the comparison would be vacuous'
         assert truth, 'no truth cells — the comparison would be vacuous'
+        assert not (forecast - truth), sorted(forecast - truth)[:10]
+
+
+# ── Against the live database — LOCAL ONLY, by design ─────────────────────────
+#
+# Everything above runs anywhere PostgreSQL does, CI included, and checks the
+# *rule*. These check the *data*: that the `regridded_observation` the app
+# actually scores against really is a correct partition of the
+# `observation_data` it was built from, and that the checkerboard is not in it.
+#
+# The fixture cannot stand in for that, and the distinction is the same one
+# `test_run_registry.py` draws. The fixture's truth field is seeded by
+# `fixture_db.py` to a known answer; the live one was produced by a rebuild of a
+# table originally built off-repo, and a rebuild can be half-finished, run for
+# one source and not the other, or appended to rather than replaced. None of
+# those are reachable from the code under test, which is exactly why they are
+# worth looking at.
+#
+# `regrid_observations.py --compare` measures a rebuild against the stored table
+# in far more detail than this, and remains the tool for investigating a
+# difference. What it does not do is run unprompted. These do, every time the
+# suite runs where the database exists, which is the point: the question "is the
+# truth field still coherent" should not depend on someone thinking to ask it.
+#
+# They skip where there is no `weave_weather` — CI, and any fresh checkout — and
+# say so. That is a deliberate exception to "no skips in CI", not an oversight:
+# see NEXT_STEPS.md §31.
+
+def _live_database_reason():
+    """Why the live truth field cannot be audited here, or None."""
+    if os.environ.get('WEAVE_SKIP_DB_TESTS'):
+        return 'WEAVE_SKIP_DB_TESTS is set'
+    try:
+        import psycopg2
+        psycopg2.connect(connect_timeout=3, **ro.DB_CONFIG).close()
+    except Exception as exc:                                  # pragma: no cover
+        return (f'{ro.DB_CONFIG["dbname"]!r} is not reachable '
+                f'({type(exc).__name__}); this audits the loaded truth field '
+                f'and is local-only by design — the binning rule itself is '
+                f'tested against the fixture database above')
+    return None
+
+
+@pytest.fixture(scope='module')
+def live_cur():
+    """A read-only cursor on the live database.
+
+    **autocommit**, for the reason §26 records: a module-scoped connection that
+    holds a transaction open keeps an ACCESS SHARE lock on everything it has
+    read until teardown, and anything in the same process wanting an ACCESS
+    EXCLUSIVE lock then waits on a transaction only it can end. Nothing here
+    writes, so there is no transaction worth keeping.
+    """
+    reason = _live_database_reason()
+    if reason:
+        pytest.skip(reason)
+    import psycopg2
+    conn = psycopg2.connect(**ro.DB_CONFIG)
+    conn.autocommit = True
+    with conn.cursor() as c:
+        yield c
+    conn.close()
+
+
+class TestTheLoadedTruthFieldIsCoherent:
+    """The audits that were removed when these tests moved to the fixture.
+
+    Restored deliberately rather than left to `--compare`: an invariant nobody
+    is prompted to check is one that is discovered broken late.
+    """
+
+    def test_both_tables_are_populated(self, live_cur):
+        """The guard, asserted before the audits read through it.
+
+        The versions of these tests that ran before 2026-10-01 called
+        `pytest.skip('regridded_observation is not populated')` here. That is
+        the hollowing-out this repository has now hit three times (§26, §28,
+        §31): a test that has already decided it can run should not then decide
+        it has nothing to say. An empty truth field means every scored endpoint
+        returns nothing, so it is a failure, not an absence.
+        """
+        for table in ('observation_data', 'regridded_observation',
+                      'regridded_forecast_ens'):
+            live_cur.execute(f'SELECT EXISTS (SELECT 1 FROM {table})')
+            assert live_cur.fetchone()[0], f'{table} is empty'
+
+    def test_the_sql_rule_agrees_with_the_python_one_on_real_coordinates(self, live_cur):
+        """The designed scene above covers the offsets that matter by
+        construction; this covers the ones the data actually has. A native
+        coordinate nobody anticipated is the case the scene cannot reach."""
+        for column in ('latitude', 'longitude'):
+            live_cur.execute(
+                f"SELECT {column}, {ro._cell_sql(column)} "
+                f"FROM (SELECT DISTINCT {column} FROM observation_data) s")
+            rows = live_cur.fetchall()
+            assert rows, f'no distinct {column} values to check'
+            for raw, sql_cell in rows:
+                assert float(sql_cell) == ro.cell_centre(float(raw)), (column, raw)
+
+    def test_no_observation_is_counted_twice_or_dropped(self, live_cur):
+        """The partition property of the stored table, as arithmetic: the
+        stencil counts must sum to the number of native observations.
+
+        Verified to bite, against the live table inside a rolled-back
+        transaction: deleting 1% of the cells takes the pooled count from
+        2,991,816 to 2,961,897 and this fails, while the uniformity test below
+        still passes. The two are complementary — a partial rebuild is visible
+        only here, a wrong stencil rule is visible in both.
+
+        Note what cannot happen, and therefore is not what this guards:
+        `uq_regridded_observation_natural_key` makes a straight re-append
+        impossible, so the realistic failures are a rebuild that stopped early
+        or one that wrote different counts.
+        """
+        for source, (variable, column) in ro.SOURCES.items():
+            live_cur.execute(f"""SELECT count({column}) FROM observation_data
+                                 WHERE source=%s AND {column} IS NOT NULL""",
+                             (source,))
+            native = live_cur.fetchone()[0]
+            live_cur.execute("""SELECT coalesce(sum(source_points), 0)
+                                FROM regridded_observation
+                                WHERE source=%s AND variable_name=%s""",
+                             (source, variable))
+            pooled = live_cur.fetchone()[0]
+            assert native > 0, f'{source} has no native observations'
+            assert pooled == native, (
+                f'{source}: {pooled:,} pooled against {native:,} native — the '
+                f'stored field is not a partition of the data it came from')
+
+    def test_interior_stencils_are_uniform_regardless_of_parity(self, live_cur):
+        """The checkerboard, in the field the app actually scores against.
+
+        The pre-existing table failed this: whole-degree cells were built from a
+        6x6 native stencil and half-degree cells from 4x4. The rebuild that
+        replaced it on 2026-09-04 is what makes this pass, so this is the test
+        that notices if that is ever undone.
+        """
+        live_cur.execute("""
+            SELECT source, count(DISTINCT source_points)
+            FROM regridded_observation
+            WHERE latitude BETWEEN 26 AND 44 AND longitude BETWEEN -84 AND -66
+            GROUP BY 1""")
+        rows = live_cur.fetchall()
+        assert rows, 'no interior cells — the check would be vacuous'
+        for source, n_distinct in rows:
+            assert n_distinct == 1, (
+                f'{source} interior has {n_distinct} different stencil sizes — '
+                f'the parity artifact is back')
+
+    def test_truth_covers_every_forecast_cell(self, live_cur):
+        """A forecast cell with no truth cell scores nothing, silently, so the
+        observation grid must be a superset of the forecast grid.
+
+        The fixture version above pins the same invariant for the fixture's own
+        grids. This one is about the loaded run, where the two grids come from
+        different ingests entirely and nothing forces them to agree.
+        """
+        live_cur.execute("SELECT DISTINCT latitude, longitude "
+                         "FROM regridded_forecast_ens")
+        forecast = {(round(float(a), 4), round(float(b), 4))
+                    for a, b in live_cur.fetchall()}
+        live_cur.execute("SELECT DISTINCT latitude, longitude "
+                         "FROM regridded_observation")
+        truth = {(round(float(a), 4), round(float(b), 4))
+                 for a, b in live_cur.fetchall()}
+        assert forecast and truth, 'a grid is empty — the comparison is vacuous'
         assert not (forecast - truth), sorted(forecast - truth)[:10]

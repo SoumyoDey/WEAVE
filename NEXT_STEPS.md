@@ -2772,8 +2772,9 @@ Three groups, all now accounted for rather than assumed:
   scene in the fixture, not to point `DB_CONFIG` at a real database, because
   this module's argument-guard tests depend on it naming nothing reachable.
 
-**All three groups are now closed.** CI is `854 passed, 2 skipped`, and the two
-are the deliberate local-only audits named above.
+**All three groups are now closed.** The only skips left in CI are deliberate
+local-only data audits — two here and five in `test_regrid_observations.py`
+(§31) — each of which names its reason when it skips.
 - **14 — `test_convert_aifs.py`.** `pytest.importorskip('netCDF4')`, and
   `netCDF4` is not in `Data/requirements.txt`. A different problem with the same
   shape: a dependency absent from CI quietly removes a test class. Fixed
@@ -3096,26 +3097,66 @@ Python rule and the SQL translation, so the two still agree with each other,
 turns **9 tests red** — and, as the table predicts, the partition test is not
 among them.
 
-### What is no longer asserted, and where it went
+### The data audit, kept rather than delegated
 
-Whether the *loaded* `regridded_observation` is a correct partition of the
-*loaded* `observation_data`. That is a question about data, not code, and it
-already has a tool: `python regrid_observations.py --compare` rebuilds and
-measures the difference against the stored table. Asserting it from the suite
-only ever worked on a machine that had the live database, which is precisely
-what put these four in CI's skip list. The coverage test (truth ⊇ forecast)
-stays, against the fixture's two grids, where it guards something real:
-`fixture_db.py` sets those grids in different functions and nothing else would
-notice them drifting apart.
+The first version of this change dropped the live-table assertions entirely, on
+the grounds that `regrid_observations.py --compare` already measures a rebuild
+against the stored field. That was wrong in one specific way: **`--compare` only
+runs when someone runs it.** The question "is the truth field still a partition
+of the data it came from" should not depend on anyone thinking to ask.
 
-Result: 4 skips become 23 tests that run everywhere, up from 17 in this module.
+So `TestTheLoadedTruthFieldIsCoherent` keeps it, **local-only by design**, the
+same exception `test_run_registry.py` makes and for the same reason — the
+fixture cannot stand in for data. The fixture's truth field is seeded to a known
+answer by `fixture_db.py`; the live one came from a rebuild of a table
+originally built off-repo, and a rebuild can stop early, run for one source and
+not the other, or write different counts. None of those are reachable from the
+code under test. (A straight re-append is *not* among them —
+`uq_regridded_observation_natural_key` makes it impossible, which I found by
+trying it rather than by reading the schema.) Five assertions:
+
+- both tables are populated — a **failure**, not a skip. The versions before
+  2026-10-01 called `pytest.skip('regridded_observation is not populated')`
+  here, which is the hollowing-out this repository has now hit three times. A
+  test that has decided it can run should not then decide it has nothing to say;
+  an empty truth field means every scored endpoint returns nothing.
+- the SQL and Python rules agree on the coordinates the data actually has —
+  the case the designed scene cannot reach, since the scene covers the offsets
+  that matter *by construction* and the live table may hold one nobody expected;
+- `sum(source_points)` equals the native count, per source;
+- interior stencils are uniform — the checkerboard, in the field the app scores
+  against. The pre-existing table failed this (6x6 against 4x4); the 2026-09-04
+  rebuild is what makes it pass, so this notices if that is undone;
+- truth ⊇ forecast, for the loaded run, where the two grids come from different
+  ingests and nothing forces them to agree. The fixture keeps its own copy of
+  this invariant, which guards `fixture_db.py`'s two grid definitions drifting.
+
+Falsified against the live table, inside rolled-back transactions rather than
+reasoned about:
+
+| injected fault | partition test | uniformity test |
+|---|---|---|
+| 1% of cells deleted (a rebuild that stopped early) | **fails** — 2,961,897 against 2,991,816 | passes |
+| stencil counts perturbed by parity (the checkerboard) | **fails** | **fails** — 2 distinct sizes |
+
+The two are complementary, which is the argument for keeping both: a partial
+rebuild is visible only to the first.
+
+Cost, measured: about 51 seconds, almost all of it two full scans of
+`observation_data`. That is the price of auditing 123 GB and it is paid only
+where the data exists.
+
+### Result
+
+4 skips become 23 tests that run everywhere, plus 5 that run wherever the live
+database does — 28, up from 17 in this module.
 
 **That closes §26's list.** CI goes from `778 passed, 41 skipped` at ba3fa88 to
-854 passed with **2 skipped** — and those two are
-`TestTheDevelopmentDatabaseIsCoherent`, which is local-only by design because it
-audits rows that exist only in `weave_weather`. Every accidental skip this
-repository had is gone; the one deliberate pair names its own reason when it
-skips, in the module docstring and in the workflow.
+**7 skipped**, and every one of those seven is deliberate: five here and two in
+`test_run_registry.py`, each naming its own reason when it skips. Every
+*accidental* skip this repository had is gone. The difference matters more than
+the number — a skip that states why it is a skip is a decision; one that does
+not is a hole, and this project had 41 of them.
 
 ## 32. The config endpoint, and the join nobody was checking — 2026-10-01
 
