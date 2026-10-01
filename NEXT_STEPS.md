@@ -206,9 +206,16 @@ In priority order. Nothing here is half-done.
 **Every model/variable in the database is now the run it claims to be**, as of
 2026-09-30 (§24). That was not true for five of the nine combinations at
 `2025-09-08 00Z` before then, and §20 had recorded two of them as already fixed.
-If you are about to trust a number, the provenance question is settled; the
-*written* records are not — `METRICS_AUDIT.md` §0 still reports figures derived
-from the mislabelled rows.
+
+**The written records now agree with it too**, as of 2026-10-01: `METRICS_AUDIT.md`
+§0 is re-derived against `2025-09-16 00Z` — the only initialisation holding all
+three models at both variables — and the planning documents are reconciled
+against the code (§28). The re-derivation retracted the audit's own headline:
+*"AIFS 3.4× better than either"* at wind compared one correctly-paired model
+against two mislabelled ones, and the honest figure is **~21–27%**.
+
+So **nothing in the records is knowingly stale.** What is left below is work and
+decisions, not corrections.
 
 0. **The reviewer deployment is the live task** (§10). **Both prerequisites are
    fixed as of 2026-09-17** — one origin behind one `basic_auth`, and pool
