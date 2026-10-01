@@ -63,8 +63,20 @@ true neighborhood FSS.
 >   `p0-reliability` is gone and **work happens on `main`**, which is well past
 >   the 11 commits named below. There is nothing to "push" or "get reviewed".
 > - **The test suite is not 29 backend tests and 2 frontend smoke tests.** It is
->   800+ across both, with `metrics.py` and `flask_api.py` at 100% statement
->   coverage — measure it rather than quoting this, per `NEXT_STEPS.md`.
+>   far larger now. **This bullet used to carry the figures, including
+>   "`metrics.py` and `flask_api.py` at 100% statement coverage" — and
+>   `flask_api.py` was 97%.** Measured the same day the bullet was written.
+>
+>   Keep the correction visible, because of *where* it happened: a correction
+>   banner, headed "corrected 2026-10-01", asserting a number in the same breath
+>   as telling the reader to measure rather than quote it. The §29 reconciliation
+>   checked whether prose matched the *code* and so could not catch a claim that
+>   only a *measurement* falsifies — and then restated one.
+>
+>   So this bullet no longer names a figure at all. **`NEXT_STEPS.md`'s "Where
+>   things stand" holds the coverage numbers and the command that produces
+>   them**, in one place, because two copies of a measured number is how the
+>   second one rots.
 > - **`WEAVE_presentation` is gone**, so the warning about confusing it with the
 >   dev repo no longer applies. Its demo-readiness fixes were re-implemented
 >   here, which the note below already says.
