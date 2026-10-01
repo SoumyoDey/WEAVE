@@ -9,18 +9,27 @@ implementation instead of reproducing the old one:
     round-half-to-even assigns both of a cell's boundary neighbours to the
     whole-degree cell, so adjacent cells get systematically different stencils.
 
-The pure tests need no database. The ones that check the SQL against real
-coordinates skip themselves without PostgreSQL, like `test_db_endpoints.py`.
+The pure tests need no database. The ones that check the SQL run `ro.aggregate`
+against the **fixture** database, over a native scene defined in this file.
 
-**These assert against the live `regridded_observation`.** They were written
-against a staging copy (`regridded_observation_rebuilt`) while the rebuild was
-being compared to the old field; that copy became the live field on 2026-09-04,
-so they now guard the truth field the app actually scores against — which is what
-you want, since the parity check below is the one that fails if the
-banker's-rounding checkerboard ever comes back.
+**They used to assert against the live `regridded_observation`** — written
+against a staging copy while the rebuild was being compared to the old field,
+then pointed at the live table when that became the truth field on 2026-09-04.
+That is why they skipped on every CI run this repository had: `ro.DB_CONFIG`
+names `weave_weather`, which CI does not have (§26).
+
+Moving them changed what they are, for the better. They check a *rule*, and they
+had been using whatever was loaded as their supply of coordinates — so the
+parity test's coverage of the offsets that matter was luck, and the stencil test
+read a stored table rather than exercising the GROUP BY that builds it. They now
+run the real SQL over coordinates chosen to put native points exactly on the
+cell boundaries, which is the only place the artifact can appear.
+
+Whether the *loaded* table is a correct partition of the *loaded* native data is
+a question about data rather than code, and `regrid_observations.py --compare`
+already answers it by rebuilding and measuring the difference. See §31.
 """
 import math
-import os
 
 import pytest
 
@@ -126,104 +135,249 @@ class TestGuards:
             ro.main()
 
 
-# ── Against the real database ─────────────────────────────────────────────────
+# ── Against real SQL, on a scene designed to show the artifact ────────────────
 #
-# These four resolve through `ro.DB_CONFIG`, which names `weave_weather` unless
-# `DB_NAME` says otherwise, so they skip in CI — see NEXT_STEPS.md §26, where
-# the same gap in `test_run_registry.py` meant fourteen tests had never run.
+# These four used to resolve through `ro.DB_CONFIG`, which names `weave_weather`
+# unless `DB_NAME` says otherwise, so they skipped in CI on every run this
+# repository had — the same gap as `test_run_registry.py` (§26).
 #
-# **Do not "fix" that by setting DB_NAME in the workflow.** The guard tests
-# above (`test_the_guards_reject_before_touching_the_database`) depend on
-# `DB_CONFIG` naming nothing reachable: that is how the live-table guard sitting
-# *below* `psycopg2.connect` was caught in the first place. Pointing DB_NAME at
-# a real database would hollow those out — they would still pass, while no
-# longer testing that the refusal happens before any I/O — which is a worse
-# trade than the four skips below.
+# **The fix was not to set DB_NAME.** The guard tests above
+# (`test_the_guards_reject_before_touching_the_database`) depend on `DB_CONFIG`
+# naming nothing reachable: that is how the live-table guard sitting *below*
+# `psycopg2.connect` was caught in the first place. Pointing DB_NAME at a real
+# database would hollow those out — still passing, no longer testing that the
+# refusal precedes any I/O.
 #
-# The fix, when someone takes it, is the one `test_run_registry.py` took: move
-# these onto conftest's `fixture_db`, and assert non-emptiness first, because
-# three of the four already skip themselves when a table is unpopulated and
-# would otherwise go green against a fixture that seeds something different.
+# Nor was it enough to point these at the fixture database as it stands. What
+# they check is a *rule*, and they were using whatever happened to be loaded as
+# their supply of coordinates:
+#
+#   - the SQL/Python parity test read `observation_data`'s distinct coordinates,
+#     so its coverage of the dangerous offsets was luck rather than design;
+#   - the partition and stencil tests read the stored `regridded_observation`,
+#     which the fixture seeds synthetically rather than deriving, so against the
+#     fixture the first would have failed and the second would have passed on a
+#     single-point-per-cell field that cannot show a checkerboard at all.
+#
+# So they now run `ro.aggregate()` — the real GROUP BY, in real SQL — over a
+# native scene built here for the purpose: a 20x20 IMERG-like 0.1 degree grid
+# laid out to fill exactly 16 target cells, 25 native points each, spanning both
+# whole-degree and half-degree centres in both axes. The scene is inserted into
+# the fixture database inside a transaction that is rolled back, so nothing is
+# left behind for the endpoint tests that share it.
+#
+# `test_the_scene_can_actually_show_the_artifact` is the guard on all of this:
+# it checks in pure Python that round-half-to-even produces non-uniform stencils
+# on these very coordinates. Without it, "every cell has 25" might be true of
+# any rule, and the checkerboard test would be decoration.
+#
+# What is NOT tested here any more is whether the *loaded* `regridded_observation`
+# is a correct partition of the *loaded* `observation_data`. That is a question
+# about data, not about code, and it already has a tool:
+#     python regrid_observations.py --compare
+# which measures a rebuild against the stored table and prints the difference.
+# Asserting it from the suite only worked on a machine that had the live
+# database, which is what put these four in CI's skip list to begin with.
 
-def _skip_reason():
-    if os.environ.get('WEAVE_SKIP_DB_TESTS'):
-        return 'WEAVE_SKIP_DB_TESTS is set'
-    try:
-        import psycopg2
-        psycopg2.connect(**ro.DB_CONFIG).close()
-    except Exception as exc:                                  # pragma: no cover
-        return f'no database: {type(exc).__name__}'
-    return None
+# IMERG's native lattice is 0.1 degrees with centres at odd multiples of 0.05,
+# so the .25 and .75 boundaries ARE native coordinates — which is exactly why
+# the rounding rule matters. Laid out to fill whole target cells so that every
+# cell is interior and a correct rule gives a uniform stencil.
+NATIVE_STEP   = 0.1
+SCENE_LATS    = [round(34.75 + i * NATIVE_STEP, 2) for i in range(20)]
+SCENE_LONS    = [round(-76.25 + i * NATIVE_STEP, 2) for i in range(20)]
+SCENE_SOURCE  = 'WEAVE_TEST_IMERG'     # never a real source; see ro.SOURCES
+SCENE_TIMES   = 2
+EXPECTED_CELLS   = 16                  # 4 target cells per axis
+EXPECTED_STENCIL = 25                  # 5 native points per axis, per cell
+SCENE_POINTS  = len(SCENE_LATS) * len(SCENE_LONS)
 
 
 @pytest.fixture(scope='module')
-def cur():
-    reason = _skip_reason()
-    if reason:
-        pytest.skip(reason)
+def scene_cur(fixture_db):
+    """A cursor on the fixture database holding the native scene, uncommitted.
+
+    Inserted and rolled back rather than seeded into `fixture_db.py`: the scene
+    exists to exercise a binning rule at a resolution the rest of the fixture
+    has no use for, and `fixture_db`'s own `observation_data` is documented as
+    the shape the endpoints once read. Keeping it local means neither has to
+    bend around the other.
+
+    Read-only afterwards from the suite's point of view, and never committed, so
+    the modules that share this database cannot see it.
+    """
     import psycopg2
-    conn = psycopg2.connect(**ro.DB_CONFIG)
+    from psycopg2.extras import execute_values
+    from datetime import datetime, timedelta
+
+    conn = psycopg2.connect(**fixture_db.db_config())
+    rows = []
+    for t in range(SCENE_TIMES):
+        obs_time = datetime(2025, 9, 8, 0, 0, 0) + timedelta(hours=t)
+        for lat in SCENE_LATS:
+            for lon in SCENE_LONS:
+                # A value that varies by cell, so an averaging mistake is not
+                # hidden by a constant field.
+                rows.append((obs_time, lat, lon, abs(lat) + abs(lon),
+                             SCENE_SOURCE))
     with conn.cursor() as c:
+        execute_values(c, """
+            INSERT INTO observation_data
+                (obs_time, latitude, longitude, precipitation, source) VALUES %s
+        """, rows)
         yield c
+    conn.rollback()
     conn.close()
 
 
+class TestTheSceneIsFitForPurpose:
+    """Asserted before anything reads through it.
+
+    Two separate ways these tests could pass while checking nothing: the scene
+    could be empty, or it could be uniform under *every* rounding rule. Both are
+    ruled out here rather than assumed.
+    """
+
+    def test_the_scene_is_in_the_database(self, scene_cur):
+        scene_cur.execute("SELECT count(*) FROM observation_data WHERE source = %s",
+                          (SCENE_SOURCE,))
+        assert scene_cur.fetchone()[0] == SCENE_POINTS * SCENE_TIMES
+
+    def test_the_scene_can_actually_show_the_artifact(self):
+        """Guard the guard, in pure Python: round-half-to-even must produce a
+        *non*-uniform stencil on these coordinates.
+
+        If it did not, `test_interior_stencils_are_uniform_regardless_of_parity`
+        would be satisfied by any rule at all and would be pinning nothing.
+        Measured: the banker's rule gives 16, 24 and 36 where the correct one
+        gives a uniform 25.
+        """
+        import collections
+        banker = lambda v: 0.5 * round(v / 0.5)
+        counts = collections.Counter(
+            (banker(la), banker(lo)) for la in SCENE_LATS for lo in SCENE_LONS)
+        assert len(set(counts.values())) > 1, (
+            'the scene is uniform under round-half-to-even too, so it cannot '
+            'detect the checkerboard the correct rule exists to avoid')
+
+    def test_the_boundary_coordinates_really_are_in_the_scene(self):
+        # The artifact only appears where a native point sits exactly on a cell
+        # boundary. If the lattice ever moves off the .25/.75 offsets, the
+        # checkerboard test stops exercising the case it is named for.
+        half = TARGET_RESOLUTION / 2
+        on_boundary = [v for v in SCENE_LATS
+                       if math.isclose((v + half) % TARGET_RESOLUTION, 0.0,
+                                       abs_tol=1e-9)]
+        assert on_boundary, 'no latitude sits on a cell boundary'
+
+
 class TestTheSqlMatchesThePythonRule:
-    def test_they_agree_on_every_native_coordinate(self, cur):
+    def test_they_agree_on_every_scene_coordinate(self, scene_cur):
+        """`_cell_sql` is the translation of `cell_centre` into SQL, and the two
+        drifting apart would move the truth field without moving the rule that
+        documents it."""
         for column in ('latitude', 'longitude'):
-            cur.execute(f"SELECT DISTINCT {column} FROM observation_data ORDER BY 1")
-            values = [float(r[0]) for r in cur.fetchall()]
-            assert values, f'no {column} values to check'
-            cur.execute(
+            scene_cur.execute(
                 f"SELECT {column}, {ro._cell_sql(column)} "
-                f"FROM (SELECT DISTINCT {column} FROM observation_data) s ORDER BY 1")
-            for raw, sql_cell in cur.fetchall():
+                f"FROM (SELECT DISTINCT {column} FROM observation_data "
+                f"       WHERE source = %s) s ORDER BY 1", (SCENE_SOURCE,))
+            checked = scene_cur.fetchall()
+            assert len(checked) == len(SCENE_LATS), (column, len(checked))
+            for raw, sql_cell in checked:
                 assert float(sql_cell) == ro.cell_centre(float(raw)), (column, raw)
+
+    def test_they_agree_on_the_offsets_the_rule_turns_on(self, scene_cur):
+        """The boundaries specifically, including negative longitudes, where
+        `floor` and `round` disagree about which way to go."""
+        probes = [24.25, 24.75, 25.25, 35.25, 35.75, 36.25,
+                  -85.25, -75.75, -75.25, -74.75, -65.25]
+        scene_cur.execute(
+            f"SELECT v, {ro._cell_sql('v')} FROM unnest(%s::float8[]) AS v",
+            (probes,))
+        rows = scene_cur.fetchall()
+        assert len(rows) == len(probes)
+        for raw, sql_cell in rows:
+            assert float(sql_cell) == ro.cell_centre(float(raw)), raw
 
 
 class TestThePartition:
-    def test_no_observation_is_counted_twice_or_dropped(self, cur):
+    def test_no_observation_is_counted_twice_or_dropped(self, scene_cur):
         # The defining property of a partition, stated as arithmetic: the
         # stencil counts must sum to the number of native observations.
-        for source, (variable, column) in ro.SOURCES.items():
-            cur.execute(f"""SELECT count({column}) FROM observation_data
-                            WHERE source=%s AND {column} IS NOT NULL""", (source,))
-            native = cur.fetchone()[0]
-            cur.execute("""SELECT coalesce(sum(source_points), 0)
-                           FROM regridded_observation
-                           WHERE source=%s AND variable_name=%s""", (source, variable))
-            pooled = cur.fetchone()[0]
-            if pooled == 0:
-                pytest.skip('regridded_observation is not populated')
-            assert pooled == native, source
+        #
+        # Note what this does NOT catch on its own: the banker's rule preserves
+        # the total too (400 points either way). It moves points between cells
+        # rather than losing them, which is why the uniformity test below is a
+        # separate assertion and not a corollary of this one.
+        agg = ro.aggregate(scene_cur, SCENE_SOURCE, 'precipitation')
+        assert agg, 'the aggregate returned nothing'
+        pooled = sum(n for _, _, _, _, n in agg)
+        scene_cur.execute("""SELECT count(precipitation) FROM observation_data
+                             WHERE source = %s AND precipitation IS NOT NULL""",
+                          (SCENE_SOURCE,))
+        native = scene_cur.fetchone()[0]
+        assert pooled == native == SCENE_POINTS * SCENE_TIMES
 
-    def test_interior_stencils_are_uniform_regardless_of_parity(self, cur):
-        # The checkerboard test. In the stored table this returns several
-        # distinct counts per source; a correct partition returns exactly one.
-        cur.execute("""
-            SELECT source, count(DISTINCT source_points)
-            FROM regridded_observation
-            WHERE latitude BETWEEN 26 AND 44 AND longitude BETWEEN -84 AND -66
-            GROUP BY 1""")
-        rows = cur.fetchall()
-        if not rows:
-            pytest.skip('regridded_observation is not populated')
-        for source, n_distinct in rows:
-            assert n_distinct == 1, (
-                f'{source} interior has {n_distinct} different stencil sizes — '
-                f'the parity artifact is back')
+    def test_interior_stencils_are_uniform_regardless_of_parity(self, scene_cur):
+        # The checkerboard test. Under round-half-to-even this returns several
+        # distinct counts; a correct partition returns exactly one.
+        agg = ro.aggregate(scene_cur, SCENE_SOURCE, 'precipitation')
+        stencils = {int(n) for _, _, _, _, n in agg}
+        assert stencils == {EXPECTED_STENCIL}, (
+            f'interior has stencil sizes {sorted(stencils)} rather than a '
+            f'uniform {EXPECTED_STENCIL} — the parity artifact is back')
+
+    def test_both_parities_are_present_and_treated_alike(self, scene_cur):
+        # Uniformity only means anything if whole-degree and half-degree cells
+        # are both in the result. This is what the artifact discriminated on.
+        agg = ro.aggregate(scene_cur, SCENE_SOURCE, 'precipitation')
+        cells = {(round(float(la), 4), round(float(lo), 4))
+                 for _, la, lo, _, _ in agg}
+        assert len(cells) == EXPECTED_CELLS, sorted(cells)
+        whole = {c for c in cells if float(c[0]).is_integer()}
+        half  = cells - whole
+        assert whole and half, f'only one parity present: {sorted(cells)}'
+
+    def test_the_value_is_the_unweighted_mean_of_the_box(self, scene_cur):
+        # `source_points` records the count; `value` must be the plain mean of
+        # those points, not a weighted or nearest-point value.
+        agg = ro.aggregate(scene_cur, SCENE_SOURCE, 'precipitation')
+        by_cell = {}
+        for la in SCENE_LATS:
+            for lo in SCENE_LONS:
+                key = (ro.cell_centre(la), ro.cell_centre(lo))
+                by_cell.setdefault(key, []).append(abs(la) + abs(lo))
+        for _, la, lo, value, _ in agg:
+            expected = by_cell[(round(float(la), 4), round(float(lo), 4))]
+            assert float(value) == pytest.approx(sum(expected) / len(expected))
 
 
 class TestCoverage:
-    def test_truth_covers_every_forecast_cell(self, cur):
-        # A forecast cell with no truth cell scores nothing, silently. The
-        # observation grid must be a superset of the forecast grid.
-        cur.execute("""SELECT DISTINCT latitude, longitude
-                       FROM regridded_forecast_ens""")
-        forecast = {(round(float(a), 4), round(float(b), 4)) for a, b in cur.fetchall()}
-        cur.execute("""SELECT DISTINCT latitude, longitude
-                       FROM regridded_observation""")
-        truth = {(round(float(a), 4), round(float(b), 4)) for a, b in cur.fetchall()}
-        if not truth or not forecast:
-            pytest.skip('tables are not populated')
+    def test_truth_covers_every_forecast_cell(self, fixture_db):
+        """A forecast cell with no truth cell scores nothing, silently, so the
+        observation grid must be a superset of the forecast grid.
+
+        Checked against the fixture's own two grids rather than the loaded
+        database's. That makes it a test of the invariant the fixture is built
+        to satisfy — which is worth having, because `fixture_db.py` sets the
+        forecast and observation grids in different functions and nothing else
+        would notice them drifting apart.
+        """
+        import psycopg2
+        conn = psycopg2.connect(**fixture_db.db_config())
+        conn.autocommit = True
+        try:
+            with conn.cursor() as c:
+                c.execute("SELECT DISTINCT latitude, longitude "
+                          "FROM regridded_forecast_ens")
+                forecast = {(round(float(a), 4), round(float(b), 4))
+                            for a, b in c.fetchall()}
+                c.execute("SELECT DISTINCT latitude, longitude "
+                          "FROM regridded_observation")
+                truth = {(round(float(a), 4), round(float(b), 4))
+                         for a, b in c.fetchall()}
+        finally:
+            conn.close()
+        assert forecast, 'no forecast cells — the comparison would be vacuous'
+        assert truth, 'no truth cells — the comparison would be vacuous'
         assert not (forecast - truth), sorted(forecast - truth)[:10]

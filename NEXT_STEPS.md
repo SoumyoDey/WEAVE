@@ -2767,13 +2767,13 @@ Three groups, all now accounted for rather than assumed:
 - **9 — `test_point_list_caps.py`.** Fixed 2026-10-01, and it turned out not to
   be this section's problem at all. See §28: those nine passed locally while
   asserting nothing.
-- **4 — `test_regrid_observations.py`.** The same root cause as this section,
-  not yet fixed: they resolve through a module `DB_CONFIG` that names the
-  development database. Note that this module *also* contains argument-guard
-  tests that depend on CI's `DB_CONFIG` pointing at nothing — that is how the
-  live-table guard sitting below `psycopg2.connect` was caught — so the fix
-  there is to move the data tests onto the fixture, **not** to set `DB_NAME`.
-  That warning is now written at the point of definition in the file itself.
+- **4 — `test_regrid_observations.py`.** Fixed 2026-10-01, see §31. The warning
+  about `DB_NAME` held: the fix was to move the data tests onto a designed
+  scene in the fixture, not to point `DB_CONFIG` at a real database, because
+  this module's argument-guard tests depend on it naming nothing reachable.
+
+**All three groups are now closed.** CI is `854 passed, 2 skipped`, and the two
+are the deliberate local-only audits named above.
 - **14 — `test_convert_aifs.py`.** `pytest.importorskip('netCDF4')`, and
   `netCDF4` is not in `Data/requirements.txt`. A different problem with the same
   shape: a dependency absent from CI quietly removes a test class. Fixed
@@ -3032,6 +3032,90 @@ one these libraries actually have: a wheel that installs cleanly and then cannot
 load its HDF5 or PROJ at import. `pip` would be green, the import would fail,
 `importorskip` would swallow it, and 14 tests would vanish again — the same
 shape as §26 and §28, through a third route.
+
+## 31. The observation-regrid tests were measuring data, not the rule — FIXED 2026-10-01
+
+The last of §26's three groups. Like §28, fixing the skips meant first noticing
+that the tests were not quite what they appeared to be.
+
+`test_regrid_observations.py`'s four database tests resolved through
+`ro.DB_CONFIG`, so they skipped in CI. The obvious fix — set `DB_NAME` — is
+the one thing that must not be done here, and the file now says so at the point
+of definition: `test_the_guards_reject_before_touching_the_database` *depends*
+on `DB_CONFIG` naming nothing reachable, because that is how the live-table
+guard sitting below `psycopg2.connect` was caught. Setting `DB_NAME` would
+leave those passing while no longer testing that the refusal precedes any I/O.
+
+Pointing them at the fixture as it stands does not work either:
+
+- the SQL/Python parity test read `observation_data`'s distinct coordinates, so
+  the fixture's 0.5 degree grid would have given it almost nothing to check;
+- `test_no_observation_is_counted_twice_or_dropped` compared the stored
+  `regridded_observation` against the native table, and the fixture seeds those
+  two independently rather than deriving one from the other — it would have
+  **failed**;
+- `test_interior_stencils_are_uniform_regardless_of_parity` would have passed
+  on a field with one native point per cell, which cannot show a checkerboard
+  at all.
+
+### What they actually check
+
+A rule. They were using whatever happened to be loaded as a supply of
+coordinates, which made their coverage of the offsets that matter a matter of
+luck. So they now call `ro.aggregate()` — the real GROUP BY, in real SQL —
+over a scene defined in the test file: a 20x20 IMERG-like 0.1 degree lattice,
+laid out to fill exactly 16 target cells with 25 native points each, spanning
+whole-degree and half-degree centres on both axes. IMERG's lattice has centres
+at odd multiples of 0.05, so the .25 and .75 **cell boundaries are themselves
+native coordinates** — which is the only place the rounding rule can show a
+difference. The scene is inserted into the fixture database in a transaction
+that is rolled back, so the modules sharing that database never see it.
+
+### The part worth keeping
+
+Measured while designing the scene, and then written down as a test:
+
+| rule | cells | stencil sizes | total points |
+|---|---|---|---|
+| `floor(x + half)` (correct) | 16 | **25** uniformly | 400 |
+| round-half-to-even (the artifact) | 16 | **16, 24, 36** | 400 |
+
+**Both preserve the total.** The partition test — "no observation is counted
+twice or dropped" — passes under the defect, because the defect moves points
+between cells rather than losing them. The uniformity test is therefore not a
+corollary of the partition test but an independent assertion, and it is the one
+that fails. That is now stated in the test rather than left to be rediscovered.
+
+`test_the_scene_can_actually_show_the_artifact` pins the second row of that
+table in pure Python. Without it, "every cell has 25" could be true of any rule
+and the checkerboard test would be decoration — the same hollowing-out §28 was
+about, one level up.
+
+Falsified rather than assumed: reintroducing round-half-to-even in *both* the
+Python rule and the SQL translation, so the two still agree with each other,
+turns **9 tests red** — and, as the table predicts, the partition test is not
+among them.
+
+### What is no longer asserted, and where it went
+
+Whether the *loaded* `regridded_observation` is a correct partition of the
+*loaded* `observation_data`. That is a question about data, not code, and it
+already has a tool: `python regrid_observations.py --compare` rebuilds and
+measures the difference against the stored table. Asserting it from the suite
+only ever worked on a machine that had the live database, which is precisely
+what put these four in CI's skip list. The coverage test (truth ⊇ forecast)
+stays, against the fixture's two grids, where it guards something real:
+`fixture_db.py` sets those grids in different functions and nothing else would
+notice them drifting apart.
+
+Result: 4 skips become 23 tests that run everywhere, up from 17 in this module.
+
+**That closes §26's list.** CI goes from `778 passed, 41 skipped` at ba3fa88 to
+854 passed with **2 skipped** — and those two are
+`TestTheDevelopmentDatabaseIsCoherent`, which is local-only by design because it
+audits rows that exist only in `weave_weather`. Every accidental skip this
+repository had is gone; the one deliberate pair names its own reason when it
+skips, in the module docstring and in the workflow.
 
 ## Standing decisions — do not undo these by accident
 
