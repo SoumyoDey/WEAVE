@@ -2769,7 +2769,9 @@ Three groups, all now accounted for rather than assumed:
   That warning is now written at the point of definition in the file itself.
 - **14 — `test_convert_aifs.py`.** `pytest.importorskip('netCDF4')`, and
   `netCDF4` is not in `Data/requirements.txt`. A different problem with the same
-  shape: a dependency absent from CI quietly removes a test class.
+  shape: a dependency absent from CI quietly removes a test class. Fixed
+  2026-10-01 — see §30, where it turns out to have been a packaging gap rather
+  than a test-wiring one.
 
 ## 27. Phase 5 is decided, and the arithmetic was low again — 2026-10-01
 
@@ -2922,7 +2924,7 @@ client instead of taking conftest's; `test_regrid_observations.py` is next and
 its three `pytest.skip('...is not populated')` guards suggest the same question
 should be asked of it.
 
-## 28. The planning documents were audited against the code — 2026-10-01
+## 29. The planning documents were audited against the code — 2026-10-01
 
 Ten tracked `.md` files, checked against the codebase rather than against each
 other. **Three were telling a story the code contradicted**, and all three failed
@@ -2964,6 +2966,65 @@ error boundary and code-splitting.
   §19's four spatial metrics labelled wind in `mm/h`, and the `UI 'wind' is not a
   stored variable` trap. Adding a metric is still a two-place change, which is
   precisely S4's unmet exit criterion.
+
+## 30. netCDF4 was never a declared dependency — FIXED 2026-10-01
+
+The last of §26's three groups, and the only one that was not a test problem.
+
+`convert_aifs.py`, `convert_gefs.py` and `convert_ukmo.py` all read source
+NetCDF, all import `netCDF4` lazily, and all `sys.exit` with a message when it
+is missing. **None of that was declared.** `Data/requirements.txt` never listed
+it, so `pip install -r requirements.txt` produced an environment where the three
+scripts that let every forecast table be rebuilt from source exit on their first
+real use.
+
+The visible symptom was 14 skipped tests. `test_convert_aifs.py` splits into a
+numeric tier that runs anywhere and a file-reading tier behind
+`pytest.importorskip('netCDF4')`, and its docstring said so plainly — "which is
+not in `Data/requirements.txt` ... Same bargain as the PostgreSQL tests". The
+bargain was the wrong one: PostgreSQL genuinely is not present on every machine,
+whereas netCDF4 is a dependency this project simply had not written down.
+
+Confirmed rather than inferred: blocking the import locally turns exactly 14
+tests red, which is the count CI was skipping.
+
+### What was added, and why that version
+
+`netCDF4==1.7.4`, in `requirements.txt` rather than `requirements-dev.txt` —
+the converters need it at runtime; the tests needing it too is a consequence,
+not the reason.
+
+Checked before committing, because a pin that cannot install is worse than no
+pin:
+
+- 1.7.4 ships an **abi3** wheel tagged `manylinux_2_27_x86_64.manylinux_2_28`.
+  ubuntu-24.04 has glibc 2.39, so it qualifies. (An early check against
+  `manylinux_2_17` alone reported 1.7.2 as the newest available and was simply
+  the wrong question — pip on the runner accepts the union of supported tags,
+  not one.)
+- It needs nothing from apt, unlike cartopy: the wheels bundle HDF5 and
+  netcdf-c. It pulls `cftime` and `certifi`.
+- The whole of `requirements.txt` + `requirements-dev.txt` resolves to wheels
+  for cp313 on that platform with it added, against the existing `numpy==2.4.6`
+  pin. netCDF4 requires only `numpy>=1.21.2` there, so nothing is forced.
+
+The local environment has 1.7.4 from **conda-forge**, which is why the version
+looked available without checking PyPI. Worth remembering in a conda project:
+what is installed says nothing about what `pip install -r` will find.
+
+### The guard
+
+`importorskip` stays, but its meaning has changed: it is now a convenience for
+someone running the numeric tier on a partial install, not a statement that the
+dependency is optional. So the workflow gained a step that **imports netCDF4 and
+cartopy after installing** and prints their versions and linked C library
+versions.
+
+That is not redundant with `pip install` failing. The failure it catches is the
+one these libraries actually have: a wheel that installs cleanly and then cannot
+load its HDF5 or PROJ at import. `pip` would be green, the import would fail,
+`importorskip` would swallow it, and 14 tests would vanish again — the same
+shape as §26 and §28, through a third route.
 
 ## Standing decisions — do not undo these by accident
 
@@ -3030,7 +3091,15 @@ the same way — a real signal, misread as to cause.
    monotonically with lead; the wrong week gives a flat curve at a higher level.
    Cheaper than any of the correlation work in §24 and it answers the actual
    question.
-11. **A passing test can be worse than a skipped one.** Nine cap tests skipped
+11. **What is installed says nothing about what `pip install -r` will find.**
+    netCDF4 is a hard dependency of all three converters and was in no
+    requirements file for the life of the project, because the conda
+    environment had it and nobody ever installed from the file alone (§30).
+    The same gap made 14 tests skip in CI. In a conda project, read the
+    requirements file, not `pip list` — and check a pin resolves on the target
+    platform before committing it, since the version you have locally may have
+    come from a different channel entirely.
+12. **A passing test can be worse than a skipped one.** Nine cap tests skipped
     in CI and passed locally, and the local passes verified nothing at all: the
     fixture checked a database was reachable and then handed the endpoints
     conftest's MagicMock pool, which iterates empty (§28). A skip at least
@@ -3038,7 +3107,7 @@ the same way — a real signal, misread as to cause.
     code on every machine, and was found only because someone went to fix the
     skips. **Before trusting a test that talks to a database, check that it
     asserts a non-empty result** — and check which connection it actually got.
-12. **A skipped test and a passing test look identical in a green tick.**
+13. **A skipped test and a passing test look identical in a green tick.**
     Fourteen registry tests skipped on every CI run this repository ever had,
     because one environment variable was unset (§26). Nothing was red, nothing
     was wrong, and three commits to the registry went through untested. Read the

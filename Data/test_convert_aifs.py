@@ -10,9 +10,17 @@ Two tiers, deliberately:
 
 * The numeric conventions -- threshold, rounding, the mean/std coupling -- are
   tested against plain arrays and run everywhere, including CI.
-* The file-reading conventions need netCDF4, which is not in
-  `Data/requirements.txt`, so they build tiny NetCDF files in a tmpdir and skip
-  themselves where it is absent. Same bargain as the PostgreSQL tests.
+* The file-reading conventions need netCDF4, so they build tiny NetCDF files in
+  a tmpdir. They still `importorskip`, but that is now a convenience rather than
+  the bargain it used to be: **netCDF4 is a declared dependency as of
+  2026-10-01** (`Data/requirements.txt`), so the skip is there for someone
+  running the numeric tier on a partial install, not for CI.
+
+  It was the bargain, and it cost exactly what that kind of bargain costs: all
+  14 of them skipped on every CI run this repository had, because the converters
+  defer the import and nothing had ever declared it (NEXT_STEPS.md §26, §30).
+  The workflow now asserts netCDF4 imports after installing, so a wheel that
+  installs but cannot load its HDF5 is red rather than 14 fewer tests.
 
 **The synthetic grids here are deliberately non-square.** The real domain is
 81x81, which makes a transposed read completely silent; a 5x7 grid turns the

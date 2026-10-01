@@ -17,5 +17,19 @@ matplotlib==3.10.9
 numpy==2.4.6
 cartopy==0.25.0
 
+# Reads the source NetCDF files. `convert_aifs.py`, `convert_gefs.py` and
+# `convert_ukmo.py` each `sys.exit` without it, and those three are what lets
+# every forecast table be rebuilt from source — so this is a hard runtime
+# dependency that was simply never declared. The cost of the omission was
+# `test_convert_aifs.py`'s 14 file-reading tests skipping on every CI run
+# (NEXT_STEPS.md §26); the cost of it in production would have been a converter
+# that exits on a machine where `pip install -r requirements.txt` succeeded.
+#
+# Unlike cartopy above, this needs nothing from apt: the wheels bundle HDF5 and
+# netcdf-c. 1.7.4 ships an abi3 wheel tagged manylinux_2_28, which ubuntu-24.04
+# (glibc 2.39) satisfies; it pulls cftime and certifi and coexists with the
+# numpy pin above.
+netCDF4==1.7.4
+
 # Production WSGI server (do NOT use Flask's app.run() in beta/prod)
 gunicorn>=21.2

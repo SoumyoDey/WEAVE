@@ -17,8 +17,14 @@
 #   conftest.py          stubs the psycopg2 pool so importing flask_api needs no
 #                        DB, and provides the fixture-database fixtures
 #
-# Only test_db_endpoints.py needs PostgreSQL, and it skips itself when there is
-# none (or with WEAVE_SKIP_DB_TESTS=1), so the rest still runs anywhere.
+# test_db_endpoints.py, test_run_registry.py, test_point_list_caps.py and
+# test_regrid_idempotency.py need PostgreSQL, and they skip themselves when
+# there is none (or with WEAVE_SKIP_DB_TESTS=1), so the rest still runs
+# anywhere. CI sets WEAVE_REQUIRE_DB_TESTS=1 to turn that skip into a failure —
+# where a database is expected, a skip shrinks the run instead of failing it.
+#
+# Nothing test-only is needed to read NetCDF: netCDF4 is a runtime dependency of
+# the converters and is declared in requirements.txt.
 
 pytest>=8.0
 pytest-cov>=5.0
