@@ -445,6 +445,58 @@ def _check_pool_headroom(cursor):
     }
 
 
+# Phase 5's retention decision, 2026-10-01: **no retention limit yet, revisit at
+# 250 GB.** That is a real decision rather than a deferral, but only if something
+# announces the threshold — "revisit at 250 GB" is otherwise a note nobody reads
+# at the moment it matters, which is mid-load.
+#
+# The number is the user's, chosen against a measured 123.52 GB holding three
+# initialisations and a measured 55.30 GB for a three-model run. So the threshold
+# is a little over two runs away, and crossing it is a *loading* decision.
+#
+# `DATA_EXPANSION_DESIGN.md` phase 5 carries the archive options this is meant to
+# prompt; none is implemented, because none was chosen.
+DB_SIZE_REVISIT_GB = float(os.environ.get('WEAVE_DB_SIZE_REVISIT_GB', 250))
+
+
+def _check_storage_headroom(cursor):
+    """Report database size against the retention threshold, for `/api/health`.
+
+    The same shape of check as `_check_pool_headroom` above and for the same
+    reason: a condition that is only written down is a condition that is
+    discovered too late. The pool one predicts a failure under concurrent load;
+    this one predicts a failure under the next ingest, where running out of disk
+    partway through a 55 GB load is both slow to notice and tedious to unwind.
+
+    Reports the measured per-run cost alongside, because the question the
+    threshold actually asks is "does another run still fit", not "how big is
+    this". `runs` counts initialisations rather than (model, run) pairs, so a
+    partial run like the 06Z one counts as a whole.
+
+    Deliberately not a failure: `safe` goes False and the whole endpoint stays
+    `healthy`, because being past the threshold means a decision is due, not that
+    anything is broken.
+    """
+    cursor.execute("SELECT pg_database_size(current_database())")
+    size_gb = cursor.fetchone()[0] / 1024 ** 3
+    cursor.execute("SELECT COUNT(*) FROM forecast_runs")
+    pairs = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(DISTINCT initialization_time) FROM forecast_runs")
+    runs = cursor.fetchone()[0]
+    per_run = size_gb / runs if runs else 0.0
+    return {
+        'database_gb':      round(size_gb, 2),
+        'revisit_at_gb':    DB_SIZE_REVISIT_GB,
+        'headroom_gb':      round(DB_SIZE_REVISIT_GB - size_gb, 2),
+        'runs':             runs,
+        'model_runs':       pairs,
+        'mean_gb_per_run':  round(per_run, 2),
+        'runs_until_revisit': (int((DB_SIZE_REVISIT_GB - size_gb) // per_run)
+                               if per_run > 0 else None),
+        'safe':             size_gb < DB_SIZE_REVISIT_GB,
+    }
+
+
 def _pool_getconn():
     """getconn with a short bounded retry. ThreadedConnectionPool.getconn raises
     PoolError immediately when every connection is checked out; a brief wait lets
@@ -3114,6 +3166,11 @@ def health_check():
             # Reported here because the failure it predicts only appears under
             # concurrent load, by which point it reads as a database fault.
             "connection_pool": _check_pool_headroom(cursor),
+            # Whether another run still fits under the retention threshold.
+            # `safe: false` means a retention decision is due, not that anything
+            # is wrong — see DB_SIZE_REVISIT_GB and DATA_EXPANSION_DESIGN.md
+            # phase 5.
+            "storage": _check_storage_headroom(cursor),
         })
     except RunSelectionError:
         # A 400 about the request, not a server fault: let the
@@ -5139,8 +5196,28 @@ if __name__ == '__main__':
         try:
             with _hc_conn.cursor() as _hc_cur:
                 _pool = _check_pool_headroom(_hc_cur)
+                _store = _check_storage_headroom(_hc_cur)
         finally:
             return_db_connection(_hc_conn)
+
+        # Phase 5's threshold, announced where it can be acted on. Printed in
+        # both states, because "how many more runs fit" is the number someone
+        # wants *before* starting a load, not only once it is too late.
+        if _store['safe']:
+            print(f"💾 Storage: {_store['database_gb']} GB over "
+                  f"{_store['runs']} run(s), {_store['headroom_gb']} GB until the "
+                  f"{_store['revisit_at_gb']:.0f} GB retention review"
+                  + (f" (~{_store['runs_until_revisit']} more run(s))"
+                     if _store['runs_until_revisit'] is not None else ""))
+        else:
+            print("=" * 60)
+            print(f"⚠️  STORAGE PAST THE RETENTION THRESHOLD — a decision is due")
+            print(f"    {_store['database_gb']} GB over {_store['runs']} run(s), "
+                  f"threshold {_store['revisit_at_gb']:.0f} GB")
+            print(f"    mean {_store['mean_gb_per_run']} GB per run")
+            print("    Nothing is broken. Choose an archive tier before the next")
+            print("    ingest — DATA_EXPANSION_DESIGN.md phase 5 has the options.")
+            print("=" * 60)
 
         if _pool['safe']:
             print(f"✅ Pool headroom: {_pool['workers']} worker(s) × "
