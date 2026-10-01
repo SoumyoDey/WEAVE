@@ -242,16 +242,42 @@ class TestRegionMetrics:
             d['models']['AIFS']['correlation']
         assert d['n_points']['AIFS']['correlation'] == fx.N_CELLS
 
-    def test_ukmo_precipitation_has_no_probabilistic_scores(self, db_client):
-        """Not a bug, but a parity gap worth pinning: re-binning an hourly model
-        onto the common 6 h window combines records, and the spread of a mean is
-        not the mean of spreads, so CRPS/Brier/SSR are dropped rather than
-        guessed. AIFS and GEFS emit 6 h records natively and keep theirs."""
-        for model in ('AIFS', 'GEFS'):
+    def test_every_model_gets_probabilistic_scores_in_region_mode(self, db_client):
+        """This test used to assert the opposite, and was wrong to.
+
+        It read: "Not a bug, but a parity gap worth pinning — re-binning an
+        hourly model onto the common 6 h window combines records, and the spread
+        of a mean is not the mean of spreads, so CRPS/Brier/SSR are dropped
+        rather than guessed." The *mechanism* is right and still is. The
+        conclusion was not: §21 had already established that dropping them is a
+        defect, and fixed it for the maps and both point panels by taking the
+        spread from the member grid instead. Region mode fetched its pairs once
+        for all nine metrics, so it kept the hole — and this test pinned the hole
+        in place as intended behaviour.
+
+        The spread exists; it just is not in the re-binned table. An hourly model
+        is no less of an ensemble than a 6-hourly one.
+        """
+        for model in ('AIFS', 'GEFS', 'UKMO'):
             d = region_metrics(db_client, model, ['crps', 'brier', 'ssr_agg'])
-            assert all(v is not None for v in d['models'][model].values()), model
-        d = region_metrics(db_client, 'UKMO', ['crps', 'brier', 'ssr_agg'])
-        assert d['models']['UKMO'] == {'crps': None, 'brier': None, 'ssr_agg': None}
+            assert all(v is not None for v in d['models'][model].values()), \
+                f'{model} headline: {d["models"][model]}'
+            # The map beside the headline has to fill in too — they are separate
+            # consumers of the pairs and only one of them was routed at first.
+            assert all(n > 0 for n in d['n_points'][model].values()), \
+                f'{model} n_points: {d["n_points"][model]}'
+            assert all(v is not None for v in d['cell_means'][model].values()), \
+                f'{model} cell_means: {d["cell_means"][model]}'
+
+    def test_the_other_region_metrics_do_not_move_to_the_member_grid(self, db_client):
+        """Only the three spread metrics change source. Swapping the pairs
+        wholesale would have moved `mae`, `bias` and the categorical scores onto
+        a different sample without anyone asking, so this pins them against the
+        fixture's expected values — which are derived from the aggregate path."""
+        d = region_metrics(db_client, 'AIFS', ['mae', 'bias', 'rmse', 'csi'])
+        for metric in ('mae', 'bias', 'rmse', 'csi'):
+            assert d['models']['AIFS'][metric] == pytest.approx(
+                fx.EXPECT_PRECIP[metric], **APPROX), metric
 
 
 # ── The end of the observation record ─────────────────────────────────────────
@@ -1025,9 +1051,18 @@ class TestFormerDefects:
         assert not d['warnings'], d['warnings']
 
     def test_a_metric_with_no_value_still_counts_zero(self, db_client):
-        """The count has to stay honest in the other direction: UKMO precipitation
-        has no CRPS, so its count must be 0 rather than the cell total."""
-        d = region_metrics(db_client, 'UKMO', ['crps', 'fss'])
-        assert d['models']['UKMO']['crps'] is None
-        assert d['n_points']['UKMO']['crps'] == 0
+        """The count has to stay honest in the other direction too.
+
+        This used to use UKMO's CRPS as its example of a legitimate None. That
+        stopped being one when region mode started taking spread from the member
+        grid, so the example is now `correlation` on precipitation, whose spread
+        the fixture makes flat on purpose — a flat series has nothing to
+        correlate, which is a real None with a stated reason rather than a
+        missing capability. FSS is the contrast and the original defect: no
+        per-cell map, but a perfectly good score, so its count must not be 0.
+        """
+        d = region_metrics(db_client, 'UKMO', ['correlation', 'fss'])
+        assert d['models']['UKMO']['correlation'] is None
+        assert d['n_points']['UKMO']['correlation'] == 0
+        assert d['models']['UKMO']['fss'] is not None
         assert d['n_points']['UKMO']['fss'] > 0

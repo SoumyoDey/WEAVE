@@ -670,8 +670,40 @@ def _fss_from_pairs(pairs, threshold_rate, window):
     return _fss_from_components(total_num, total_den)
 
 
+def _spread_pooled_samples(pairs, threshold_rate):
+    """The spread-dependent samples, and the squared errors that belong WITH them.
+
+    Split out of `_region_pooled_metrics` so the three spread metrics can be
+    pooled from a different pair source than their neighbours — the member grid
+    rather than the re-binned mean/spread table. See
+    `flask_api.COMPARE_REGION_SPREAD_METRICS`.
+
+    Returns (variances, crps_vals, brier_vals, sq_errs) over the samples that
+    have a spread. `sq_errs` is returned rather than reusing the caller's
+    because aggregate SSR is a *ratio* of spread to error: taking its numerator
+    over the records that have a spread and its denominator over all records
+    compares two different samples, and for AIFS on the aggregate path those
+    sets genuinely differ — the increment spread is reconstructed as
+    sqrt(sigma(h)^2 - sigma(h-p)^2), which comes out negative for ~13% of
+    records and yields None for them. The per-cell function has always filtered
+    both together; this makes the pooled form agree with it.
+    """
+    variances, crps_vals, brier_vals, sq_errs = [], [], [], []
+    for entries in pairs.values():
+        for _hour, mean_rate, std_rate, obs_rate in entries:
+            if std_rate is None:
+                continue
+            variances.append(std_rate ** 2)
+            sq_errs.append((mean_rate - obs_rate) ** 2)
+            crps_vals.append(_gaussian_crps(mean_rate, std_rate, obs_rate))
+            brier_vals.append(
+                (_exceedance_probability(mean_rate, std_rate, threshold_rate)
+                 - float(obs_rate > threshold_rate)) ** 2)
+    return variances, crps_vals, brier_vals, sq_errs
+
+
 def _region_pooled_metrics(pairs, metrics, threshold_rate, n_members=None,
-                           fss_window=3):
+                           fss_window=3, spread_pairs=None):
     """Region metrics pooled over every (cell, lead time) sample.
 
     Averaging per-cell scores gives a cell with two samples the same weight as
@@ -681,11 +713,16 @@ def _region_pooled_metrics(pairs, metrics, threshold_rate, n_members=None,
     RMSE because the square root isn't linear. Pooling matches the estimator
     point mode already uses (_categorical_summary).
 
+    `spread_pairs` supplies `crps`, `ssr_agg` and `brier` when their samples come
+    from somewhere other than `pairs` — which is the normal case for region mode,
+    since an hourly model has no spread at all in the re-binned table. Omitted,
+    they are pooled from `pairs` as before, so a caller with one source that
+    carries spread is unaffected.
+
     `correlation` is absent here on purpose: it is a per-cell correlation across
     lead times, so it has no pooled form and stays a mean over cells.
     """
     errs, sq_errs, abs_errs = [], [], []
-    variances, crps_vals, brier_vals = [], [], []
     hits = misses = false_alarms = 0
 
     for entries in pairs.values():
@@ -695,18 +732,14 @@ def _region_pooled_metrics(pairs, metrics, threshold_rate, n_members=None,
             abs_errs.append(abs(err))
             sq_errs.append(err ** 2)
 
-            if std_rate is not None:
-                variances.append(std_rate ** 2)
-                crps_vals.append(_gaussian_crps(mean_rate, std_rate, obs_rate))
-                brier_vals.append(
-                    (_exceedance_probability(mean_rate, std_rate, threshold_rate)
-                     - float(obs_rate > threshold_rate)) ** 2)
-
             is_fcst = mean_rate > threshold_rate
             is_obs  = obs_rate  > threshold_rate
             if   is_fcst and     is_obs: hits         += 1
             elif is_fcst and not is_obs: false_alarms += 1
             elif not is_fcst and is_obs: misses       += 1
+
+    variances, crps_vals, brier_vals, spread_sq_errs = _spread_pooled_samples(
+        pairs if spread_pairs is None else spread_pairs, threshold_rate)
 
     if not errs:
         return {}
@@ -727,7 +760,8 @@ def _region_pooled_metrics(pairs, metrics, threshold_rate, n_members=None,
         'pod':   round(hits / obs_yes,  4) if obs_yes  else None,
         'far':   round(false_alarms / fcst_yes, 4) if fcst_yes else None,
         'ssr_agg': (_ssr_from_variances(sum(variances) / len(variances),
-                                        mean_sq_err, n_members)
+                                        sum(spread_sq_errs) / len(spread_sq_errs),
+                                        n_members)
                     if variances else None),
     }
     # FSS is spatial and per-lead-time, so it is built from the fields rather

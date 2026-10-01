@@ -2574,6 +2574,75 @@ against lead before trusting it.**
 audit still reports figures derived from the mislabelled rows, so every wind
 number and every GEFS number in it describes data that no longer exists.
 
+## 25. Region mode gets the spread metrics too — 2026-10-01
+
+§21 fixed `crps`, `ssr_agg` and `brier` for the maps and both point panels by
+taking spread from the member grid, and said in the same breath that
+`COMPARE_REGION_METRIC_FNS` still had the hole. It did, for two more days: region
+mode fetched its pairs **once** and handed the same dict to all nine metrics, so
+UKMO's three were empty in the Comparison tab's region view at every run and
+every lead range.
+
+**Two sources now, chosen per metric** — the point of the fix is that it is not a
+swap:
+
+| source | metrics |
+|---|---|
+| `_fetch_fcst_obs_pairs_spatial` — the re-binned mean/spread table | bias, mae, rmse, csi, pod, far, fss |
+| `_member_pairs_by_cell` — the member grid | **crps, ssr_agg, brier** (`COMPARE_REGION_SPREAD_METRICS`) |
+
+Swapping wholesale would have moved `mae` and the categorical scores onto a
+different sample without anyone asking. The member query is gated on one of the
+three actually being requested, because it is much the more expensive of the two
+— UKMO at 49 hourly lead times is the slowest call in the endpoint.
+
+**The headline needed it as well as the map.** `/api/compare/region-metrics` has
+two consumers of the pairs: the per-cell points behind `cell_means`, and
+`_region_pooled_metrics` behind the number the user actually reads. Routing only
+the first would have left the headline empty while the map beside it filled in —
+the §19 lesson (*check the display path and the scoring path separately*) in a
+new place.
+
+### Measured, live, at 09-16 over +0..48h
+
+| model | crps | ssr_agg | brier |
+|---|---|---|---|
+| AIFS | 0.1076 (651) | 0.6894 (640) | 0.005355 (651) |
+| GEFS | 0.1938 (651) | 0.5639 (546) | 0.007877 (651) |
+| **UKMO** | **0.1415 (600)** | **0.9151 (586)** | **0.00569 (600)** |
+
+Every UKMO figure was `None` with 0 cells before. They are also *sensible* rather
+than merely non-null, which is the better check: UKMO's CRPS sits between the
+other two, matching its MAE ranking, and its SSR of 0.9151 is the closest of the
+three to 1.0. `mae`/`bias`/`rmse`/`csi` are unchanged for all three.
+
+### A second defect found on the way, in pooled `ssr_agg`
+
+Aggregate SSR is a *ratio* of spread to error. `_region_pooled_metrics` was
+taking its numerator over the records that **have** a spread and its denominator
+over **all** records — two different samples. For AIFS on the aggregate path
+those sets genuinely differ, because the increment spread is reconstructed as
+`sqrt(σ(h)² − σ(h−p)²)` and comes out negative for ~13% of records. The per-cell
+function has always filtered both together; `_spread_pooled_samples` now makes
+the pooled form agree with it. **This moves AIFS and GEFS numbers too** — it is
+not only a UKMO fix.
+
+### A test was pinning the hole in place
+
+`test_ukmo_precipitation_has_no_probabilistic_scores` asserted UKMO's three were
+`None`, with a docstring reading *"Not a bug, but a parity gap worth pinning"*.
+The mechanism it described was correct and still is; the conclusion was wrong,
+and §21 had already overturned it for every other surface. **A test can encode a
+defect as intended behaviour, and its docstring will sound reasonable** — this
+one explained the mechanism accurately and drew the wrong inference from it.
+Renamed to `test_every_model_gets_probabilistic_scores_in_region_mode`, with the
+old text quoted in place so the reversal is legible rather than silent.
+
+`test_a_metric_with_no_value_still_counts_zero` used UKMO's missing CRPS as its
+example of a legitimate `None`; it now uses `correlation` on precipitation, whose
+spread the fixture makes flat on purpose, so the example is a real `None` with a
+stated reason rather than a missing capability.
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in
@@ -2627,7 +2696,13 @@ the same way — a real signal, misread as to cause.
    fact left the wrong rows in place, and nothing re-read the tables to notice
    (§24). Verify a data fix by querying for the *old* state and finding it
    absent, not by confirming the new state is present — both can be true at once.
-9. **MAE against lead time is a provenance test.** Row counts, grids, member
+9. **A test can pin a defect in place, and sound reasonable doing it.**
+   `test_ukmo_precipitation_has_no_probabilistic_scores` described its mechanism
+   accurately and drew the wrong conclusion from it — "not a bug, but a parity
+   gap worth pinning" — months after §21 had established it was a bug
+   everywhere else (§25). When a test asserts an **absence**, check whether the
+   absence is a property of the data or a limitation of the code path.
+10. **MAE against lead time is a provenance test.** Row counts, grids, member
    counts and lead ranges were identical between the two runs and told nothing
    apart. A forecast scored against its own valid times loses skill
    monotonically with lead; the wrong week gives a flat curve at a higher level.

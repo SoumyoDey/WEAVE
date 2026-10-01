@@ -4652,6 +4652,22 @@ COMPARE_REGION_METRIC_FNS = {
 COMPARE_REGION_METRICS = ['ssr_agg', 'correlation', 'bias', 'mae', 'rmse',
                           'crps', 'csi', 'pod', 'far', 'brier', 'fss']
 
+# The metrics here that need a SPREAD, and so must come from the member grid
+# rather than the regridded mean/spread table.
+#
+# `_rebin_to_common_window` returns `std = None` for any record it has to
+# combine, because the spread of a mean is not the mean of spreads. UKMO is
+# hourly, so every record combines and the aggregate path carries no spread for
+# it at all. §21 fixed that for the maps and the two point endpoints by routing
+# them through `_member_pairs_by_cell`, and **left region mode behind**: region
+# mode fetches its pairs once and hands the same dict to all nine metrics, so
+# UKMO's CRPS, aggregate SSR and Brier were empty in the Comparison tab's region
+# view at every run and every lead range.
+#
+# `ssr` is not here because it is single-hour and not in the region suite;
+# `correlation` is not here because it already runs the member path itself.
+COMPARE_REGION_SPREAD_METRICS = frozenset({'crps', 'ssr_agg', 'brier'})
+
 # FSS is a property of a whole field at a lead time, so unlike the others it has
 # no per-cell value: no map, and no entry in `cell_means`.
 COMPARE_REGION_NO_CELL_VALUE = {'fss'}
@@ -4688,11 +4704,25 @@ def _region_metric_points(cursor, model_name, variable, metrics,
                           hour_min, hour_max, threshold_rate):
     """Per-cell points for each pairs-based metric, for one model.
 
-    Every metric here derives from the same fcst↔obs match, so the two queries
-    behind it run once per model instead of once per (model, metric) — nine
-    metrics × three models would otherwise be 27 round trips per request.
-    Returns (points_by_metric, pairs, n_matched_cells) — the raw pairs come back
-    too so the caller can pool over samples rather than average per-cell scores.
+    **Two pair sources, chosen per metric**, which is the whole point of this
+    function's shape:
+
+        `pairs`         the regridded mean/spread table, re-binned onto the
+                        common verification window. Scores bias, mae, rmse,
+                        csi, pod, far and fss.
+        `spread_pairs`  the regridded MEMBER grid, where a spread always
+                        exists. Scores the three in
+                        `COMPARE_REGION_SPREAD_METRICS` — see that constant for
+                        why they cannot use the table above.
+
+    Both are fetched at most once per model rather than once per (model, metric)
+    — nine metrics × three models would otherwise be 27 round trips — and the
+    member query runs only when one of the three is actually requested, since it
+    is the more expensive of the two.
+
+    The raw pairs come back so the caller can pool over samples rather than
+    average per-cell scores. Returns
+    (points_by_metric, pairs, n_matched_cells, spread_pairs).
     """
     wanted = [m for m in metrics if m in COMPARE_REGION_METRIC_FNS]
     # FSS is derived from the same pairs but has no per-cell function of its own
@@ -4701,17 +4731,34 @@ def _region_metric_points(cursor, model_name, variable, metrics,
     # skipped the fetch entirely and reported no value, zero cells, and a warning
     # that the grids did not overlap — none of which was true.
     if not wanted and not (COMPARE_REGION_NO_CELL_VALUE & set(metrics)):
-        return {}, {}, 0
+        return {}, {}, 0, {}
     pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
                                           min_lat, max_lat, min_lon, max_lon,
                                           hour_min, hour_max)
+
+    spread_pairs = {}
+    if COMPARE_REGION_SPREAD_METRICS & set(metrics):
+        # The member grid is keyed by run, so it needs the init time the rest of
+        # this request is already about. `_single_metric_points` resolves it the
+        # same way for `correlation`.
+        init_time = _resolve_init_time(cursor, model_name)
+        if init_time is not None:
+            spread_pairs = _member_pairs_by_cell(
+                cursor, model_name, variable, init_time,
+                min_lat, max_lat, min_lon, max_lon, hour_min, hour_max)
+
     out = {}
     for m in wanted:
+        # An empty dict here is deliberate and is NOT the same as None: None
+        # makes each metric fall back to fetching the aggregate pairs itself,
+        # which is exactly the defect this routing exists to remove. No run
+        # resolved means no spread samples, which is an honest empty.
+        src = spread_pairs if m in COMPARE_REGION_SPREAD_METRICS else pairs
         out[m] = COMPARE_REGION_METRIC_FNS[m](
             cursor, model_name, variable,
             min_lat, max_lat, min_lon, max_lon,
-            hour_min, hour_max, threshold_rate=threshold_rate, pairs=pairs)
-    return out, pairs, len(pairs)
+            hour_min, hour_max, threshold_rate=threshold_rate, pairs=src)
+    return out, pairs, len(pairs), spread_pairs
 
 
 
@@ -4811,7 +4858,7 @@ def compare_region_metrics():
                              COMPARE_REGION_NO_CELL_VALUE) & set(metrics))
 
         for m in models:
-            points_by_metric, pairs, matched = _region_metric_points(
+            points_by_metric, pairs, matched, spread_pairs = _region_metric_points(
                 cursor, m, variable, metrics,
                 min_lat, max_lat, min_lon, max_lon,
                 hour_min, hour_max, threshold_rate)
@@ -4819,9 +4866,15 @@ def compare_region_metrics():
             # Headline values are pooled over every (cell, lead time) sample —
             # the same estimator point mode uses. The per-cell mean is what the
             # MAP of this metric averages to, so it is reported alongside.
+            #
+            # `spread_pairs` has to reach here as well as the per-cell functions:
+            # the headline and the map are two separate consumers of the pairs,
+            # and fixing only the per-cell path would have left the number the
+            # user actually reads still empty for an hourly model.
             values = _region_pooled_metrics(pairs, metrics, threshold_rate,
                                             _ensemble_size(cursor, m),
-                                            fss_window=fss_window)
+                                            fss_window=fss_window,
+                                            spread_pairs=spread_pairs)
             cell_means = {k: _region_mean(v) for k, v in points_by_metric.items()}
             counts     = {k: len(v) for k, v in points_by_metric.items()}
             # Metrics with no pooled form (correlation) fall back to the cell mean.

@@ -608,7 +608,7 @@ class TestRegionMetrics:
         calls = []
         monkeypatch.setattr(api, "_fetch_fcst_obs_pairs_spatial",
                             lambda *a, **k: (calls.append(a), PAIRS)[1])
-        points, _pairs, n_cells = api._region_metric_points(
+        points, _pairs, n_cells, _sp = api._region_metric_points(
             None, "AIFS", "precipitation",
             ["bias", "mae", "rmse", "correlation"],
             0, 1, 0, 1, 0, 24, threshold_rate=1.5)
@@ -623,7 +623,7 @@ class TestRegionMetrics:
     def test_threshold_reaches_categorical_metrics(self, monkeypatch):
         monkeypatch.setattr(api, "_fetch_fcst_obs_pairs_spatial",
                             lambda *a, **k: CAT_PAIRS)
-        points, _pairs, _n = api._region_metric_points(
+        points, _pairs, _n, _sp = api._region_metric_points(
             None, "AIFS", "precipitation", ["csi", "pod", "far"],
             0, 1, 0, 1, 0, 24, threshold_rate=1.5)
         assert api._region_mean(points["csi"]) == round(1 / 3, 4)
@@ -637,7 +637,7 @@ class TestRegionMetrics:
             (36.0, -79.5): [(6, 2.0, 1.0, 1.0)],                       # bias +1
             (36.5, -79.5): [(6, 4.0, 1.0, 1.0), (12, 4.0, 1.0, 1.0)],  # bias +3
         })
-        points, _pairs, n_cells = api._region_metric_points(
+        points, _pairs, n_cells, _sp = api._region_metric_points(
             None, "AIFS", "precipitation", ["bias"],
             0, 1, 0, 1, 0, 24, threshold_rate=1.5)
         assert n_cells == 2
@@ -648,7 +648,155 @@ class TestRegionMetrics:
                             lambda *a, **k: pytest.fail("should not query"))
         assert api._region_metric_points(
             None, "AIFS", "precipitation", ["correlation"],
-            0, 1, 0, 1, 0, 24, threshold_rate=1.5) == ({}, {}, 0)
+            0, 1, 0, 1, 0, 24, threshold_rate=1.5) == ({}, {}, 0, {})
+
+
+class TestRegionSpreadMetricsUseTheMemberGrid:
+    """An hourly model has no spread in the re-binned table, so region mode has
+    to take `crps`, `ssr_agg` and `brier` from the member grid instead.
+
+    These stand in for the state measured on 2026-09-29: UKMO returned **0
+    cells** for exactly these three at every run and every lead range, while
+    `ssr` and `correlation` returned ~1,500 for the same model. §21 fixed the
+    maps and the point panels; region mode fetched its pairs once for all nine
+    metrics and was left behind.
+
+    `HOURLY` is the shape `_rebin_to_common_window` produces for such a model:
+    every mean and observation present, every spread `None`, because the spread
+    of a mean is not the mean of spreads.
+    """
+
+    HOURLY = {(36.0, -79.5): [(6, 2.0, None, 1.0), (12, 3.0, None, 1.0)]}
+    MEMBERS = {(36.0, -79.5): [(6, 2.0, 0.5, 1.0), (12, 3.0, 0.5, 1.0)]}
+    SPREAD = ["crps", "ssr_agg", "brier"]
+
+    def _points(self, monkeypatch, metrics, members=None):
+        monkeypatch.setattr(api, "_fetch_fcst_obs_pairs_spatial",
+                            lambda *a, **k: self.HOURLY)
+        monkeypatch.setattr(api, "_resolve_init_time",
+                            lambda *a, **k: "2025-09-08 00:00:00")
+        monkeypatch.setattr(api, "_member_pairs_by_cell",
+                            lambda *a, **k: self.MEMBERS if members is None else members)
+        monkeypatch.setattr(api, "_ensemble_size", lambda *a, **k: 18)
+        return api._region_metric_points(
+            None, "UKMO", "precipitation", metrics,
+            0, 1, 0, 1, 0, 24, threshold_rate=1.5)
+
+    def test_the_three_spread_metrics_are_populated_not_empty(self, monkeypatch):
+        """The regression itself: these came back with no cells at all."""
+        points, _pairs, _n, spread = self._points(monkeypatch, self.SPREAD)
+        assert spread == self.MEMBERS
+        for metric in self.SPREAD:
+            assert points[metric], f"{metric} is still empty for an hourly model"
+
+    def test_they_are_empty_without_the_member_grid(self, monkeypatch):
+        """The control. Same pairs, same code path, member grid withheld — if
+        this passed too, the test above would be proving nothing."""
+        monkeypatch.setattr(api, "_fetch_fcst_obs_pairs_spatial",
+                            lambda *a, **k: self.HOURLY)
+        monkeypatch.setattr(api, "_resolve_init_time", lambda *a, **k: None)
+        monkeypatch.setattr(api, "_member_pairs_by_cell",
+                            lambda *a, **k: pytest.fail("no run to query"))
+        points, _pairs, _n, spread = api._region_metric_points(
+            None, "UKMO", "precipitation", self.SPREAD,
+            0, 1, 0, 1, 0, 24, threshold_rate=1.5)
+        assert spread == {}
+        for metric in self.SPREAD:
+            assert points[metric] == []
+
+    def test_the_other_metrics_still_read_the_aggregate_pairs(self, monkeypatch):
+        """Swapping the source wholesale would move `mae` and friends too. The
+        member grid here carries a different mean (4.0) from the table (2.0/3.0),
+        so a metric reading the wrong source is visible in its value."""
+        members = {(36.0, -79.5): [(6, 4.0, 0.5, 1.0), (12, 4.0, 0.5, 1.0)]}
+        points, _pairs, _n, _spread = self._points(
+            monkeypatch, ["mae", "bias", "crps"], members=members)
+        # mean(|2-1|, |3-1|) from the table, not mean(|4-1|, |4-1|) = 3.0
+        assert api._region_mean(points["mae"]) == 1.5
+        assert api._region_mean(points["bias"]) == 1.5
+
+    def test_the_member_grid_is_not_queried_when_no_spread_metric_is_asked_for(
+            self, monkeypatch):
+        """It is the more expensive of the two queries, and the Comparison tab
+        requests this endpoint on every parameter change."""
+        monkeypatch.setattr(api, "_fetch_fcst_obs_pairs_spatial",
+                            lambda *a, **k: self.HOURLY)
+        monkeypatch.setattr(api, "_member_pairs_by_cell",
+                            lambda *a, **k: pytest.fail("should not query"))
+        monkeypatch.setattr(api, "_resolve_init_time",
+                            lambda *a, **k: pytest.fail("should not resolve"))
+        _points, _pairs, _n, spread = api._region_metric_points(
+            None, "UKMO", "precipitation", ["mae", "csi"],
+            0, 1, 0, 1, 0, 24, threshold_rate=1.5)
+        assert spread == {}
+
+    def test_the_member_grid_is_fetched_once_for_all_three(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(api, "_fetch_fcst_obs_pairs_spatial",
+                            lambda *a, **k: self.HOURLY)
+        monkeypatch.setattr(api, "_resolve_init_time",
+                            lambda *a, **k: "2025-09-08 00:00:00")
+        monkeypatch.setattr(api, "_member_pairs_by_cell",
+                            lambda *a, **k: (calls.append(a), self.MEMBERS)[1])
+        api._region_metric_points(
+            None, "UKMO", "precipitation", self.SPREAD + ["mae"],
+            0, 1, 0, 1, 0, 24, threshold_rate=1.5)
+        assert len(calls) == 1
+
+
+class TestPooledSpreadMetricsTakeTheirOwnSource:
+    """The headline number, not just the map.
+
+    `/api/compare/region-metrics` has two consumers of the pairs — the per-cell
+    points behind `cell_means`, and `_region_pooled_metrics` behind the value
+    the user actually reads. Routing only the first would have left the headline
+    empty for an hourly model while the map beside it filled in.
+    """
+
+    HOURLY = {(36.0, -79.5): [(6, 2.0, None, 1.0), (12, 3.0, None, 1.0)]}
+    MEMBERS = {(36.0, -79.5): [(6, 2.0, 0.5, 1.0), (12, 3.0, 0.5, 1.0)]}
+
+    def test_without_a_spread_source_they_are_none(self):
+        out = api._region_pooled_metrics(self.HOURLY, ["mae", "crps", "brier",
+                                                       "ssr_agg"], 1.5)
+        assert out["mae"] == 1.5          # unaffected
+        assert out["crps"] is None
+        assert out["brier"] is None
+        assert out["ssr_agg"] is None
+
+    def test_with_one_they_are_populated_and_mae_is_unchanged(self):
+        out = api._region_pooled_metrics(
+            self.HOURLY, ["mae", "crps", "brier", "ssr_agg"], 1.5,
+            n_members=18, spread_pairs=self.MEMBERS)
+        assert out["mae"] == 1.5          # still the aggregate pairs
+        assert out["crps"] is not None
+        assert out["brier"] is not None
+        assert out["ssr_agg"] is not None
+
+    def test_omitting_it_pools_from_pairs_as_before(self):
+        """A caller whose single source carries spread must be unaffected."""
+        assert (api._region_pooled_metrics(PAIRS, ["crps"], 1.5) ==
+                api._region_pooled_metrics(PAIRS, ["crps"], 1.5,
+                                           spread_pairs=PAIRS))
+
+    def test_ssr_agg_takes_both_halves_from_the_same_sample(self):
+        """Its numerator is a spread and its denominator an error, so they have
+        to be measured over the same records. Here only the second record has a
+        spread: the error over both is RMS(1, 2), over the second alone it is 2.
+        Mixing them would report a ratio of two different samples.
+        """
+        mixed = {(36.0, -79.5): [(6, 2.0, None, 1.0), (12, 3.0, 2.0, 1.0)]}
+        got = api._region_pooled_metrics(mixed, ["ssr_agg"], 1.5,
+                                         n_members=None)["ssr_agg"]
+
+        # spread 2.0 over the one record that has one; error 2.0 on that same
+        # record.
+        same_sample = round(math.sqrt(4.0 / 4.0), 4)
+        # What mixing gives: the same spread over the error of BOTH records,
+        # mean(1^2, 2^2) = 2.5. Named so the two cannot be confused later.
+        mixed_samples = round(math.sqrt(4.0 / 2.5), 4)
+        assert same_sample != mixed_samples        # the test can tell them apart
+        assert got == same_sample == 1.0
 
 
 # ── Spatial difference (compare/spatial-diff) ─────────────────────────────────
