@@ -127,6 +127,23 @@ class TestGuards:
 
 
 # ── Against the real database ─────────────────────────────────────────────────
+#
+# These four resolve through `ro.DB_CONFIG`, which names `weave_weather` unless
+# `DB_NAME` says otherwise, so they skip in CI — see NEXT_STEPS.md §26, where
+# the same gap in `test_run_registry.py` meant fourteen tests had never run.
+#
+# **Do not "fix" that by setting DB_NAME in the workflow.** The guard tests
+# above (`test_the_guards_reject_before_touching_the_database`) depend on
+# `DB_CONFIG` naming nothing reachable: that is how the live-table guard sitting
+# *below* `psycopg2.connect` was caught in the first place. Pointing DB_NAME at
+# a real database would hollow those out — they would still pass, while no
+# longer testing that the refusal happens before any I/O — which is a worse
+# trade than the four skips below.
+#
+# The fix, when someone takes it, is the one `test_run_registry.py` took: move
+# these onto conftest's `fixture_db`, and assert non-emptiness first, because
+# three of the four already skip themselves when a table is unpopulated and
+# would otherwise go green against a fixture that seeds something different.
 
 def _skip_reason():
     if os.environ.get('WEAVE_SKIP_DB_TESTS'):
