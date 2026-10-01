@@ -1857,6 +1857,50 @@ SPATIAL_METRIC_REGISTRY = {
     'brier':       _dispatch_brier,
 }
 
+# What each metric needs from the caller, declared once and served by
+# `/api/config`.
+#
+# **This is the single source of truth these facts never had.** The same two
+# flags were written out again in `src/constants.js` as `requiresHour` and
+# `requiresThreshold`, so a metric could be added to the dispatch registry above
+# and be invisible in the selector, or be offered without the control it needs.
+# `SYSTEM_DESIGN_PLAN.md` S4 asks for exactly this and its exit criterion —
+# "adding a metric is a single-place change" — was unmet.
+#
+# Two tests hold it to that. One checks this table against what the dispatchers
+# *actually read* (`test_config_endpoint.py`), so a declaration cannot drift from
+# behaviour; the other checks `src/constants.js` against this table, so the
+# frontend cannot drift from either. The second is the one that matters: the
+# defects this repo keeps finding are backend/frontend disagreements that no
+# single-sided test could see — four spatial metrics labelling wind maps in
+# `mm/h` (§19), and the UI's `wind` not being a stored variable at all.
+#
+# `hour` means a single lead time rather than a range: only `ssr` works that way,
+# which is why it is absent from the region suite.
+METRIC_REQUIREMENTS = {
+    'ssr':         {'hour': True,  'threshold': False},
+    'ssr_agg':     {'hour': False, 'threshold': False},
+    'correlation': {'hour': False, 'threshold': False},
+    'bias':        {'hour': False, 'threshold': False},
+    'mae':         {'hour': False, 'threshold': False},
+    'rmse':        {'hour': False, 'threshold': False},
+    'crps':        {'hour': False, 'threshold': False},
+    'csi':         {'hour': False, 'threshold': True},
+    'pod':         {'hour': False, 'threshold': True},
+    'far':         {'hour': False, 'threshold': True},
+    'brier':       {'hour': False, 'threshold': True},
+}
+
+# The unit each variable carries, which decides whether a metric needs a
+# separate wind scale. Duplicated in `src/constants.js` as `VALUE_UNITS` until
+# 2026-10-01; the parity test now pins them together. `/api/compare/skill` used
+# to hard-code `mm/h` for every variable, which is the defect this removes the
+# conditions for.
+VARIABLE_UNITS = {
+    'precipitation': 'mm/h',
+    'wind':          'm/s',
+}
+
 
 @app.route('/api/forecast-data', methods=['GET'])
 def get_forecast_data():
@@ -2860,6 +2904,62 @@ def spatial_metric_plot():
         import traceback
         traceback.print_exc()
         return jsonify({'error': 'Internal server error'}), 500
+
+
+@app.route('/api/config', methods=['GET'])
+def get_config():
+    """The facts the frontend would otherwise have to restate.
+
+    `SYSTEM_DESIGN_PLAN.md` S4 asks for "one backend source of truth, exposed to
+    the frontend via a config endpoint", with the exit criterion that adding a
+    model, variable or metric is a single-place change. This is that endpoint.
+
+    **What it serves and what it deliberately does not.** It serves *facts*:
+    which metrics exist, what each one needs from the caller, which variables
+    exist and in what unit, which metrics have a map, and the common
+    verification window. It does not serve *presentation* — colours, labels,
+    legend wording and band edges stay in `src/constants.js`, because those are
+    genuine frontend concerns and the band edges carry a calibration rationale
+    (`WIND_BAND_BASIS`) that belongs with them.
+
+    That split is not a compromise. The server-rendered PNG and the browser
+    overlay are intentionally different renderings: `PLOT_STYLE_REGISTRY` uses a
+    continuous `Normalize` for most metrics while the overlay uses discrete
+    bands, so forcing one set of colours through here would make them agree by
+    breaking one of them. The two *do* share SSR's boundaries, and the parity
+    test pins those specifically.
+
+    No database access, so it answers while the pool is busy and cannot fail
+    over a query. `n_members` therefore comes from `/api/runs`, which already
+    reports it per run — the member count is a property of a run, not of a
+    model, and `src/constants.js` hardcoding it per model was wrong in principle
+    even while the numbers happened to be right.
+    """
+    return jsonify({
+        'variables': {name: {'unit': unit}
+                      for name, unit in VARIABLE_UNITS.items()},
+        'metrics': {
+            key: {
+                'requires_hour':      METRIC_REQUIREMENTS[key]['hour'],
+                'requires_threshold': METRIC_REQUIREMENTS[key]['threshold'],
+                # Every spatial metric has a map; `fss` is the one that cannot
+                # and is absent from this registry for that reason.
+                'mapped':             True,
+                # Whether the metric's scale is unit-sensitive. The dimensionless
+                # ones (CSI, POD, FAR, SSR, correlation) mean the same thing in
+                # any unit and deliberately have no wind variant.
+                'unit_sensitive':     key in WIND_PLOT_STYLE_OVERRIDES,
+            }
+            for key in SPATIAL_METRIC_REGISTRY
+        },
+        'region_metrics':       COMPARE_REGION_METRICS,
+        # FSS is a property of a field at a lead time, so it has a region value
+        # and no per-cell map. Stated here so the UI need not special-case it.
+        'region_no_cell_value': sorted(COMPARE_REGION_NO_CELL_VALUE),
+        # The three that need a spread and so read the member grid (§21, §25).
+        'region_spread_metrics': sorted(COMPARE_REGION_SPREAD_METRICS),
+        'verification_window_hours': COMMON_VERIFICATION_WINDOW_HOURS,
+    })
 
 
 @app.route('/api/models', methods=['GET'])

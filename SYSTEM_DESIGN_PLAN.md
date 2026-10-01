@@ -299,18 +299,37 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
   computes what *would* fit; nothing has driven load at it.
 - **Exit:** not reached.
 
-### S4 — Extensibility & maintainability — **NOT STARTED**
-- **The backend registries exist but the frontend does not read them.**
-  `SPATIAL_METRIC_REGISTRY`, `PLOT_STYLE_REGISTRY`, `COMPARE_REGION_METRIC_FNS`
-  and `forecast_run_registry` are each a backend source of truth — but there is
-  **no config endpoint**, and `src/constants.js` keeps its own copy of model
-  names, colours, member counts and metric bands.
-- **This phase's exit criterion is still unmet**, and it is the one most likely
-  to cause the next defect of the kind this project keeps finding. Adding a
-  metric today means editing a backend registry *and* a frontend constant, and
-  the two drifting apart is exactly the shape of §19's "four spatial metrics
-  labelled wind maps in mm/h" and of the `UI 'wind' is not a stored variable`
-  trap. `README.md`'s "How to add a metric" already lists both halves.
+### S4 — Extensibility & maintainability — **CONFIG ENDPOINT DONE 2026-10-01**
+- ~~Single registry exposed to the frontend via a config endpoint~~ **DONE.**
+  `GET /api/config` (`NEXT_STEPS.md` §32) serves the facts that were duplicated:
+  which metrics exist, which need a single lead time rather than a range, which
+  need a threshold, which have a unit-sensitive scale, which variables exist and
+  in what unit, the region suite, and the common verification window. No
+  database access — 2 ms — so it answers while the pool is busy.
+
+  **It serves facts, not presentation, and that boundary is deliberate.**
+  Colours, labels, legends and band edges stay in `src/constants.js`. The
+  server-rendered PNG uses a continuous `Normalize` for most metrics while the
+  browser overlay uses discrete bands: they are different renderings on purpose,
+  so pushing one palette through the endpoint would make them agree by breaking
+  one of them.
+
+  **The parity tests are what close the gap**, not the endpoint. Three joins are
+  now checked: `METRIC_REQUIREMENTS` against what the dispatchers actually read
+  (by introspection), `src/constants.js` against the endpoint in both
+  directions, and `VALUE_UNITS` against `VARIABLE_UNITS`. Verified to *fail*
+  rather than assumed: flipping `csi`'s `requiresThreshold` in the frontend
+  produces `requires_threshold disagrees (backend, frontend): {'csi': (True,
+  False)}`, and a backend-only metric is named. The JS parser asserts it found
+  at least 8 metrics before comparing, so it cannot pass vacuously on a file it
+  failed to parse.
+- **Still open:** the frontend consumes the endpoint through `src/api/config.js`
+  but still *renders* from `METRIC_CONFIG`, so adding a metric is two edits —
+  the difference is that the second is now enforced by a failing test rather
+  than discovered in production. Also still open: config-driving the hardcoded
+  extent / candidate hours / obs sources / base date, and the deferred refactors
+  (`@with_db_cursor`, `_render_map()`, shared chart primitives, decomposing the
+  two large tab components — `AnalysisTab.jsx` is still 1,264 lines).
 - **NOT DONE** — config-driving the hardcoded extent / candidate hours / obs
   sources / base date, and the deferred refactors (`@with_db_cursor`,
   `_render_map()`, shared chart primitives, decomposing the two large tab

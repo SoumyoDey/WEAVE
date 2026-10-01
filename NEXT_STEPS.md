@@ -210,7 +210,7 @@ In priority order. Nothing here is half-done.
 **The written records now agree with it too**, as of 2026-10-01: `METRICS_AUDIT.md`
 §0 is re-derived against `2025-09-16 00Z` — the only initialisation holding all
 three models at both variables — and the planning documents are reconciled
-against the code (§28). The re-derivation retracted the audit's own headline:
+against the code (§29). The re-derivation retracted the audit's own headline:
 *"AIFS 3.4× better than either"* at wind compared one correctly-paired model
 against two mislabelled ones, and the honest figure is **~21–27%**.
 
@@ -3116,6 +3116,63 @@ Result: 4 skips become 23 tests that run everywhere, up from 17 in this module.
 audits rows that exist only in `weave_weather`. Every accidental skip this
 repository had is gone; the one deliberate pair names its own reason when it
 skips, in the module docstring and in the workflow.
+
+## 32. The config endpoint, and the join nobody was checking — 2026-10-01
+
+`SYSTEM_DESIGN_PLAN.md` S4 asks for one backend source of truth exposed to the
+frontend, with the exit criterion that adding a metric is a single-place change.
+§29 found it was the only phase not started, and the highest-value item left —
+because backend/frontend drift is the shape of the defects this project keeps
+finding, not a hypothetical.
+
+**`GET /api/config`** serves the facts that were restated in `src/constants.js`:
+the metric inventory with `requires_hour` / `requires_threshold` /
+`unit_sensitive`, the variables and their units, the region suite, which region
+metrics have no per-cell map (`fss`), which read the member grid, and the common
+verification window. **No database access — 2 ms**, so it answers while the pool
+is busy, the same argument that moved `/api/health` off a `COUNT(*)`.
+
+### What it deliberately does not serve
+
+Colours, labels, legends and band edges stay in `src/constants.js`. **This is not
+a compromise.** `PLOT_STYLE_REGISTRY` uses a continuous `Normalize` for most
+metrics while the browser overlay uses discrete bands — two intentional
+renderings of the same number — so pushing one palette through the endpoint
+would make them agree by breaking one. The pair that *do* share edges,
+`ssr`/`ssr_agg` at `[0, 0.5, 0.8, 1.2, 2.0, 10.0]`, already match exactly.
+
+### The tests are the deliverable, not the endpoint
+
+An endpoint nobody reads changes nothing. Three joins are now checked:
+
+| join | guards |
+|---|---|
+| `METRIC_REQUIREMENTS` vs the dispatchers | a declaration drifting from behaviour |
+| `src/constants.js` vs `/api/config` | the frontend drifting from the backend |
+| `VALUE_UNITS` vs `VARIABLE_UNITS` | two copies of the unit table |
+
+**Verified to fail, not assumed to.** Flipping `csi`'s `requiresThreshold` in
+the frontend gives `requires_threshold disagrees (backend, frontend): {'csi':
+(True, False)}`; adding a metric to the backend alone names it. The JS parser
+asserts it found at least 8 metrics before comparing anything, so it cannot pass
+vacuously on a file it failed to parse — the hollowed-out-test trap recorded
+under Standing traps.
+
+**Why a Python test reads JavaScript.** The alternative is a jest test that
+imports Flask, which is worse. Every single-sided test in this repo passed
+throughout the defects that motivated S4 — four spatial metrics labelling wind
+maps in `mm/h`, and the UI's `wind` not being a stored variable at all. Neither
+side was internally inconsistent; they disagreed with each other, and only a
+test that spans the boundary can see that.
+
+### What is still two edits
+
+The frontend *consumes* the endpoint (`src/api/config.js`, a soft dependency
+that falls back to the local constants and never blocks rendering) but still
+*renders* from `METRIC_CONFIG`. So adding a metric is still two places — the
+difference is that the second is now a failing test rather than a defect found
+in production. Rendering the selector from server config is the remaining step,
+and it is a UI change rather than an architectural one.
 
 ## Standing decisions — do not undo these by accident
 
