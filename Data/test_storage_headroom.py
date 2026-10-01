@@ -61,12 +61,29 @@ class TestTheMeasuredState:
         assert r['headroom_gb'] == pytest.approx(126.48, abs=0.01)
 
     def test_it_says_how_many_more_runs_fit(self):
-        """The number someone wants before starting a load, not after. Three
-        runs in 123.52 GB is ~41.2 GB each, so 126.48 GB of headroom takes
-        three more."""
+        """The number someone wants before starting a load, not after."""
+        r = api._check_storage_headroom(FakeCursor())
+        assert r['runs_until_revisit'] == 2
+
+    def test_it_plans_with_a_full_run_not_the_mean(self):
+        """The mean is 41.17 GB because one of the three initialisations is a
+        partial 06Z run costing 8.49 GB; a real three-model run is 55.30 GB.
+        Dividing 126.48 GB of headroom by the mean says 3 more runs fit when
+        the answer is 2.
+
+        This is `DATA_EXPANSION_DESIGN.md` phase 5's own warning about the cheap
+        UKMO-only run — do not read the cheapest thing in the database as
+        headroom — applied to the check that enforces its threshold. Both
+        figures are reported; only the conservative one drives the count.
+        """
         r = api._check_storage_headroom(FakeCursor())
         assert r['mean_gb_per_run'] == pytest.approx(41.17, abs=0.01)
-        assert r['runs_until_revisit'] == 3
+        assert r['gb_per_full_run'] == pytest.approx(55.30, abs=0.01)
+        assert r['gb_per_full_run'] > r['mean_gb_per_run']
+        # The optimistic answer the mean would have given, pinned so the two
+        # cannot quietly converge.
+        assert int(r['headroom_gb'] // r['mean_gb_per_run']) == 3
+        assert r['runs_until_revisit'] == 2
 
     def test_runs_are_initialisations_not_model_run_pairs(self):
         """`forecast_runs` holds one row per (model, init), so counting it
@@ -105,12 +122,20 @@ class TestItDoesNotBreakAnything:
     def test_an_empty_database_does_not_divide_by_zero(self):
         """A fresh box starts with no runs — which is exactly the reviewer
         deployment's starting state (§10), so this path is reached in practice
-        rather than hypothetically."""
+        rather than hypothetically. The planning figure is a constant, so it
+        still answers how many runs would fit on that empty box."""
         r = api._check_storage_headroom(FakeCursor(size_gb=0.01, runs=0,
                                                    model_runs=0))
         assert r['mean_gb_per_run'] == 0.0
-        assert r['runs_until_revisit'] is None
+        assert r['runs_until_revisit'] == 4
         assert r['safe'] is True
+
+    def test_past_the_threshold_it_reports_zero_rather_than_a_negative(self):
+        """`headroom_gb` goes negative and says by how much, but "how many more
+        runs fit" is 0, not -2."""
+        r = api._check_storage_headroom(FakeCursor(size_gb=400.0))
+        assert r['headroom_gb'] < 0
+        assert r['runs_until_revisit'] == 0
 
     def test_the_threshold_is_overridable_without_an_edit(self, monkeypatch):
         """So a smaller host can carry a smaller number without a code change —

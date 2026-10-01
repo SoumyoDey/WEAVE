@@ -329,7 +329,93 @@ conventions were so hard to reconstruct. Any expansion should make ingest
    and set the registry's convention field accordingly so old and new runs can
    coexist with different divisors.
 
-## Phase 5 — Scale
+## Phase 5 — Scale — DECIDED 2026-10-01
+
+> **The three decisions are taken. Re-measured first, and the arithmetic below
+> was low again — this time by about 50%.**
+>
+> | | measured 2026-09-24 | measured 2026-10-01 |
+> |---|---|---|
+> | whole database | 38 GB (1 run) | **123.52 GB** (3 inits) |
+> | a three-model run | ~37 GB | **55.30 GB** |
+> | ten runs | ~370 GB | **553 GB** |
+>
+> **The 200 GB figure this section warns about is crossed at four runs**, not
+> ten. Measured per run, from row counts weighted by each table's measured
+> bytes-per-row — runs share tables, so this is the only way to attribute the
+> footprint:
+>
+> | run | models | native rows | member rows | size |
+> |---|---|---|---|---|
+> | 2025-09-08 00Z | AIFS, UKMO | 104,651,560 | 28,027,870 | 45.36 GB |
+> | 2025-09-08 06Z | AIFS, UKMO | 18,830,555 | 6,055,284 | 8.49 GB |
+> | 2025-09-16 00Z | AIFS, GEFS, UKMO | 116,423,050 | 42,546,970 | **55.30 GB** |
+>
+> ### Decision 1 — retention: NO LIMIT YET, REVISIT AT 250 GB
+>
+> Taken by the user, against the figures above. Two more full runs fit.
+>
+> **A threshold nobody is told about is a threshold nobody revisits**, so it is
+> enforced rather than recorded: `_check_storage_headroom` in `flask_api.py`
+> reports it on `/api/health` and prints it at startup, the same treatment
+> `_check_pool_headroom` gets and for the same reason — a condition that is only
+> written down is discovered too late, and for this one "too late" is partway
+> through a 55 GB ingest.
+>
+> `safe: false` does **not** make the endpoint unhealthy. Being past the
+> threshold means a decision is due, not that anything is broken.
+>
+> It plans with `DB_GB_PER_FULL_RUN` (55.30, measured) rather than the mean of
+> what is loaded. The mean is 41.17 GB because the 06Z run is partial, and
+> dividing headroom by it reports **3 more runs where the answer is 2** — this
+> section's own warning about the cheap UKMO-only run, reaching the check that
+> enforces its threshold. Both figures are reported; only the conservative one
+> drives the count.
+>
+> ### Decision 2 — members: NOT TAKEN, AND NOT NEEDED YET
+>
+> No archive tier is implemented, because decision 1 evicts nothing. The
+> analysis is recorded so the choice is ready rather than re-derived:
+>
+> | tier | kept | per run | scores |
+> |---|---|---|---|
+> | hot | everything | 55.30 GB | exact |
+> | **drop native** | both regridded tables | ~21 GB | **exact, all of them** |
+> | summary only | `regridded_forecast_ens` | ~1 GB | approximate spread |
+>
+> **This section frames it as members-or-not, and that is a false choice.** The
+> two member tables serve different readers: `forecast_data` (72.99 GB, 59% of
+> the database) feeds the map, the point timeseries and the regrid; while
+> `regridded_forecast_member` (31.66 GB) is what every spread metric scores from.
+> Dropping only the native pair keeps **every score exact** and costs
+> native-resolution display.
+>
+> Dropping the member grid as well is the option to be careful with. It forces
+> spread to be reconstructed as `sqrt(σ(h)² − σ(h−p)²)`, which **goes negative
+> for ~13% of AIFS records** and is 31% high where it resolves — the defect
+> §21 and §25 of `NEXT_STEPS.md` exist to remove. This section already says such
+> a tier "must be visible in the UI, not silent"; that remains the condition.
+>
+> ### Decision 3 — observations: ALREADY RESOLVED, AND THIS SECTION IS OBSOLETE
+>
+> It reads "the current run has truth for ~23.5 h of a 240 h forecast". That
+> stopped being true when the observation record was extended to 09-08..09-26.
+> Measured 2026-10-01: **89% of stored forecast-hours are scorable**, 4,220 of
+> 4,752. The 11% that are not is the 09-16 run's far lead times running past the
+> end of the record, which is an honest edge rather than a gap.
+>
+> Observations cost 14.52 GB in total and **scale with the period covered, not
+> with the number of runs** — 12% of the database for all three. So the policy
+> is simply: extend the record to cover a new run's valid times before loading
+> it, which `load_observations.py` does day by day.
+>
+> The one correction this forces elsewhere: `NEXT_STEPS.md` said to leave
+> `observation_data` alone because "no script here can regenerate" it. False
+> since 2026-09-16 — `load_observations.py` reproduces it bit-for-bit. It is
+> 13.54 GB the API never reads, kept deliberately rather than for want of a
+> rebuild path.
+
+## Phase 5 — Scale (original)
 
 > **The arithmetic below was re-measured on 2026-09-24 and was low by about
 > 5x.** The original estimate — ~6.5 GB of members plus ~250 MB of ensemble

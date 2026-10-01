@@ -458,6 +458,20 @@ def _check_pool_headroom(cursor):
 # prompt; none is implemented, because none was chosen.
 DB_SIZE_REVISIT_GB = float(os.environ.get('WEAVE_DB_SIZE_REVISIT_GB', 250))
 
+# What a THREE-MODEL run costs, measured 2026-10-01 on the 2025-09-16 00Z run
+# (AIFS + GEFS + UKMO, precipitation and wind): 116,423,050 native rows and
+# 42,546,970 regridded member rows, weighted by each table's measured
+# bytes-per-row.
+#
+# The planning figure is this rather than the mean of what is loaded, and the
+# difference is not pedantic. The mean today is 41.17 GB because one of the
+# three initialisations is a partial 06Z run costing 8.49 GB, so dividing
+# headroom by the mean answers "how many runs like the ones I have" when the
+# question is "does another real run fit" — and reports 3 where the answer is 2.
+# `DATA_EXPANSION_DESIGN.md` phase 5 states the same warning about the cheap
+# UKMO-only run: do not read the cheapest thing in the database as headroom.
+DB_GB_PER_FULL_RUN = float(os.environ.get('WEAVE_DB_GB_PER_RUN', 55.30))
+
 
 def _check_storage_headroom(cursor):
     """Report database size against the retention threshold, for `/api/health`.
@@ -468,10 +482,20 @@ def _check_storage_headroom(cursor):
     this one predicts a failure under the next ingest, where running out of disk
     partway through a 55 GB load is both slow to notice and tedious to unwind.
 
-    Reports the measured per-run cost alongside, because the question the
-    threshold actually asks is "does another run still fit", not "how big is
-    this". `runs` counts initialisations rather than (model, run) pairs, so a
-    partial run like the 06Z one counts as a whole.
+    Reports two per-run figures, because they answer different questions and
+    confusing them is how a threshold gets crossed mid-load:
+
+        `mean_gb_per_run`  descriptive — the footprint over the initialisations
+                           actually loaded, partial ones included.
+        `gb_per_full_run`  the planning figure, a measured three-model run.
+
+    `runs_until_revisit` divides by the second. Using the mean would report 3
+    where the answer is 2, because a partial 06Z run drags the mean down by a
+    third. See `DB_GB_PER_FULL_RUN`.
+
+    `runs` counts initialisations rather than (model, run) pairs; `forecast_runs`
+    holds one row per model per init, so counting it directly would divide the
+    footprint by the wrong number.
 
     Deliberately not a failure: `safe` goes False and the whole endpoint stays
     `healthy`, because being past the threshold means a decision is due, not that
@@ -483,16 +507,17 @@ def _check_storage_headroom(cursor):
     pairs = cursor.fetchone()[0]
     cursor.execute("SELECT COUNT(DISTINCT initialization_time) FROM forecast_runs")
     runs = cursor.fetchone()[0]
-    per_run = size_gb / runs if runs else 0.0
+    headroom = DB_SIZE_REVISIT_GB - size_gb
     return {
         'database_gb':      round(size_gb, 2),
         'revisit_at_gb':    DB_SIZE_REVISIT_GB,
-        'headroom_gb':      round(DB_SIZE_REVISIT_GB - size_gb, 2),
+        'headroom_gb':      round(headroom, 2),
         'runs':             runs,
         'model_runs':       pairs,
-        'mean_gb_per_run':  round(per_run, 2),
-        'runs_until_revisit': (int((DB_SIZE_REVISIT_GB - size_gb) // per_run)
-                               if per_run > 0 else None),
+        'mean_gb_per_run':  round(size_gb / runs, 2) if runs else 0.0,
+        'gb_per_full_run':  DB_GB_PER_FULL_RUN,
+        'runs_until_revisit': (max(0, int(headroom // DB_GB_PER_FULL_RUN))
+                               if DB_GB_PER_FULL_RUN > 0 else None),
         'safe':             size_gb < DB_SIZE_REVISIT_GB,
     }
 

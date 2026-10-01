@@ -223,8 +223,14 @@ from the mislabelled rows.
    in this repository — and each says which below.
 2. ~~**Item 2, drop `regridded_forecast`**~~ **done 2026-09-02** (§2). 245 MB
    reclaimed; a 19 MB dump outside the repo is the only copy left.
-   `observation_data` is *also* unread by the API, but it is raw ingested data no
-   script here can regenerate — leave that one alone.
+   `observation_data` is *also* unread by the API. **The reason given here for
+   leaving it alone — "raw ingested data no script here can regenerate" — stopped
+   being true on 2026-09-16**, when `load_observations.py` began reproducing it
+   bit-for-bit from the Explorer sources (§12). It is **13.54 GB**, 11% of the
+   database, measured 2026-10-01. Still kept, and that is now a decision rather
+   than a constraint: `regrid_observations.py` reads it to build the truth field,
+   so dropping it would mean reloading before any future re-regrid. Revisit it if
+   the retention threshold starts to bite.
 3. ~~**The `observation_data` ingest — the largest real piece of work left.**~~
    **DONE 2026-09-16 (§12).** `Data/load_observations.py` reproduces all
    2,480,664 rows of the loaded run bit-for-bit from the sources on Explorer
@@ -254,7 +260,8 @@ from the mislabelled rows.
    Vite migration dropped, the CI actions bumped and the runners pinned. CI
    emits no annotations. The one thing §6 still asks of a future reader is to
    revisit the `ubuntu-24.04` pin before it ages out.
-6. **`DATA_EXPANSION_DESIGN.md`: phase 5 only.**
+6. ~~**`DATA_EXPANSION_DESIGN.md`: phase 5 only.**~~ **ALL FIVE PHASES ARE NOW
+   CLOSED** — phase 5 decided 2026-10-01 (§27). History below.
    ~~Phase 3, the run-selector UI~~ **done 2026-09-24** — `RunProvider`, a header selector, and switch
    behaviour (invalidate, clamp lead time, grey out models a run lacks). Read
    that document's phase 3 for what shipped and the two departures from its
@@ -275,14 +282,22 @@ from the mislabelled rows.
    commit. Its item 1 — a
    regrid re-run duplicating rows — **is fixed too** (`5d45a29`); §13 has it.
 
-   **Then phase 5** (retention and scale), which is about how many runs stay
-   hot rather than how to load one. **Its arithmetic was re-measured on
-   2026-09-24 and was low by ~5x**: a run costs ~37 GB, not ~6.75 GB, so ten
-   runs is nearer 370 GB than 65 GB. Indexes are the dominant term — 8.7 GB
-   against 2.7 GB of member data. §11 plus `load_observations.py` already
-   cover the observation half of an ingest. Read that
-   document's status table first; three of its instructions were superseded by
-   what actually shipped and are marked as such.
+   ~~**Then phase 5**~~ **DECIDED 2026-10-01 (§27).** Re-measured first and the
+   arithmetic was low *again*, by about 50%: the database is **123.52 GB** over
+   three initialisations and a three-model run is **55.30 GB**, so ten runs is
+   **553 GB** and the 200 GB line that document warns about is crossed at
+   **four** runs, not ten.
+
+   **Retention: no limit yet, revisit at 250 GB** — two more full runs. The
+   threshold is *enforced* rather than recorded: `_check_storage_headroom`
+   reports it on `/api/health` and at startup, because "revisit at 250 GB" in a
+   design document is read by whoever is already looking for it, never by the
+   person about to start a 55 GB ingest. No archive tier is implemented, since
+   nothing is evicted yet; the options are costed in that document.
+
+   **Observations were the third decision and they are no longer a constraint**:
+   89% of stored forecast-hours are scorable (4,220 of 4,752), and observations
+   scale with the period covered rather than the run count.
 
 ### Open items with no owner
 
@@ -1240,6 +1255,13 @@ tuples** with `ensemble_statistics` at 766k. Autovacuum frees that for reuse but
 does not shrink the files; only `VACUUM FULL` does, and it takes an exclusive
 lock. Expect this after any bulk replacement here — the same note §12 records
 for `observation_data`.
+
+> **Re-measured 2026-10-01 (§27): `regridded_forecast_member` now reports 0 dead
+> tuples**, `ensemble_statistics` 435,928. Autovacuum caught up on its own, so
+> the "~6 GB reclaimable" that followed from this paragraph is no longer true and
+> no `VACUUM FULL` is owed. The *expectation* above still holds after the next
+> bulk replacement; the specific figure does not. Re-measure rather than quoting
+> it.
 
 Three ways, cheapest first:
 
@@ -2745,6 +2767,76 @@ Three groups, all now accounted for rather than assumed:
 - **14 — `test_convert_aifs.py`.** `pytest.importorskip('netCDF4')`, and
   `netCDF4` is not in `Data/requirements.txt`. A different problem with the same
   shape: a dependency absent from CI quietly removes a test class.
+
+## 27. Phase 5 is decided, and the arithmetic was low again — 2026-10-01
+
+`DATA_EXPANSION_DESIGN.md` phase 5 was the last open phase: three decisions
+rather than a build. All three are now settled. **Re-measured before deciding**,
+per this document's own rule about never doing arithmetic on a previous
+measurement — and the previous measurement was low by ~50%, having already been
+corrected once for being low by ~5x.
+
+| | 2026-09-24 | **2026-10-01** |
+|---|---|---|
+| whole database | 38 GB (1 run) | **123.52 GB** (3 inits) |
+| a three-model run | ~37 GB | **55.30 GB** |
+| ten runs | ~370 GB | **553 GB** |
+
+The 200 GB figure that document warns about is crossed at **four** runs.
+
+### Decision 1 — no retention limit yet, revisit at 250 GB
+
+The user's, against those figures. Two more full runs fit.
+
+**Implemented as a check, not a note.** `_check_storage_headroom` reports on
+`/api/health` and prints at startup, the same treatment `_check_pool_headroom`
+gets: a condition that is only written down is discovered too late, and here
+"too late" is partway through a 55 GB ingest. `safe: false` leaves the endpoint
+`healthy` — past the threshold means a decision is due, not that anything broke.
+
+**It plans with a measured full run (55.30 GB), not the mean of what is loaded.**
+The mean is 41.17 GB because one of the three initialisations is a partial 06Z
+run costing 8.49 GB, so dividing headroom by it reports **3 more runs where the
+answer is 2**. That is `DATA_EXPANSION_DESIGN.md`'s own warning — *do not read
+the cheapest thing in the database as headroom* — arriving inside the check
+written to enforce its threshold. I had it wrong in the first draft and caught it
+by running the check against the live database rather than only the fake cursor.
+Both figures are reported; only the conservative one drives the count.
+
+### Decision 2 — the archive tier is costed, not built
+
+Nothing is evicted, so nothing needs an archive. The analysis is recorded so the
+choice is ready:
+
+| tier | kept | per run | scores |
+|---|---|---|---|
+| hot | everything | 55.30 GB | exact |
+| **drop native** | both regridded tables | ~21 GB | **exact, all of them** |
+| summary only | `regridded_forecast_ens` | ~1 GB | approximate spread |
+
+**The document frames this as members-or-not and that is a false choice.** The
+two member tables serve different readers — `forecast_data` (72.99 GB, 59% of the
+database) feeds the map, the point timeseries and the regrid, while
+`regridded_forecast_member` (31.66 GB) is what every spread metric scores from.
+Dropping only the native pair keeps every score exact. Dropping the member grid
+too forces spread back onto `sqrt(σ(h)² − σ(h−p)²)`, which goes negative for ~13%
+of AIFS records — the defect §21 and §25 exist to remove.
+
+### Decision 3 — already resolved by the observation extension
+
+The document says "the current run has truth for ~23.5 h of a 240 h forecast".
+Obsolete: **89% of stored forecast-hours are scorable**, 4,220 of 4,752. The 11%
+that are not is the 09-16 run's far leads running past 09-26, an honest edge.
+Observations are 14.52 GB and scale with the *period covered*, not the run count.
+
+### Two stale claims corrected on the way
+
+- **`observation_data` "cannot be regenerated".** False since 2026-09-16;
+  `load_observations.py` reproduces it bit-for-bit. It is 13.54 GB the API never
+  reads, now kept by decision rather than for want of a rebuild path.
+- **"~6 GB reclaimable from `regridded_forecast_member` via `VACUUM FULL`".**
+  The table reports **0 dead tuples**; autovacuum has reclaimed it for reuse.
+  The item is done and should stop being listed.
 
 ## Standing decisions — do not undo these by accident
 
