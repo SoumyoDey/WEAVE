@@ -3254,6 +3254,70 @@ difference is that the second is now a failing test rather than a defect found
 in production. Rendering the selector from server config is the remaining step,
 and it is a UI change rather than an architectural one.
 
+## 33. `/api/runs` had no test — FIXED 2026-10-01
+
+Found by going to measure the coverage claim rather than by reading anything.
+`flask_api.py` is documented at 100% and measures 97%; of the 54 uncovered
+statements, **21 are the `/api/runs` body and 6 are `available_runs`** — half
+the gap in two functions.
+
+Three places in the suite mentioned the path. A comment, a docstring, and an
+assertion that a *different* endpoint's 400 hint contains the string
+`/api/runs`. **None of them ever issued a request to it.**
+
+That is worth more than 27 statements suggests. `src/App.js` fetches nothing
+model-scoped until this endpoint answers, so every model-dependent view is
+behind it, and `RunContext.jsx` reads four separate shapes out of the response.
+
+### What the tests pin
+
+`Data/test_runs_endpoint.py`, 19 tests. The one that earns its place is the
+contract test. `RunContext.jsx` carries a comment recording a defect found by
+hand: the UI calls the variable `wind` while the database stores `wind_u_10m`
+and `wind_v_10m`, so looking up `wind` "finds nothing and returns null — which
+reads as 'this run has no wind' and would have disabled every lead-time clamp on
+the wind variable without erroring anywhere". Its own note on why no test caught
+it is the point — *"a mock agrees with whatever you wrote it to say"*. The
+backend half is now pinned against real SQL.
+
+Two behaviours the endpoint cannot reach from the fixture as seeded are covered
+by calling `available_runs` directly, on this module's own connection inside
+rolled-back transactions: **ordering across more than one run** (`ORDER BY
+init_time DESC` is the behaviour, since `latest` is literally `runs[0]`), and
+**the registry-absent fallback**, reached by dropping `forecast_run_registry`
+inside the transaction. That DDL takes an ACCESS EXCLUSIVE lock, so the fixture
+sets `lock_timeout` — §26's self-deadlock turned into a fast error rather than a
+hang, which is cheaper than rediscovering it.
+
+### A fixture that was lying quietly
+
+`fixture_db.seed()` registered its runs with `n_members` only, leaving
+`hour_min` and `hour_max` NULL. **No real database looks like that** —
+`run_registry.refresh_from_members()` fills them at load time. The fixture now
+seeds the lead-time range it actually holds.
+
+This is not cosmetic. `/api/runs` serves those columns straight through to
+`RunContext.hourRangeFor`, which does
+`Math.max(...entries.map(e => e.hour_min))` and rejects a non-finite result. A
+JSON `null` is not rejected there — `Math.max(null)` is `0` — so a registry row
+with NULL hours would clamp the lead-time scrubber to `{0, 0}` instead of
+greying the model out. Tests written against the old fixture would have pinned a
+response shape the UI cannot use. Verified by reverting the fixture change: two
+contract tests fail.
+
+### Result
+
+`flask_api.py` **97% -> 99%**, 54 missing statements down to 27, with `get_runs`
+and `available_runs` both at zero. The remaining 27 are singles and pairs
+scattered across ~20 endpoints — error branches, not a second hole like this one.
+
+**Still unguarded: nothing measures this in CI.** The claim decayed in the first
+place because the workflow has never run `--cov`, and the section asserting 100%
+said "worth re-checking rather than trusting if the number ever matters" — it was
+never re-checked. Adding `--cov` to the backend job, and scoping `source = .` in
+`.coveragerc` so an unscoped `--cov` cannot measure site-packages and die on
+whichever compiled extension the import order reaches first, are both still open.
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in

@@ -579,9 +579,20 @@ def seed(conn):
             # by a flat 6 h, GEFS by a flat 3 h, and UKMO's native hourly rate
             # was never scaled. Those three storage conventions holding the
             # same true field is what makes the models score identically.
+            # `hour_min`/`hour_max` are the lead-time range this fixture
+            # actually seeds, not left NULL. A real load fills them —
+            # `run_registry.refresh_from_members()` derives them from the member
+            # table — and leaving them NULL here made the fixture's registry a
+            # shape no real database has. /api/runs serves these straight
+            # through to `RunContext.hourRangeFor`, which intersects them to
+            # clamp the lead-time scrubber, so a fixture that reports NULL would
+            # let a test pin a response the UI cannot actually use.
             for variable in ('precipitation', 'wind_u_10m', 'wind_v_10m'):
+                hours = (PRECIP_HOURS if variable == 'precipitation'
+                         else WIND_HOURS)[model]
                 run_registry.record(cur, model, variable, INIT_TIME,
-                                    n_members=len(MEMBER_OFFSETS))
+                                    n_members=len(MEMBER_OFFSETS),
+                                    hour_min=min(hours), hour_max=max(hours))
 
         execute_values(cur, """
             INSERT INTO regridded_observation
