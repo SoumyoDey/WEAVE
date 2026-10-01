@@ -156,6 +156,31 @@ jobs:
       DB_HOST: localhost
       DB_PORT: 5432
 
+      # DB_NAME is deliberately NOT set. It names the *development* database
+      # (`weave_weather`), which does not exist here and should not: the suite's
+      # database-backed tests run against the fixture, which is built from
+      # source DDL and has a known answer, rather than against whatever happens
+      # to be loaded on a developer's machine. test_regrid_observations.py's
+      # argument-guard tests depend on that — the live-table guard used to sit
+      # below psycopg2.connect, and CI caught it precisely because DB_CONFIG
+      # here points at nothing.
+      #
+      # The cost of leaving it unset used to be silent: test_run_registry.py's
+      # fourteen database tests resolve through run_registry.DB_CONFIG, so they
+      # skipped on every run this repository has ever had (`778 passed, 41
+      # skipped`, identically, on ba3fa88, 7002a2d and 57a221c). They now use
+      # the fixture database and run here. The two that remain local-only —
+      # TestTheDevelopmentDatabaseIsCoherent — audit rows that exist only in
+      # weave_weather; that module's docstring says so, and they name the reason
+      # when they skip.
+      #
+      # WEAVE_REQUIRE_DB_TESTS turns "the fixture database could not be built"
+      # from a skip into a failure, for every module that uses it. Without it a
+      # broken service container shrinks the run instead of failing it, which is
+      # the same green-tick-over-untested-SQL problem the reachability check
+      # below exists to prevent, reached from inside pytest.
+      WEAVE_REQUIRE_DB_TESTS: '1'
+
     steps:
       - uses: actions/checkout@v7
 
@@ -185,9 +210,11 @@ jobs:
           path: ~/.local/share/cartopy
           key: ${{ runner.os }}-cartopy-ne-50m
 
-      # test_db_endpoints.py skips itself when PostgreSQL is unreachable, so a
-      # broken service container would silently shrink the run rather than fail
-      # it. Assert the database is actually there before trusting a green tick.
+      # The database-backed tests skip themselves when PostgreSQL is
+      # unreachable, so a broken service container would silently shrink the run
+      # rather than fail it. Assert the database is actually there before
+      # trusting a green tick. WEAVE_REQUIRE_DB_TESTS above is the other half:
+      # this proves the server answers, that proves the tests reached it.
       - name: Verify PostgreSQL is reachable
         run: |
           until pg_isready -h localhost -p 5432 -U postgres; do sleep 1; done

@@ -286,10 +286,13 @@ Three layers, deliberately separate:
 | `test_metrics.py` | The science as pure functions — unit conversions, verification windows, every score, against golden vectors | none |
 | `test_endpoints.py` | Request validation and the response keys the React components read, driven by a query-routing fake cursor | none |
 | `test_db_endpoints.py` | The endpoints against real SQL: joins, parameter order, `BETWEEN` boundaries, `GROUP BY`, and the Cartopy renders | a throwaway one, built by `fixture_db.py` |
+| `test_run_registry.py` | The registry's read and write paths against a real `forecast_run_registry`: the upsert, per-run divisors, and the refusals | the same throwaway one |
 
 The third layer exists because a fake cursor returns whatever the test hands it, so it can never disagree with the SQL. `fixture_db.py` creates `weave_fixture_test`, loads the real schema, and seeds one 5×5 patch of grid whose answer is known by construction — **the same true field given to all three models in each one's own storage convention**, so any regression in the unit or window layer breaks exactly one model and the test names it. Read that module's docstring before changing an expected number; every one of them is derived there.
 
-Those tests skip themselves when PostgreSQL is unreachable (or with `WEAVE_SKIP_DB_TESTS=1`), so the suite still runs anywhere.
+Those tests skip themselves when PostgreSQL is unreachable (or with `WEAVE_SKIP_DB_TESTS=1`), so the suite still runs anywhere. **CI sets `WEAVE_REQUIRE_DB_TESTS=1`, which turns that skip into a failure** — where a database is meant to exist, a skip shrinks the run instead of failing it and the difference does not show in a green tick. `test_run_registry.py` skipped silently on every run this repository had, for exactly that reason, until 2026-10-01; see NEXT_STEPS.md §26.
+
+Two tests remain local-only on purpose: `TestTheDevelopmentDatabaseIsCoherent` audits rows that exist only in `weave_weather`, so there is nothing in CI for it to read. It names that reason when it skips.
 
 ### Frontend tests
 

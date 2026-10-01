@@ -2643,6 +2643,109 @@ example of a legitimate `None`; it now uses `correlation` on precipitation, whos
 spread the fixture makes flat on purpose, so the example is a real `None` with a
 stated reason rather than a missing capability.
 
+## 26. The registry's database tests had never run in CI — FIXED 2026-10-01
+
+`Data/test_run_registry.py` has fourteen tests that need a real
+`forecast_run_registry`. **Every one of them skipped on every CI run this
+repository has ever had.**
+
+The cause is one unset variable. `.github/workflows/tests.yml` gives the
+`backend · pytest` job `DB_USER`, `DB_PASSWORD`, `DB_HOST` and `DB_PORT`, but
+not `DB_NAME`, so `run_registry.DB_CONFIG` falls back to `weave_weather` — a
+database the PostgreSQL service container does not create. `_skip_reason()`
+returned `no database`, the module-scoped `cur` and `writable` fixtures skipped,
+and the run was shorter by fourteen tests with nothing to show it.
+
+| run | commit | result |
+|---|---|---|
+| 36738384700 | ba3fa88 | `778 passed, 41 skipped` |
+| 36726212346 | 7002a2d | `778 passed, 41 skipped` |
+| 36724828723 | 57a221c | `778 passed, 41 skipped` |
+
+Identical, across three commits that changed the registry. The same suite
+against a real database was `819 passed` with no skips at all.
+
+**What it cost.** On 2026-09-30 four of these tests failed locally because they
+hardcoded `RUN = '2025-09-08 00:00:00'` and asserted GEFS resolved there, which
+stopped being true the moment the mislabelled GEFS rows were deleted (§24).
+They were fixed to call `_a_loaded_run()`, which asks the registry which init
+holds a combination instead of naming a date. CI was green before that fix,
+green after it, and would have been green had the fix been wrong — the only
+signal came from a developer running the suite by hand.
+
+### The fix
+
+The database tests now build on `fixture_db.py`'s throwaway database, which
+exists wherever PostgreSQL does. `fixture_db.seed()` already registers its runs
+through `run_registry.record()` itself — three models x three variables at one
+init — so the read path has real rows, including the GEFS precipitation row at
+divisor 3 that `TestTwoRunsCanDisagree` needs.
+
+Three things had to be got right, and each is worth stating because each is a
+way this could have been "fixed" into a worse state than before:
+
+**1. A skip that moves is still a skip.** `_a_loaded_run()` skips when a
+combination is absent, which is correct for a helper that must not assert an
+inventory — and it means repointing the module at a database that happened not
+to hold GEFS precipitation would have turned fourteen skips into fourteen
+*passes* that verified nothing. This is the Traps list entry — *a refactor can
+hollow out a test instead of failing it* — reached through the data rather than
+the code. `TestTheRegistryHoldsWhatTheseTestsResolve` is the guard: it asserts
+the four combinations are present and **fails**, naming them. The two tests that
+loop over models now compare a whole dict, so a missing model is a failure that
+names it rather than one fewer assertion. Verified by deleting GEFS
+precipitation from the fixture seed and confirming three red failures.
+
+**2. The fixture database turned a no-op into real DDL.** `writable` called
+`reg.ensure_schema()`, which is `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
+Against `weave_weather` that was a no-op and the column already existed; against
+a fresh fixture it is DDL wanting an ACCESS EXCLUSIVE lock on a table the
+module-scoped `cur` connection was holding an ACCESS SHARE lock on, idle in
+transaction, until module teardown. One process, both ends: self-deadlock, no
+timeout, sits forever. (It only appeared now because the new guard test is the
+first `cur` test in file order; previously every `writable` test ran first.)
+`cur` is now autocommit — it is read-only, so there is no transaction worth
+holding — and `writable` no longer issues DDL, because `fixture_db._schema_sql()`
+already appends `run_registry.SCHEMA_ADDITIONS` at build time.
+`TestEnsureSchemaIsTheColumnTheFixtureBuildsWith` pins that those two are the
+same statement, so the fixture cannot drift away from what a loader would add.
+
+**3. The workflow's existing guard was half a guard.** It already asserted the
+service container answers before running pytest, precisely so a green tick could
+not sit over untested SQL. That proves the *server* is up; nothing proved the
+*tests reached it*, and this failure walked straight through the gap.
+`conftest.py` now honours `WEAVE_REQUIRE_DB_TESTS`, which turns "the fixture
+database is unavailable" from a skip into a failure, and the workflow sets it.
+That covers every module built on the fixture at once, not just this one.
+
+Result, for this module in an environment with a PostgreSQL server and no
+`weave_weather`: **0 run and 14 skipped, before; 33 run and 2 skipped, after.**
+Suite-wide in that environment, skips fall from 41 to 29 — the 12 recovered
+here, with the remainder itemised below rather than left as a number.
+
+### Still skipping in CI, and why
+
+Three groups, all now accounted for rather than assumed:
+
+- **2 — `TestTheDevelopmentDatabaseIsCoherent`.** Local-only *by design*: it
+  audits `forecast_run_registry` rows that exist only in `weave_weather`. The
+  fixture cannot stand in, because every fixture row is written by `record()`,
+  which refuses an incoherent one — whereas the development database's rows came
+  from `migrate_init_time.py`'s backfill and `backfill_conventions()`, neither of
+  which goes through `record`, and can still be edited by hand. That is the
+  state worth auditing. The module docstring and the workflow both say so, and
+  the skip names its own reason.
+- **13 — `test_point_list_caps.py` (9) and `test_regrid_observations.py` (4).**
+  The same root cause as this section, not yet fixed: they resolve through a
+  module `DB_CONFIG` that names the development database. Note that
+  `test_regrid_observations.py` *also* contains argument-guard tests that depend
+  on CI's `DB_CONFIG` pointing at nothing — that is how the live-table guard
+  sitting below `psycopg2.connect` was caught — so the fix there is to move the
+  data tests onto the fixture, **not** to set `DB_NAME`.
+- **14 — `test_convert_aifs.py`.** `pytest.importorskip('netCDF4')`, and
+  `netCDF4` is not in `Data/requirements.txt`. A different problem with the same
+  shape: a dependency absent from CI quietly removes a test class.
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in
@@ -2708,6 +2811,14 @@ the same way — a real signal, misread as to cause.
    monotonically with lead; the wrong week gives a flat curve at a higher level.
    Cheaper than any of the correlation work in §24 and it answers the actual
    question.
+11. **A skipped test and a passing test look identical in a green tick.**
+    Fourteen registry tests skipped on every CI run this repository ever had,
+    because one environment variable was unset (§26). Nothing was red, nothing
+    was wrong, and three commits to the registry went through untested. Read the
+    *counts*, not the colour: `778 passed, 41 skipped` identically across three
+    different commits is a fact about the environment, not about the code. And
+    when moving a test to a database that has different data, assert the data is
+    there first — otherwise the skip simply moves with it.
 
 The pattern throughout: a fingerprint in the data reliably shows *that* something
 is wrong, and reliably cannot say *which* explanation produced it. Three raw

@@ -6,12 +6,15 @@ metric tests drive the pure computation paths with hand-built inputs (a fake
 cursor or a monkeypatched fetch helper), so no real database is ever touched and
 the suite runs anywhere.
 
-`test_db_endpoints.py` is the exception: it runs the endpoints against a real
-throwaway database built by `fixture_db.py`, because a fake cursor cannot
-exercise SQL. Those tests skip themselves when PostgreSQL is not reachable, so
-the promise above still holds — the suite runs anywhere, it just verifies more
-where a server exists. Set WEAVE_SKIP_DB_TESTS=1 to skip them explicitly.
+`test_db_endpoints.py`, `test_regrid_idempotency.py` and `test_run_registry.py`
+are the exception: they run against a real throwaway database built by
+`fixture_db.py`, because a fake cursor cannot exercise SQL. Those tests skip
+themselves when PostgreSQL is not reachable, so the promise above still holds —
+the suite runs anywhere, it just verifies more where a server exists. Set
+WEAVE_SKIP_DB_TESTS=1 to skip them explicitly, or WEAVE_REQUIRE_DB_TESTS=1
+(as CI does) to turn that skip into a failure.
 """
+import os
 from unittest.mock import MagicMock
 
 import psycopg2.pool
@@ -50,10 +53,26 @@ def _no_metric_cache(monkeypatch):
 
 @pytest.fixture(scope='session')
 def fixture_db():
-    """A freshly built, seeded throwaway database. Skips if there is no server."""
+    """A freshly built, seeded throwaway database. Skips if there is no server.
+
+    Unless `WEAVE_REQUIRE_DB_TESTS` is set, in which case it **fails** instead.
+    Where a database is expected to exist, a skip is the wrong answer: it
+    shrinks the run rather than failing it, and the difference is invisible in a
+    green tick. The CI workflow sets it for exactly that reason, and already
+    asserts separately that the service container answers.
+
+    That guard existed in the workflow and not in the suite, which is how the
+    `test_run_registry.py` database tests skipped on every run the repository
+    has ever had — the workflow proved PostgreSQL was up, and nothing proved the
+    tests had reached it. Setting the variable here covers every module that
+    builds on this fixture at once.
+    """
     import fixture_db as fx
 
     reason = fx.unavailable_reason()
+    if reason and os.environ.get('WEAVE_REQUIRE_DB_TESTS'):
+        pytest.fail(f'WEAVE_REQUIRE_DB_TESTS is set but the fixture database '
+                    f'is unavailable: {reason}')
     if reason:
         pytest.skip(f'fixture database unavailable: {reason}')
     fx.build()
