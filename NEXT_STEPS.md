@@ -135,10 +135,37 @@ PR #2 merged on 2026-09-02 as `49ead8f`, all 90 commits preserved — +19,279/�
 across 78 files, over half of it tests and documentation. `main` is now 125
 commits. See §1 for how and why it went in without review.
 
-- **The backend and frontend suites pass with no xfails**, and `metrics.py` and
-  `flask_api.py` are both at **100%** statement coverage. `python -m pytest -q` in
-  `Data/` runs anywhere: without PostgreSQL a little over a fifth of it skips
+- **The backend and frontend suites pass with no xfails.** `python -m pytest -q`
+  in `Data/` runs anywhere: without PostgreSQL a little over a fifth of it skips
   itself and the rest still runs.
+
+  **Coverage, measured 2026-10-01** — `metrics.py` **100%** (282 statements, 0
+  missing), `flask_api.py` **97%** (2083 statements, **54 missing**):
+
+  ```bash
+  cd Data && python -m pytest -q --cov=flask_api --cov=metrics --cov-report=term-missing
+  ```
+
+  > **This line claimed both were at 100% until 2026-10-01, and for `flask_api.py`
+  > that was false.** The gap is not the two `pragma: no cover` branches below —
+  > it is 54 statements, and the largest blocks are nameable: `available_runs`
+  > (6) and the whole `/api/runs` body (21), with ~27 singles across other
+  > endpoints. Long-standing code, not recent drift. **Exactly one test in the
+  > suite calls `/api/runs`.**
+  >
+  > The paragraph below already said to re-check rather than trust it. Nothing
+  > did, because **the CI workflow never runs `--cov` at all** — so the claim was
+  > unfalsifiable in the one place that would have caught it. A number nothing
+  > measures is a number that decays silently; this one decayed under a sentence
+  > predicting it would.
+  >
+  > **Scope the measurement.** `.coveragerc` sets `source = .`, so an unscoped
+  > `--cov` or a bare `coverage run` tries to measure site-packages and dies on
+  > whichever compiled extension your import order reaches first — Cartopy's
+  > Cython shim under `sysmon`, or numpy's `_pocketfft_umath`. Two machines got
+  > two different crashes from the same mistake on 2026-10-01. Use the command
+  > above; making the broken invocation impossible is a pending `.coveragerc`
+  > change.
 
   **Exact counts are deliberately not written here** — they went stale three
   times on 2026-08-27 alone, and a number that is wrong more often than right is
@@ -214,8 +241,20 @@ against the code (§29). The re-derivation retracted the audit's own headline:
 *"AIFS 3.4× better than either"* at wind compared one correctly-paired model
 against two mislabelled ones, and the honest figure is **~21–27%**.
 
-So **nothing in the records is knowingly stale.** What is left below is work and
-decisions, not corrections.
+**That reconciliation claimed "nothing in the records is knowingly stale", and it
+was wrong within the hour.** The "Where things stand" section above asserted
+`flask_api.py` at 100% statement coverage; measured the same day it is **97%**,
+54 statements short. §29 compared the planning documents against the *code* and
+never ran the *measurement*, so a claim that only a measurement could falsify
+walked straight through an audit designed to catch exactly that.
+
+Worth keeping as the shape rather than the instance: **an audit only catches the
+kinds of error it looks for.** Reading code against prose finds prose that
+describes the wrong code; it does not find prose asserting a number nobody
+computed. The second kind needs the number.
+
+So: the records are reconciled against the code, and any claim resting on a
+*measurement* deserves re-measuring before it is trusted.
 
 0. **The reviewer deployment is the live task** (§10). **Both prerequisites are
    fixed as of 2026-09-17** — one origin behind one `basic_auth`, and pool
