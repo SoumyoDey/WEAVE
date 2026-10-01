@@ -18,10 +18,29 @@ on:
 # The cost is that a pin ages: 24.04 is supported into 2029, but this needs
 # revisiting rather than being left to rot. See NEXT_STEPS.md §6.
 
-# A new push supersedes the run in flight for the same ref.
+# Superseding is right for a pull request and WRONG for `main`.
+#
+# On a PR branch only the tip matters, so cancelling the run in flight when a
+# new commit arrives saves runner time and loses nothing.
+#
+# On `main` every commit needs its own verdict. With `cancel-in-progress: true`
+# applied there, a second push a minute after the first killed the first
+# commit's run and nothing ever re-ran it — so a commit sat on `main` with no
+# CI result at all, while the branch still looked green because the *next*
+# commit passed. Measured 2026-10-01: of the twelve most recent commits,
+# `7769ae6` had only a cancelled run and `6e40a1a` had none.
+#
+# That is not a theoretical race. Two sessions committing to `main` in the same
+# afternoon is how this repository is actually worked, and pushes land minutes
+# apart. The invariant everything else here leans on — *`main` is green* — was
+# quietly false for two commits.
+#
+# `false` makes same-ref runs queue instead of cancelling, so each commit gets a
+# verdict in turn. The cost is runner minutes on a burst of pushes, which is the
+# right thing to spend them on.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # ── Layer 1: components and pure helpers, in jsdom ──────────────────────────
