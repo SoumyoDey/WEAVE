@@ -1,36 +1,31 @@
 # WEAVE_v3 — system, workflow & metric-correctness audit
 
-> ## ⚠️ §0 IS STALE AS OF 2026-10-01 — FOUR CHANGES HAVE MOVED ITS FIGURES
+> ## ⚠️ READ THIS FIRST — §0 describes the **2025-09-16 00Z** run, the body does not
 >
-> §0 was last regenerated 2026-09-29. Everything below that depends on a number
-> should be read as *of that date* until it is re-derived. The four changes, in
-> the order they landed:
+> **§0 was regenerated 2026-10-01 and is current.** Everything below §0 is from
+> the original audit: it is on the **pre-2026-09-04 truth field** and describes
+> `2025-09-08 00Z`, so it differs from §0 for two reasons at once — a different
+> week of weather and a different truth field. Treat any figure outside §0 as
+> historical.
 >
-> 1. **`crps`, `ssr_agg` and `brier` moved to the member grid** (§21) — they had
->    returned **0 cells for UKMO at every run and every lead time**, and AIFS
->    gained cells too because the aggregate path was silently dropping ~13% of
->    its records. Every figure for these three changed.
-> 2. **The observation record went from 2 days to 19** (09-08 .. 09-26), taking
->    the verification window from ~+18 h to **+450 h**. Any figure quoted over a
->    short window now has far more samples behind it.
-> 3. **The 09-08 run stopped being a mixture** (§24). GEFS 09-08 was **deleted**
->    — it never existed — and UKMO 09-08 wind was **replaced**. So *every GEFS
->    number in this document is for a run that is no longer in the database*, and
->    UKMO's wind figures describe superseded rows.
-> 4. **Pooled `ssr_agg` was taking its numerator and denominator over different
->    samples** (§25), which moved AIFS and GEFS as well as adding UKMO.
+> **The reference run changed.** The audit described `2025-09-08 00Z` because it
+> was the full three-model run. It is not one any more: GEFS was deleted from it
+> on 2026-09-30, since no GEFS 09-08 exists on the cluster and the rows filed
+> there were the 09-16 forecast mislabelled (`NEXT_STEPS.md` §24). `2025-09-16
+> 00Z` is now the only initialisation holding all three models at both variables.
 >
-> Regenerate with — note the **09-16** run, which is now the only initialisation
-> holding all three models at both variables:
+> **And the audit's own wind headline was an artefact.** The banner below reports
+> that AIFS is "3.4× better than either" at wind. That compared one
+> correctly-paired model against two mislabelled ones — GEFS's and UKMO's wind at
+> 09-08 were *also* the 09-16 forecast. Scored correctly on one run, per-cell
+> wind MAE is **AIFS 1.0124, GEFS 1.2854, UKMO 1.2712**: AIFS is still best, by
+> about 21–27% rather than 3.4×. §0 has the full comparison.
 >
-> ```bash
-> cd Data && python rederive_audit.py --markdown --init-time "2025-09-16 00:00:00"
-> ```
->
-> The banner below is the previous round of this and is kept: it is the record of
-> the AIFS wind replacement, and the method it describes — *only one field moved,
-> every other figure byte-identical, which is the control rather than a footnote*
-> — is how the next re-derivation should be checked too.
+> The banner below is kept as the record of the AIFS wind replacement, and for
+> the method it describes — *only one field moved, every other figure
+> byte-identical, which is the control rather than a footnote*. That method is
+> right; the conclusion drawn from it was limited by the two models nobody had
+> checked yet.
 
 > ## ⚠️ The AIFS WIND was the wrong forecast run until 2026-09-28
 >
@@ -41,6 +36,15 @@
 > independent of the two truth-field changes below: it was the *forecast* side,
 > and it affects AIFS wind only. Precipitation is untouched, and so are GEFS and
 > UKMO wind.
+>
+> > **The last sentence is FALSE, found 2026-09-29 and recorded here 2026-10-01.**
+> > GEFS wind, GEFS precipitation and UKMO wind at 09-08 were **also** the 09-16
+> > run — five of nine combinations, not one (`NEXT_STEPS.md` §24). "It affects
+> > AIFS wind only" was written after checking the one field that had already
+> > failed, and it is the reason the 3.4× figure below stood for a day: having
+> > found one mislabelled field, the audit did not ask whether the others were
+> > too. **A provenance failure found in one place is a reason to check every
+> > place, not evidence that the rest are sound.**
 >
 > **§0 has been regenerated** (`rederive_audit.py --init-time "2025-09-08
 > 00:00:00"`, 2026-09-29) and **only AIFS wind moved** — every other figure is
@@ -119,93 +123,100 @@
 
 ---
 
-## 0. Re-derived figures — 2026-09-04, regenerated 2026-09-16 and 2026-09-29
+## 0. Re-derived figures — regenerated 2026-10-01 against the **2025-09-16 00Z** run
 
-Everything below this section was measured against the **pre-2026-09-04 truth
-field** and is stale (see the warning at the top). This section is the current
-set, and it exists in two parts: the numbers, and a change to how they are
-recorded.
+> ### The headline this audit carried was itself an artefact
+>
+> The 2026-09-29 banner above says **"AIFS is 3.4× better than either"** at wind,
+> after the AIFS wind replacement moved its per-cell MAE from 2.2386 to 0.6595
+> against GEFS's 2.2455 and UKMO's 2.3331.
+>
+> **That comparison was one correctly-paired model against two mislabelled
+> ones.** `NEXT_STEPS.md` §24 established that GEFS *and* UKMO wind at
+> `2025-09-08 00Z` were also the 09-16 forecast under the wrong label — so their
+> 2.2455 and 2.3331 were forecasts scored against truth from eight days before
+> they were initialised, exactly the defect §18 had just fixed for AIFS. Fixing
+> one model and leaving two broken produced a gap that read as a result.
+>
+> Scored correctly, all three on the same run:
+>
+> | per-cell wind MAE | AIFS | GEFS | UKMO |
+> |---|---|---|---|
+> | 09-08, one model paired correctly | 0.6595 | 2.2455 | 2.3331 |
+> | **09-16, all three paired correctly** | **1.0124** | **1.2854** | **1.2712** |
+>
+> **AIFS is still the best of the three at wind, by about 21–27% — not by 3.4×.**
+> The direction of the finding survives; its magnitude does not. Any statement
+> that AIFS is several times better at wind should be read as describing a
+> comparison that no longer exists.
+>
+> Note what the correction looks like from GEFS's and UKMO's side: their error
+> fell by ~44% purely from pairing each forecast with its own valid times.
+> Nothing about either model changed.
 
-**The recording change is the more useful half.** Re-deriving this audit was hard
-for one reason: *most of its numbers did not record the query that produced
-them.* "observed 0.387 mm/h" does not say over which box, which hours, or which
-source — so when the truth field changed there was no way to recompute the same
-quantity, only a similar one, which is worse than useless because it reads as a
-comparison. The figure closest to it now is **0.3999 mm/h** over 25-45 N /
-85-65 W; whether that is the same quantity is unknowable.
+### Why the reference run moved to 09-16
 
-So these are generated by **`Data/rederive_audit.py`**, which prints each
-figure's parameters beside it. Next time the data moves, the update is:
+This section described `2025-09-08 00Z` from 2026-09-04 until now, because that
+was "the full three-model run". **It is not one any more.** GEFS was deleted from
+it on 2026-09-30 — no GEFS 09-08 exists on the cluster, so the rows filed there
+were the 09-16 forecast and relabelling them truthfully meant removing them
+(§24). That run now holds **AIFS and UKMO only**.
+
+`2025-09-16 00Z` is the only initialisation in this database holding **all three
+models at both variables**, each verified cell-for-cell against source. So it is
+what the audit describes, and `rederive_audit.py`'s default moved with it.
+
+**Reading this section against the audit body therefore needs care.** Everything
+below §0 is at 09-08 *and* on the pre-2026-09-04 truth field, so it differs from
+these figures for two reasons at once — a different week of weather and a
+different truth field. Do not read a difference here as a change in behaviour.
+
+### What else moved since 2026-09-29
+
+Three changes beyond the run, all of which shift figures in this section:
+
+1. **`crps`, `ssr_agg` and `brier` moved to the member grid** (§21). They had
+   returned **0 cells for UKMO at every run and every lead time**, and AIFS
+   gained cells too, because the aggregate path reconstructs a cumulative
+   model's increment spread as `sqrt(σ(h)² − σ(h−p)²)` and that goes negative
+   for ~13% of AIFS records, which were being dropped in silence.
+2. **The observation record went from 2 days to 19** (09-08 .. 09-26), taking
+   the verification window from ~+18 h to **+450 h**. Every figure here now has
+   far more samples behind it — the 0–168 h window below is *fully* observed for
+   this run, where at 09-08 it once ran off the end of the truth field.
+3. **Pooled `ssr_agg` was taking its numerator over records that have a spread
+   and its denominator over all records** (§25) — two different samples in one
+   ratio.
+
+### What did not move, which is the control
+
+The **truth-field stencils are uniform**: 25 IMERG observations and 4 ERA5 per
+interior cell, every parity class, across a record nine times longer than the one
+the 2026-09-04 rebuild was verified on. The round-half-to-even checkerboard that
+rebuild removed has not come back at scale.
+
+### How to regenerate
 
 ```bash
-cd Data && python rederive_audit.py --markdown
+cd Data && python rederive_audit.py --markdown --init-time "2025-09-16 00:00:00"
 ```
 
-Two things it deliberately does not do. It does not reproduce the old numbers —
-several cannot be reproduced at all, and it makes no attempt to guess. And it
-goes through the API rather than reimplementing the arithmetic, because an audit
-that recomputes independently ends up confirming its own maths rather than the
-app's.
+The script now **reads the model list out of the run** rather than assuming all
+three. That was not cosmetic: with `MODELS` hardcoded it could no longer describe
+09-08 at all, because asking for a model a run lacks makes `_check` abort the
+whole audit. Same rule the run registry arrived at independently — *describe what
+is in the table, never what you were told to expect*.
 
-### What actually moved
-
-The switch replaced a truth field where interior cells averaged 36/24/16
-observations (IMERG) and 9/3/**1** (ERA5 wind) depending on coordinate parity
-with one that averages 25 and 4 everywhere. Measured at the coastal point over
-0-36 h: **precipitation MAE fell about 6%** (AIFS 0.0918 -> 0.0862, UKMO 0.0831
--> 0.0775) and **wind bias rose 11-29%** (UKMO 0.7962 -> 1.0257), while wind MAE
-moved under 1.5%.
-
-That asymmetry is not a systematic offset in the old field, which was the first
-thing it looked like: domain-mean observed wind moved only 4.8563 -> 4.8409
-(0.3%). The large per-cell moves are what replacing *one* sample with the mean of
-*four* does at an individual cell.
-
-### What moved in the 2026-09-29 re-derivation
-
-**Only AIFS wind. Every other figure in this section is byte-identical to the
-2026-09-16 set** — all precipitation, GEFS and UKMO wind, the pooled/per-cell
-estimators, every CSI, the domain means and the stencils. That is the control on
-the change rather than a remark about it: one model's wind was replaced, and one
-model's wind moved.
-
-The cause is `NEXT_STEPS.md` §18. **The field stored as AIFS wind was the
-`2025-09-16` forecast run, filed as `2025-09-08`.** Observations only cover
-09-08, so every AIFS wind score had been comparing a forecast against truth from
-eight days before it was initialised. It has been replaced from source and is
-now reproducible.
-
-| AIFS wind, coastal point, 0-168 h | was | is | |
-|---|---|---|---|
-| bias | 1.8505 | **0.3805** | -79% |
-| MAE | 1.9099 | **0.5699** | -70% |
-| RMSE | 2.7158 | **0.6728** | -75% |
-| CRPS | 1.6688 | **0.3924** | -76% |
-| SSR (agg) | 0.8048 | **1.3048** | crosses 1 |
-
-Per-cell over the full grid: mean **2.2386 -> 0.6595**, median 1.7754 -> 0.5644,
-max 6.8164 -> 2.7587.
-
-**Two conclusions change, not just numbers.**
-
-*AIFS wind goes from indistinguishable to clearly best.* The three models' per-cell
-wind MAE was 2.2386 / 2.2455 / 2.3331 — a spread of 4%, which reads as "these
-models are equivalent at wind". It is now 0.6595 / 2.2455 / 2.3331, so AIFS is
-**3.4x better than either**. Any statement anywhere that the models perform
-similarly on wind was an artefact of the wrong run.
-
-*The AIFS wind ensemble flips from under- to over-dispersed at that point.* SSR
-crossed **1.0** (0.8048 -> 1.3048). Under 1 means the spread is too narrow for
-the error, over 1 too wide; the sign of that diagnosis was inverted.
-
-**Everything below section 0 remains on the pre-2026-09-04 truth field**, and any
-AIFS wind figure there is additionally on the wrong forecast run. Two
-independent reasons to disregard it rather than one.
+Two things it still deliberately does not do. It does not reproduce the original
+pre-2026-09-04 numbers — several recorded no scope and cannot be reproduced at
+all, and it makes no attempt to guess. And it goes through the API rather than
+reimplementing the arithmetic, because an audit that recomputes independently
+ends up confirming its own maths rather than the app's.
 
 ### The figures
 
 <!-- generated by Data/rederive_audit.py — do not hand-edit -->
-<!-- run 2025-09-08 00:00:00, regenerate with: python rederive_audit.py --markdown --init-time "2025-09-08 00:00:00" -->
+<!-- run 2025-09-16 00:00:00, regenerate with: python rederive_audit.py --markdown --init-time "2025-09-16 00:00:00" -->
 
 **Truth-field stencils (interior cells only)**
 
@@ -213,90 +224,90 @@ independent reasons to disregard it rather than one.
 
 | source | lat | lon | min obs | max obs | n cells |
 |---|---|---|---|---|---|
-| ERA5_WIND | half | half | 4 | 4 | 7776 |
-| ERA5_WIND | half | whole | 4 | 4 | 8208 |
-| ERA5_WIND | whole | half | 4 | 4 | 8208 |
-| ERA5_WIND | whole | whole | 4 | 4 | 8664 |
-| GPM_IMERG_V07B | half | half | 25 | 25 | 15552 |
-| GPM_IMERG_V07B | half | whole | 25 | 25 | 16416 |
-| GPM_IMERG_V07B | whole | half | 25 | 25 | 16416 |
-| GPM_IMERG_V07B | whole | whole | 25 | 25 | 17328 |
+| ERA5_WIND | half | half | 4 | 4 | 147744 |
+| ERA5_WIND | half | whole | 4 | 4 | 155952 |
+| ERA5_WIND | whole | half | 4 | 4 | 155952 |
+| ERA5_WIND | whole | whole | 4 | 4 | 164616 |
+| GPM_IMERG_V07B | half | half | 25 | 25 | 295488 |
+| GPM_IMERG_V07B | half | whole | 25 | 25 | 311904 |
+| GPM_IMERG_V07B | whole | half | 25 | 25 | 311904 |
+| GPM_IMERG_V07B | whole | whole | 25 | 25 | 329232 |
 
 Every row must show the SAME min/max within a source. Different values by parity is the round-half-to-even checkerboard, which the 2026-09-04 rebuild removed.
 
 **Point scores**
 
-*/api/compare/skill at 36.0 N, 75.5 W (the coastal point used throughout the audit), hours 0-168, run 2025-09-08 00:00:00*
+*/api/compare/skill at 36.0 N, 75.5 W (the coastal point used throughout the audit), hours 0-168, run 2025-09-16 00:00:00*
 
 | variable | model | bias | mae | rmse | crps | ssr_agg |
 |---|---|---|---|---|---|---|
-| precipitation | AIFS | 0.0221 | 0.0318 | 0.0384 | 0.0272 | 2.8823 |
-| precipitation | GEFS | 1.4399 | 1.4399 | 1.9035 | 1.0799 | 0.4568 |
-| precipitation | UKMO | -0.0086 | 0.0285 | 0.0326 | 0.0343 | 4.6663 |
-| wind | AIFS | 0.3805 | 0.5699 | 0.6728 | 0.3924 | 1.3048 |
-| wind | GEFS | 1.6074 | 3.1583 | 3.8627 | 2.6056 | 0.5226 |
-| wind | UKMO | 1.0257 | 2.5396 | 3.0854 | 2.1197 | 0.7729 |
+| precipitation | AIFS | -0.2641 | 0.3967 | 1.2443 | 0.3371 | 0.3847 |
+| precipitation | GEFS | -0.0773 | 0.4847 | 1.1523 | 0.3869 | 0.9217 |
+| precipitation | UKMO | -0.0456 | 0.4304 | 1.1977 | 0.3248 | 0.8703 |
+| wind | AIFS | -0.2695 | 0.9278 | 1.1925 | 0.6623 | 1.2997 |
+| wind | GEFS | 1.4248 | 1.9175 | 2.3048 | 1.321 | 0.9917 |
+| wind | UKMO | -0.3093 | 1.16 | 1.5259 | 0.8289 | 1.0725 |
 
 **Pooled vs per-cell estimators (finding 8)**
 
-*/api/compare/region-metrics over 25-45 N, 85-65 W (the whole analysis grid), hours 0-168, run 2025-09-08 00:00:00*
+*/api/compare/region-metrics over 25-45 N, 85-65 W (the whole analysis grid), hours 0-168, run 2025-09-16 00:00:00*
 
 | model | metric | pooled | cell mean | ratio | n cells |
 |---|---|---|---|---|---|
-| AIFS | rmse | 0.8737 | 0.4282 | 2.04 | 1681 |
-| AIFS | mae | 0.332 | 0.332 | 1.0 | 1681 |
-| GEFS | rmse | 1.2742 | 0.6755 | 1.886 | 1435 |
-| GEFS | mae | 0.5256 | 0.5102 | 1.03 | 1435 |
-| UKMO | rmse | 0.933 | 0.5036 | 1.853 | 1521 |
-| UKMO | mae | 0.3982 | 0.3982 | 1.0 | 1521 |
+| AIFS | rmse | 0.6094 | 0.4004 | 1.522 | 1681 |
+| AIFS | mae | 0.1894 | 0.1894 | 1.0 | 1681 |
+| GEFS | rmse | 0.6442 | 0.4403 | 1.463 | 1681 |
+| GEFS | mae | 0.2268 | 0.2209 | 1.027 | 1681 |
+| UKMO | rmse | 0.6774 | 0.3985 | 1.7 | 1521 |
+| UKMO | mae | 0.2005 | 0.1999 | 1.003 | 1521 |
 
 RMSE differs by Jensen (sqrt is concave). MAE is linear, so the two agree wherever every cell contributes the same number of samples — GEFS is the exception, because its cells do not.
 
 **Pooled vs per-cell CSI, by threshold**
 
-*/api/compare/region-metrics over 25-45 N, 85-65 W (the whole analysis grid), hours 0-168, run 2025-09-08 00:00:00*
+*/api/compare/region-metrics over 25-45 N, 85-65 W (the whole analysis grid), hours 0-168, run 2025-09-16 00:00:00*
 
 | thr mm/6h | model | pooled CSI | cell-mean CSI |
 |---|---|---|---|
 | 25 | AIFS | 0.0 | 0.0 |
-| 25 | GEFS | 0.0 | 0.0 |
-| 25 | UKMO | 0.1349 | 0.0815 |
-| 6 | AIFS | 0.2999 | 0.2333 |
-| 6 | GEFS | 0.0109 | 0.0116 |
-| 6 | UKMO | 0.3256 | 0.2691 |
-| 3 | AIFS | 0.504 | 0.4539 |
-| 3 | GEFS | 0.1013 | 0.0833 |
-| 3 | UKMO | 0.4546 | 0.3923 |
-| 1 | AIFS | 0.5798 | 0.5127 |
-| 1 | GEFS | 0.2151 | 0.1768 |
-| 1 | UKMO | 0.5597 | 0.4844 |
+| 25 | GEFS | 0.0122 | 0.0108 |
+| 25 | UKMO | 0.0498 | 0.0312 |
+| 6 | AIFS | 0.1162 | 0.0745 |
+| 6 | GEFS | 0.0969 | 0.0665 |
+| 6 | UKMO | 0.0692 | 0.0554 |
+| 3 | AIFS | 0.2213 | 0.1695 |
+| 3 | GEFS | 0.1876 | 0.1219 |
+| 3 | UKMO | 0.141 | 0.1085 |
+| 1 | AIFS | 0.2981 | 0.2547 |
+| 1 | GEFS | 0.2313 | 0.1651 |
+| 1 | UKMO | 0.2621 | 0.207 |
 
 At 25 mm/6h GEFS has no events at all, so its CSI is 0 by definition rather than by performance — a threshold has to produce events before the two estimators can be compared.
 
 **Per-cell MAE distribution**
 
-*/api/spatial-metric metric=mae over 25-45 N, 85-65 W (the whole analysis grid), hours 0-168, run 2025-09-08 00:00:00*
+*/api/spatial-metric metric=mae over 25-45 N, 85-65 W (the whole analysis grid), hours 0-168, run 2025-09-16 00:00:00*
 
 | variable | model | n cells | mean | median | max |
 |---|---|---|---|---|---|
-| precipitation | AIFS | 1681 | 0.332 | 0.1241 | 5.534 |
-| precipitation | GEFS | 1435 | 0.5102 | 0.1929 | 7.3641 |
-| precipitation | UKMO | 1521 | 0.3982 | 0.1345 | 5.3135 |
-| wind | AIFS | 1681 | 0.6595 | 0.5644 | 2.7587 |
-| wind | GEFS | 1681 | 2.2455 | 1.8209 | 7.5518 |
-| wind | UKMO | 1521 | 2.3331 | 1.7846 | 6.2672 |
+| precipitation | AIFS | 1681 | 0.1894 | 0.1243 | 1.2679 |
+| precipitation | GEFS | 1681 | 0.2209 | 0.1671 | 1.3065 |
+| precipitation | UKMO | 1521 | 0.1999 | 0.1038 | 1.5706 |
+| wind | AIFS | 1681 | 1.0124 | 1.0434 | 2.2439 |
+| wind | GEFS | 1681 | 1.2854 | 1.2525 | 2.9155 |
+| wind | UKMO | 1521 | 1.2712 | 1.319 | 2.6761 |
 
 **Domain means**
 
-*25-45 N, 85-65 W (the whole analysis grid), every stored record of run 2025-09-08 00:00:00*
+*25-45 N, 85-65 W (the whole analysis grid), every stored record of run 2025-09-16 00:00:00*
 
 | side | source/model | mean | n rows |
 |---|---|---|---|
-| observed | ERA5_WIND | 4.7773 | 40344 |
-| observed | GPM_IMERG_V07B | 0.3999 | 80688 |
-| forecast (as stored) | AIFS | 6.0832 | 100860 |
+| observed | ERA5_WIND | 3.9968 | 766536 |
+| observed | GPM_IMERG_V07B | 0.2008 | 1533072 |
+| forecast (as stored) | AIFS | 4.3982 | 100860 |
 | forecast (as stored) | GEFS | 0.2341 | 131077 |
-| forecast (as stored) | UKMO | 0.3032 | 235755 |
+| forecast (as stored) | UKMO | 0.1367 | 235560 |
 
 AIFS's forecast figure is a CUMULATIVE total, not a rate, so it is not comparable with the others — the audit's in-family check uses the AIFS *increment*. Kept here only to make that trap visible rather than to invite the comparison.
 
