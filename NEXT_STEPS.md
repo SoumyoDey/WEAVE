@@ -2757,13 +2757,16 @@ Three groups, all now accounted for rather than assumed:
   which goes through `record`, and can still be edited by hand. That is the
   state worth auditing. The module docstring and the workflow both say so, and
   the skip names its own reason.
-- **13 — `test_point_list_caps.py` (9) and `test_regrid_observations.py` (4).**
-  The same root cause as this section, not yet fixed: they resolve through a
-  module `DB_CONFIG` that names the development database. Note that
-  `test_regrid_observations.py` *also* contains argument-guard tests that depend
-  on CI's `DB_CONFIG` pointing at nothing — that is how the live-table guard
-  sitting below `psycopg2.connect` was caught — so the fix there is to move the
-  data tests onto the fixture, **not** to set `DB_NAME`.
+- **9 — `test_point_list_caps.py`.** Fixed 2026-10-01, and it turned out not to
+  be this section's problem at all. See §28: those nine passed locally while
+  asserting nothing.
+- **4 — `test_regrid_observations.py`.** The same root cause as this section,
+  not yet fixed: they resolve through a module `DB_CONFIG` that names the
+  development database. Note that this module *also* contains argument-guard
+  tests that depend on CI's `DB_CONFIG` pointing at nothing — that is how the
+  live-table guard sitting below `psycopg2.connect` was caught — so the fix
+  there is to move the data tests onto the fixture, **not** to set `DB_NAME`.
+  That warning is now written at the point of definition in the file itself.
 - **14 — `test_convert_aifs.py`.** `pytest.importorskip('netCDF4')`, and
   `netCDF4` is not in `Data/requirements.txt`. A different problem with the same
   shape: a dependency absent from CI quietly removes a test class.
@@ -2838,6 +2841,87 @@ Observations are 14.52 GB and scale with the *period covered*, not the run count
   The table reports **0 dead tuples**; autovacuum has reclaimed it for reuse.
   The item is done and should stop being listed.
 
+## 28. Nine tests that passed everywhere and tested nothing — FIXED 2026-10-01
+
+§26 left `test_point_list_caps.py`'s nine database tests listed as "the same
+root cause, not yet fixed". **They were not.** Fixing them meant first finding
+that they had never tested anything — not in CI, where they skipped, and not
+locally, where they passed.
+
+`TestAgainstTheLoadedData` took a `client` fixture of its own:
+
+```python
+@pytest.fixture
+def client():
+    reason = _skip_reason()          # is api.DB_CONFIG reachable?
+    if reason:
+        pytest.skip(reason)
+    api.app.config['TESTING'] = True
+    return api.app.test_client()     # ...and then never uses the connection
+```
+
+`conftest.py` replaces `psycopg2.pool.ThreadedConnectionPool` with a `MagicMock`
+*before* `flask_api` is imported, so `api.connection_pool` is a mock unless a
+fixture replaces it. `db_client` does; this `client` did not. So
+`get_db_connection()` handed the endpoints a mock cursor, and **a `MagicMock`
+iterates empty**: every request returned `[]` with status 200.
+
+Every assertion in the class is satisfied by an empty list:
+
+| assertion | why it passed on `[]` |
+|---|---|
+| `'X-Truncated' not in r.headers` | nothing to truncate |
+| `len(body) <= 5` | `len([]) == 0` |
+| `if r.headers.get('X-Truncated') == 'true': ...` | the branch never ran |
+| `[key(p) for p in capped] == [...]` | `[] == []` |
+
+The reachability check was theatre: it proved a server was up and then never
+spoke to it. Verified directly rather than inferred — reproducing conftest's
+stub in a scratch script and calling `/api/wind-data` returns
+`body type: list len: 0`, `X-Row-Count: 0`, `X-Truncated: None`.
+
+**This is a different failure from §26 and a worse one.** There, real tests
+skipped where the environment lacked a database; the signal existed and CI
+could not see it. Here there was no signal anywhere, and the green tick was
+accurate about a test that asserted nothing. §26 was found by reading skip
+counts; this was found only by going to fix the skips.
+
+### The fix
+
+- The class now uses conftest's `db_client`, which monkeypatches
+  `api.connection_pool` to a real pool on the fixture database. UKMO sits there
+  on its own native grid (70 cells), so a limit of 5 genuinely bites.
+- `test_every_url_returns_more_cells_than_the_low_limit` is the guard, asserted
+  before anything reads through it: *more* than the low limit, not merely
+  non-empty, or "a low limit bites" would be vacuous for a second reason.
+- Truncation is now asserted outright — `X-Truncated == 'true'`, exactly
+  `LOW_LIMIT` cells, `X-Row-Count` and `X-Row-Limit` agreeing — instead of
+  sitting behind an `if` that could never fire.
+- `test_todays_data_is_not_truncated` was really a claim about a constant: that
+  the shipped cap clears the measured worst case (UKMO wind, 7,597 cells,
+  946 KB). The fixture's 5x5 patch cannot carry that, so it moved to
+  `TestTheDefaultCapClearsTheRealWorstCase`, which needs no database and
+  therefore holds everywhere — including CI, where the original never ran.
+
+Falsified rather than assumed: pointing the URLs at a model the fixture does not
+hold reproduces the old empty-response state exactly, and gives **10 failures**
+where the previous suite was green.
+
+Result: 9 skipped in CI and 9 hollow passes locally become 21 real tests that
+run in both. Suite-wide CI skips fall from 29 to 20.
+
+### What this says about the rest
+
+The two checks added in §26 would not have caught this. `WEAVE_REQUIRE_DB_TESTS`
+turns a *skip* into a failure; these did not skip. The workflow's reachability
+check proves the server answers; so did `_skip_reason`. **The thing neither
+covers is a test that reaches a database it never queries** — and the only
+general defence is the Traps list's: assert non-emptiness before asserting
+anything about contents. Worth applying to any other module that builds its own
+client instead of taking conftest's; `test_regrid_observations.py` is next and
+its three `pytest.skip('...is not populated')` guards suggest the same question
+should be asked of it.
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in
@@ -2903,7 +2987,15 @@ the same way — a real signal, misread as to cause.
    monotonically with lead; the wrong week gives a flat curve at a higher level.
    Cheaper than any of the correlation work in §24 and it answers the actual
    question.
-11. **A skipped test and a passing test look identical in a green tick.**
+11. **A passing test can be worse than a skipped one.** Nine cap tests skipped
+    in CI and passed locally, and the local passes verified nothing at all: the
+    fixture checked a database was reachable and then handed the endpoints
+    conftest's MagicMock pool, which iterates empty (§28). A skip at least
+    announces itself in the counts. This one was indistinguishable from working
+    code on every machine, and was found only because someone went to fix the
+    skips. **Before trusting a test that talks to a database, check that it
+    asserts a non-empty result** — and check which connection it actually got.
+12. **A skipped test and a passing test look identical in a green tick.**
     Fourteen registry tests skipped on every CI run this repository ever had,
     because one environment variable was unset (§26). Nothing was red, nothing
     was wrong, and three commits to the registry went through untested. Read the
