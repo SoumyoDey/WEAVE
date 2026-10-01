@@ -1,5 +1,37 @@
 # WEAVE_v3 — system, workflow & metric-correctness audit
 
+> ## ⚠️ §0 IS STALE AS OF 2026-10-01 — FOUR CHANGES HAVE MOVED ITS FIGURES
+>
+> §0 was last regenerated 2026-09-29. Everything below that depends on a number
+> should be read as *of that date* until it is re-derived. The four changes, in
+> the order they landed:
+>
+> 1. **`crps`, `ssr_agg` and `brier` moved to the member grid** (§21) — they had
+>    returned **0 cells for UKMO at every run and every lead time**, and AIFS
+>    gained cells too because the aggregate path was silently dropping ~13% of
+>    its records. Every figure for these three changed.
+> 2. **The observation record went from 2 days to 19** (09-08 .. 09-26), taking
+>    the verification window from ~+18 h to **+450 h**. Any figure quoted over a
+>    short window now has far more samples behind it.
+> 3. **The 09-08 run stopped being a mixture** (§24). GEFS 09-08 was **deleted**
+>    — it never existed — and UKMO 09-08 wind was **replaced**. So *every GEFS
+>    number in this document is for a run that is no longer in the database*, and
+>    UKMO's wind figures describe superseded rows.
+> 4. **Pooled `ssr_agg` was taking its numerator and denominator over different
+>    samples** (§25), which moved AIFS and GEFS as well as adding UKMO.
+>
+> Regenerate with — note the **09-16** run, which is now the only initialisation
+> holding all three models at both variables:
+>
+> ```bash
+> cd Data && python rederive_audit.py --markdown --init-time "2025-09-16 00:00:00"
+> ```
+>
+> The banner below is the previous round of this and is kept: it is the record of
+> the AIFS wind replacement, and the method it describes — *only one field moved,
+> every other figure byte-identical, which is the control rather than a footnote*
+> — is how the next re-derivation should be checked too.
+
 > ## ⚠️ The AIFS WIND was the wrong forecast run until 2026-09-28
 >
 > **The field stored as AIFS wind at `2025-09-08 00Z` was the `2025-09-16` run.**

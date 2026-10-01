@@ -1,8 +1,27 @@
-# Consistency audit — results of phases 1–4
+# Consistency audit — results, all six phases
 
-Run 2026-08-19 against `CONSISTENCY_AUDIT_PLAN.md`. **Survey only — nothing was
-fixed.** The plan is explicit that each phase changes what the later fixes should
-be, so findings are classified and left.
+**The audit is CLOSED.** All six phases ran, and all but two findings are fixed;
+the two that remain are decisions with no owner, marked **open** where they
+appear (the two tabs' categorical estimators, and `fbi`/`composite_confidence`
+being Analysis-only).
+
+Phases 1–4 run 2026-08-19, phase 5 (typography) 2026-08-20, phase 6 (text
+correctness) 2026-08-20. Phases 5 and 6 are further down this file under `#`
+rather than `##` headings, which is easy to miss when skimming the table of
+contents.
+
+> **This header used to read "results of phases 1–4 — survey only, nothing was
+> fixed", and stayed that way until 2026-10-01.** It was accurate on the day
+> phases 1–4 were surveyed and wrong from the moment the fixes landed, which was
+> the same week. Two phases and a pile of `FIXED` markers accumulated underneath
+> a title saying neither had happened. Corrected rather than deleted, because it
+> is the same failure this audit exists to catch: *a sentence that was true when
+> written and was never revisited*. Phase 6's whole finding was that seven
+> user-visible strings had been falsified by later fixes.
+
+The original survey-only discipline below still describes how phases 1–4 were
+*conducted*: the plan is explicit that each phase changes what the later fixes
+should be, so findings were classified and left rather than fixed on sight.
 
 Method: the metric matrix and the wind/precipitation table were built by
 **calling every endpoint** against the fixture database rather than by reading

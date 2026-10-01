@@ -259,3 +259,53 @@ Then load the frontend, confirm the map renders a field, click a point →
 Analysis charts, and run a Comparison. Check the browser console is free of
 errors — and free of requests to any origin other than this one, which is the
 frontend half of the same check.
+
+Then check the storage headroom, which says whether another run still fits
+before anyone starts a 55 GB ingest (`DATA_EXPANSION_DESIGN.md` phase 5):
+
+```bash
+curl -su reviewer "$BASE/api/health" | python3 -m json.tool | grep -A9 '"storage"'
+# "safe": true, and "runs_until_revisit" > 0
+```
+
+---
+
+## 9. Backup and recovery
+
+> **Added 2026-10-01. There was no backup section here at all**, which was found
+> while reconciling the planning documents — `SYSTEM_DESIGN_PLAN.md` S2 asks for
+> a "backup/restore runbook" and nothing had been written. This states the real
+> position rather than inventing a procedure nobody has run.
+
+**There is no automated backup, and the database is 123.52 GB.** Two recovery
+paths exist, and they are very different in cost:
+
+**1. Rebuild from source — the supported path, and slow.** Every table can be
+rebuilt: the three converters (`convert_aifs.py`, `convert_gefs.py`,
+`convert_ukmo.py`) produce the forecast JSON, `load_to_postgres.py` /
+`load_wind.py` load it, `regrid_members.py` regrids, and
+`load_observations.py` + `regrid_observations.py` build the truth field from the
+sources on Explorer (`NEXT_STEPS.md` §11 has the paths).
+
+Budget realistically. Measured 2026-10-01: **one model's wind at one
+initialisation — two components, 155 lead times, 42M rows — took 42 minutes to
+load**, plus conversion and regrid on either side. A full three-model run is
+several hours of wall time and needs the NetCDF sources staged first.
+
+**2. `pg_dump` — faster to restore, and nobody has run it at this size.**
+
+```bash
+pg_dump -Fc -d weave_weather -f weave_$(date +%F).dump    # custom format, compressed
+pg_restore -d weave_weather -j 4 weave_2026-10-01.dump    # parallel restore
+```
+
+Two things to know before relying on it. The dump of a 123 GB database is itself
+large and has to go somewhere that is not the same disk, and **this has not been
+exercised here** — an untested restore is a plan, not a backup. If it matters,
+run it once against a scratch database and record how long it took and how big
+the file was, in this section.
+
+**What is cheap to protect and easy to overlook:** the schema, the loaders and
+the converters are all in git, so the *code* half needs no backup. What is not in
+git is the 123 GB of loaded data and the staged NetCDF sources — and of those,
+only the data is reproducible from Explorer.

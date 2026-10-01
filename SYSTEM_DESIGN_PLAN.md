@@ -55,6 +55,24 @@ true neighborhood FSS.
 
 ## 2. Current state — what's already done
 
+> **Everything in this section is a 2026-07-28 snapshot and three of its facts
+> are now false.** Corrected 2026-10-01; the original is kept below because the
+> commit list is still an accurate record of what P0–P3 contained.
+>
+> - **PR #2 is MERGED** (2026-09-02, `49ead8f`), not open. The branch
+>   `p0-reliability` is gone and **work happens on `main`**, which is well past
+>   the 11 commits named below. There is nothing to "push" or "get reviewed".
+> - **The test suite is not 29 backend tests and 2 frontend smoke tests.** It is
+>   800+ across both, with `metrics.py` and `flask_api.py` at 100% statement
+>   coverage — measure it rather than quoting this, per `NEXT_STEPS.md`.
+> - **`WEAVE_presentation` is gone**, so the warning about confusing it with the
+>   dev repo no longer applies. Its demo-readiness fixes were re-implemented
+>   here, which the note below already says.
+>
+> For where things actually stand, read `NEXT_STEPS.md` — it has an "If you are
+> picking this up cold" section written for exactly that, and is current through
+> §27.
+
 All line-level correctness/reliability/perf work is **done and on PR #2**. This
 document is about the **system-design** work that remains (§5–§6).
 
@@ -188,43 +206,117 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
 > Phases labeled **S1–S6** to stay distinct from the completed code phases P0–P3.
 > Order follows dependency/leverage.
 
-### S1 — Data lifecycle & integrity *(foundation, do first)* — ~1–1.5 wk, med risk
-- Commit & document the full ingestion pipeline incl. the regrid + observation
-  steps; deliver an end-to-end "load one run" runbook.
-- Fix the loader: config-driven, correct DB (`weave_weather`), `argparse`,
-  parameterized `init_time`; remove hardcoded creds/paths/date.
-- Link the table families: add `run_id`/init-time reference to `regridded_*`; add
-  a consistency check that fails ingestion on divergence.
-- Freshness signal: "data as of `<init_time>`" in `/api/health` + UI; explicit
-  "stale/missing" instead of silent "no data".
-- Retention + partitioning of `forecast_data`/`ensemble_statistics`.
-- **Exit:** a new run ingests end-to-end from docs; raw↔regridded consistency
-  enforced; freshness visible.
+> ## Status, reconciled 2026-10-01
+>
+> **This roadmap was written 2026-07-28 and had never been checked against what
+> shipped.** Only the Vite item in S5 carried a marker. Two months of work landed
+> through `NEXT_STEPS.md` without anyone asking which S-phase it belonged to, so
+> **S1 and the science track were substantially complete and unmarked**, while
+> four phases are genuinely untouched. Each item below was verified against the
+> code, not against another document.
+>
+> | phase | state |
+> |---|---|
+> | **S1** Data lifecycle | **mostly DONE** — 2 items left |
+> | **S2** Ops & delivery | **CI only** — 4 of 5 items untouched |
+> | **S3** Scale | **partly** — caps and caching done, Redis/async/load-test not |
+> | **S4** Extensibility | **NOT STARTED** — its exit criterion is still unmet |
+> | **S5** Frontend | **1 decision, 2 items untouched** |
+> | **S6** Security | **beta-adequate**, gated on "only if public" |
+> | Science track | **DONE** |
+>
+> **The reconciliation itself is the lesson.** A roadmap that is never marked
+> stops being a plan and becomes a list of things that might already be true —
+> which is worse than no list, because it invites re-doing finished work and
+> hides what is actually missing. The same failure as `CONSISTENCY_AUDIT.md`'s
+> header and `METRICS_AUDIT.md`'s figures, found in the same sweep.
 
-### S2 — Ops & delivery baseline *(de-risks the rest)* — ~1 wk, low risk
-- Containerize (API Dockerfile + static build + `docker-compose` incl. Postgres/Redis).
-- CI: run backend pytest + frontend build/test + lint on push; block on red.
-- Observability: structured JSON logging + request IDs (replace `print()`), error
-  tracking (Sentry), basic metrics (latency/count, DB-pool), deep health/readiness.
-- Backup/restore runbook; prod secrets manager.
-- **Exit:** one-command local stack; green CI gate; observable prod.
+### S1 — Data lifecycle & integrity *(foundation, do first)* — **MOSTLY DONE**
+- ~~Commit & document the full ingestion pipeline incl. the regrid + observation
+  steps~~ **DONE.** `convert_aifs.py`, `convert_gefs.py` and `convert_ukmo.py`
+  (§16, §20) plus `load_observations.py` (§12), `regrid_members.py` and
+  `regrid_observations.py`. **Every table can now be rebuilt from source**, which
+  this phase called its highest-leverage gap. Each converter reads the
+  initialisation time *out of the file* and refuses a directory whose files
+  disagree — the check that would have caught §20 at the moment it was
+  introduced.
+  - *Still open:* an end-to-end **"load one run" runbook** as a single document.
+    The steps exist and are exercised; the narrative that strings them together
+    does not.
+- ~~Fix the loader: config-driven, correct DB, `argparse`, parameterized
+  `init_time`~~ **DONE.**
+- ~~Link the table families; consistency check that fails ingestion on
+  divergence~~ **DONE.** `regridded_*` carry `init_time` (`migrate_init_time.py`),
+  and `uq_forecast_data_natural_key` / `uq_ensemble_statistics_natural_key` /
+  `uq_rfm_natural_key` / `uq_rfe_natural_key` make a divergent re-load **fail**
+  rather than silently double (§19). The hazard had already fired once: GEFS wind
+  was loaded twice and `/api/wind-data` squared it to 4.00×.
+- **NOT DONE — freshness signal.** `/api/health` returns `status`, `database`,
+  `total_forecast_points_estimate`, `precip_export_convention`,
+  `connection_pool` and `storage`. **None of them is "data as of `<init_time>`".**
+  The UI names the run in its selector, so a reader is not misled, but the
+  readiness signal this phase asked for does not exist.
+- **PARTLY — retention decided 2026-10-01** (`DATA_EXPANSION_DESIGN.md` phase 5):
+  no limit yet, revisit at 250 GB, enforced by `_check_storage_headroom`.
+  **Partitioning is NOT done** — nothing in `schema.sql` is partitioned, and at
+  55.30 GB per three-model run it is what would make eviction cheap.
+- **Exit:** reached except for the runbook and the freshness signal.
 
-### S3 — Scale the compute/render path — ~1–1.5 wk, med risk
-- Redis cache as default; warm common regions.
-- Async the heavy Cartopy endpoints (task queue) or pre-render tiles; app-level
-  timeouts.
-- Optional read replica; paginate/stream large point lists.
-- Load test to a concurrency target.
-- **Exit:** heavy endpoints don't block workers; concurrency target met.
+### S2 — Ops & delivery baseline *(de-risks the rest)* — **CI ONLY**
+- **NOT DONE — containerize.** No `Dockerfile`, no `docker-compose.yml`.
+- ~~CI: backend pytest + frontend build/test on push; block on red~~ **DONE
+  2026-08-24.** `.github/workflows/tests.yml`, four jobs on every PR and push to
+  `main`: jest, playwright against real Chromium, the production bundle with
+  warnings-as-errors, and pytest against a PostgreSQL service container. Two
+  details are load-bearing and are documented in `NEXT_STEPS.md`: the backend job
+  asserts the database answers *before* running pytest, and `WEAVE_REQUIRE_DB_TESTS`
+  (2026-10-01) turns an unreachable fixture from a skip into a failure — added
+  after a class of test was found to have never run in CI at all.
+- **NOT DONE — observability.** `flask_api.py` still has **86 `print()` calls**
+  and imports neither `logging`, `structlog` nor `sentry`. No request IDs, no
+  latency/count metrics. `/api/health` is deeper than it was (see S1) but is not
+  a readiness endpoint.
+- **NOT DONE — backup/restore runbook.** `DEPLOY.md` has eight sections and
+  **none of them mentions `pg_dump`, backup or restore.** The database is 123.52
+  GB and one variable of one run takes ~42 minutes to load, so "rebuild from
+  source" is a real recovery path but a slow one, and it is not written down as
+  such. No secrets manager.
+- **Exit:** not reached. The CI gate is green; the local stack and observable
+  prod are absent.
 
-### S4 — Extensibility & maintainability — ~1 wk, low–med risk
-- Single model/variable/metric **registry** (accum hours, obs source, plot style,
-  units, thresholds) — one backend source of truth, exposed to the frontend via a
-  config endpoint.
-- Config-drive hardcoded assumptions (extent, candidate_hours, obs sources, base date).
-- Deferred refactors (behind the metric tests): `@with_db_cursor`, `_render_map()`
-  helper, shared Recharts chart primitives, decompose the two large tab components.
-- **Exit:** adding a model/variable/metric is a single-place change.
+### S3 — Scale the compute/render path — **PARTLY**
+- **NOT DONE — Redis.** The metric cache is in-process, so it dies with each
+  worker and is not shared between them. Redis appears in `flask_api.py` only as
+  an optional rate-limit backend (`RATE_LIMIT_STORAGE`). No region warming.
+  - *Measured cost of not having it:* a cold wide-window region score takes
+    **~78 s**, against 0.5–0.9 s cached. The Analysis region view fires ~10 at
+    once, and every worker restart pays it again.
+- **NOT DONE — async Cartopy / task queue / app-level timeouts.**
+- ~~Paginate/stream large point lists~~ **DONE** — row caps, with
+  `test_point_list_caps.py` pinning them (and made to actually query a database
+  on 2026-10-01).
+- **NOT DONE — load test to a concurrency target.** The pool headroom check
+  computes what *would* fit; nothing has driven load at it.
+- **Exit:** not reached.
+
+### S4 — Extensibility & maintainability — **NOT STARTED**
+- **The backend registries exist but the frontend does not read them.**
+  `SPATIAL_METRIC_REGISTRY`, `PLOT_STYLE_REGISTRY`, `COMPARE_REGION_METRIC_FNS`
+  and `forecast_run_registry` are each a backend source of truth — but there is
+  **no config endpoint**, and `src/constants.js` keeps its own copy of model
+  names, colours, member counts and metric bands.
+- **This phase's exit criterion is still unmet**, and it is the one most likely
+  to cause the next defect of the kind this project keeps finding. Adding a
+  metric today means editing a backend registry *and* a frontend constant, and
+  the two drifting apart is exactly the shape of §19's "four spatial metrics
+  labelled wind maps in mm/h" and of the `UI 'wind' is not a stored variable`
+  trap. `README.md`'s "How to add a metric" already lists both halves.
+- **NOT DONE** — config-driving the hardcoded extent / candidate hours / obs
+  sources / base date, and the deferred refactors (`@with_db_cursor`,
+  `_render_map()`, shared chart primitives, decomposing the two large tab
+  components — `AnalysisTab.jsx` is still 1,264 lines).
+- **Exit:** not reached. Adding a model/variable/metric is still a two-place
+  change.
 
 ### S5 — Frontend platform & resilience — ~3–4 days, low–med risk
 - ~~Vite migration (CRA is EOL)~~ **dropped 2026-09-21** — see `NEXT_STEPS.md`
@@ -238,12 +330,25 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
 - **Exit:** resilient UI, per-env config where it is still needed. "Maintained
   toolchain" is no longer part of the exit, since the migration is dropped.
 
-### S6 — Security & multi-user *(only if exposed beyond internal)* — ~1 wk, med risk
-- AuthN (SSO/API keys), authz, per-user quotas, audit logging.
+### S6 — Security & multi-user *(only if exposed beyond internal)* — **BETA-ADEQUATE**
+- AuthN (SSO/API keys), authz, per-user quotas, audit logging — **not done, and
+  gated on this phase's own condition.** The reviewer beta puts one origin behind
+  one `basic_auth` in `deploy/Caddyfile` with gunicorn bound to 127.0.0.1, which
+  is adequate for trusted reviewers and is not multi-user security. Revisit only
+  if WEAVE is exposed beyond that.
 
-### Parallel track — Scientific validity *(gated on S1)* — ~1 wk
-- Store per-member wind speeds → exact aggregate wind verification (drops the
-  `|mean vector|` approximation). Implement true neighborhood FSS.
+### Parallel track — Scientific validity *(gated on S1)* — **DONE**
+- ~~Store per-member wind speeds → exact aggregate wind verification (drops the
+  `|mean vector|` approximation)~~ **DONE.** `_member_cases_by_cell` computes
+  per-member speed `√(u²+v²)` and says so at `flask_api.py:1181` — "per-member
+  SPEED, which is exact — unlike the `|mean vector|`". The approximation is still
+  *described* at `flask_api.py:939` for the aggregate path that retains it; that
+  docstring is accurate, not stale.
+- ~~Implement true neighborhood FSS~~ **DONE.** `_fss_from_pairs` rebuilds the
+  binary fields per lead time over an `fss_window` neighbourhood (1–21 cells,
+  caller-chosen) and forms the ratio once across hours — the standard
+  multi-case aggregation, not a per-cell average. FSS deliberately has no map,
+  because its value belongs to a field rather than a cell.
 
 ### Quick wins (pull forward, <½ day each)
 - React error boundary (S5) · deepen `/api/health` into readiness+freshness (S1/S2)

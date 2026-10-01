@@ -2922,6 +2922,49 @@ client instead of taking conftest's; `test_regrid_observations.py` is next and
 its three `pytest.skip('...is not populated')` guards suggest the same question
 should be asked of it.
 
+## 28. The planning documents were audited against the code — 2026-10-01
+
+Ten tracked `.md` files, checked against the codebase rather than against each
+other. **Three were telling a story the code contradicted**, and all three failed
+the same way: a sentence that was true when written and was never revisited —
+which is the exact failure `CONSISTENCY_AUDIT.md` phase 6 exists to catch, found
+this time in the audit documents themselves.
+
+| document | was | now |
+|---|---|---|
+| `SYSTEM_DESIGN_PLAN.md` | S1–S6 unmarked since 2026-07-28; §2 said PR #2 was open | every phase reconciled against the code; §2 corrected |
+| `CONSISTENCY_AUDIT.md` | titled "results of phases 1–4 — survey only, nothing was fixed" | all six phases, nearly all fixed — which it had contained for weeks |
+| `METRICS_AUDIT.md` | §0 dated 2026-09-29 | banner naming the four changes that moved it since |
+
+### What the reconciliation found
+
+**S1 and the science track were substantially DONE and unmarked.** All three
+converters, the observation loader, `init_time` on the regridded tables, and
+unique natural keys that make a divergent re-load fail — plus exact per-member
+wind speed and true neighbourhood FSS. Two months of work landed through this
+document without anyone asking which S-phase it belonged to.
+
+**Four phases are genuinely untouched**, and naming them is the point of the
+exercise: S2's containerisation and observability (86 `print()` calls, no
+`logging`, no request IDs), S3's Redis and load test, **S4 entirely**, and S5's
+error boundary and code-splitting.
+
+### Two gaps that were in no document at all
+
+- **`DEPLOY.md` had no backup or restore section** — not a bad one, none — for a
+  **123.52 GB** database. Now `DEPLOY.md` §9, written to state the real position
+  rather than invent a procedure: rebuilding from source works and is *slow*
+  (one model's wind at one init took **42 minutes** for the load alone), and
+  `pg_dump` has never been exercised at this size. An untested restore is a plan,
+  not a backup.
+- **S4's config endpoint does not exist**, so `src/constants.js` keeps its own
+  copy of model names, colours, member counts and metric bands while the backend
+  keeps the registries. **This is the highest-value item left**, because
+  backend/frontend drift is the shape of defects this project keeps finding —
+  §19's four spatial metrics labelled wind in `mm/h`, and the `UI 'wind' is not a
+  stored variable` trap. Adding a metric is still a two-place change, which is
+  precisely S4's unmet exit criterion.
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in
