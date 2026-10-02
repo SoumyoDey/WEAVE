@@ -230,3 +230,74 @@ class TestErrorByLead:
 
     def test_the_required_parameters_are_required(self, db_client):
         assert db_client.get('/api/cyclone/error-by-lead?storm=X').status_code == 400
+
+
+class TestAMemberWithTwoCandidateCyclones:
+    """One member, two cyclone_ids — the case the widened constraint admits.
+
+    `cyclone_track_member`'s key gained `cyclone_id` on 2026-10-02 so that a
+    member tracking two candidate cyclones at one lead no longer has one of
+    them silently discarded at load time. Admitting the row is only half the
+    job: every view here draws, scores and counts **one track per member**, so
+    something has to choose, and an unchosen second candidate would show up as
+    a polyline that teleports between two storms.
+
+    No run in the real archive carries this — measured across all 1,181 source
+    files, no member ever has more than one `cyclone_id`. The fixture supplies
+    it precisely because the data does not: a selection rule that nothing
+    exercises is a rule nobody has tested.
+
+    The fixture's decoy is **shorter** than the real track and at a latitude no
+    real member reaches, so these tests assert the decoy is *absent*. Asserting
+    the real track is present would pass whether or not the rule works.
+    """
+
+    def _kwbc(self, db_client):
+        return db_client.get(
+            f'/api/cyclone/tracks?storm={fx.CY_STORM}&centre={fx.CY_DECOY_CENTRE}'
+        ).get_json()
+
+    def test_the_member_is_one_polyline_not_two(self, db_client):
+        body = self._kwbc(db_client)
+        tracked = dict((c, t) for c, _s, _n, t in fx.CY_RUNS)[fx.CY_DECOY_CENTRE]
+        assert len(body['members']) == tracked
+        ids = [m['member_id'] for m in body['members']]
+        assert len(ids) == len(set(ids))
+
+    def test_the_longer_candidate_wins(self, db_client):
+        body = self._kwbc(db_client)
+        member = next(m for m in body['members']
+                      if m['member_id'] == fx.CY_DECOY_MEMBER)
+        assert len(member['points']) == len(fx.CY_LEADS)
+        assert all(p['lat'] != fx.CY_DECOY_LAT for p in member['points'])
+
+    def test_the_discarded_candidate_is_reported_not_silent(self, db_client):
+        # The whole point. A view that drops data and says nothing is the
+        # defect this change exists to stop repeating.
+        assert self._kwbc(db_client)['variant_members'] == 1
+
+    def test_a_run_without_variants_reports_zero(self, db_client):
+        body = db_client.get(
+            f'/api/cyclone/tracks?storm={fx.CY_STORM}&centre=ecmf').get_json()
+        assert body['variant_members'] == 0
+
+    def test_the_member_is_scored_once_not_twice(self, db_client):
+        """error-by-lead groups by lead; a second candidate would double it."""
+        body = db_client.get(
+            f'/api/cyclone/error-by-lead?storm={fx.CY_STORM}'
+            f'&centre={fx.CY_DECOY_CENTRE}').get_json()
+        tracked = dict((c, t) for c, _s, _n, t in fx.CY_RUNS)[fx.CY_DECOY_CENTRE]
+        for row in body['points']:
+            assert row['members'] <= tracked, (
+                f"lead {row['lead']} counts {row['members']} of {tracked} "
+                f"members — the decoy candidate is being counted again")
+
+    def test_the_decoy_does_not_widen_the_strike_field(self, db_client):
+        """A member's footprint must come from its own track, not from both."""
+        body = db_client.get(
+            f'/api/cyclone/strike-probability?storm={fx.CY_STORM}'
+            f'&centre={fx.CY_DECOY_CENTRE}&radius_km=120').get_json()
+        # The decoy sits 15 degrees north of every real point; at 120 km no
+        # cell near it can be marked unless the decoy was included.
+        assert body['points'], 'the field should not be empty'
+        assert max(p['lat'] for p in body['points']) < fx.CY_DECOY_LAT - 1.0

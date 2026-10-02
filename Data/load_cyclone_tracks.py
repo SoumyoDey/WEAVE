@@ -173,8 +173,25 @@ CREATE TABLE IF NOT EXISTS cyclone_track_member (
     wind_ms         REAL,
     basin           TEXT,             -- canonical, NULL where the source is coarser
     basin_source    TEXT,             -- what the file actually said
+    -- `cyclone_id` is part of the key because it is part of a track point's
+    -- identity. Without it the constraint asserts "a member has one position
+    -- per lead", which is a modelling claim nobody made: a member that tracked
+    -- two candidate cyclones at one lead would have had one of them silently
+    -- discarded by the ON CONFLICT below, and nothing would say so.
+    --
+    -- **No row in this archive exercises that.** Measured across all 1,181
+    -- source files: no member ever carries more than one `cyclone_id`, at one
+    -- lead or over its whole track — the id is the member's genesis label and
+    -- is constant along it. So widening recovers nothing today. It is here so
+    -- that an archive where that stops being true loses nothing quietly, which
+    -- is the only kind of loss this project keeps being bitten by.
+    --
+    -- It is emphatically NOT the fix for the 525 rows that `ON CONFLICT` drops
+    -- from `kwbc_0h_MATTHEW.csv`. Those are exact duplicates, identical in
+    -- every field including `cyclone_id`, and they collide under this
+    -- constraint too. `duplicate_rows` below is what reports them.
     CONSTRAINT uq_cyclone_track_member
-        UNIQUE (centre, storm_name, init_time, member_id, lead_hours)
+        UNIQUE (centre, storm_name, init_time, member_id, lead_hours, cyclone_id)
 );
 CREATE INDEX IF NOT EXISTS cyclone_track_storm
     ON cyclone_track_member (storm_name, centre, init_time);
@@ -376,6 +393,41 @@ def refuse_mixed_generation(conn, generation):
             f'one generation, or clear the cyclone tables first.')
 
 
+def widen_track_constraint(conn):
+    """Bring an existing `cyclone_track_member` up to the widened key.
+
+    `CREATE TABLE IF NOT EXISTS` does nothing to a table that already exists,
+    so a database loaded before 2026-10-02 keeps the narrow constraint and the
+    DDL above silently does not apply to it. That gap — schema source says one
+    thing, deployed database says another, nothing compares them — is how
+    `NEXT_STEPS.md` §24 happened, so this closes it rather than leaving a note.
+
+    Idempotent, and safe to run on a fresh database: it looks at what is
+    actually there rather than at what it expects. Widening a unique constraint
+    can never fail on existing rows — every set distinct under the narrow key
+    is still distinct under a superset of it — so there is no "this might not
+    apply" case to handle.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('cyclone_track_member')")
+        if cur.fetchone()[0] is None:
+            return 'no table yet'
+        cur.execute("""SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                       WHERE conrelid = 'cyclone_track_member'::regclass
+                         AND conname = 'uq_cyclone_track_member'""")
+        row = cur.fetchone()
+        if row and 'cyclone_id' in row[0]:
+            return 'already widened'
+        cur.execute('ALTER TABLE cyclone_track_member '
+                    'DROP CONSTRAINT IF EXISTS uq_cyclone_track_member')
+        cur.execute('ALTER TABLE cyclone_track_member '
+                    'ADD CONSTRAINT uq_cyclone_track_member UNIQUE '
+                    '(centre, storm_name, init_time, member_id, lead_hours, '
+                    'cyclone_id)')
+    conn.commit()
+    return 'widened'
+
+
 def read_file(path, generation=None):
     """One CSV -> (registry row, track rows, best-track rows). Refuses on doubt."""
     name = os.path.basename(path)
@@ -392,6 +444,9 @@ def read_file(path, generation=None):
     system = SYSTEM_OF_CENTRE[centre]
 
     tracks, best, positionless, converted = [], {}, 0, 0
+    # (member, lead, cyclone_id) -> the row already seen for it, so an
+    # exact repeat can be told apart from a genuine second candidate.
+    first_seen, duplicates, contradictions = {}, 0, []
     with open(path, newline='') as fh:
         for row in csv.DictReader(fh):
             valid = datetime.strptime(row['time'].strip(), '%Y-%m-%d %H:%M:%S')
@@ -406,6 +461,21 @@ def read_file(path, generation=None):
             lon, lon_converted = _normalise_longitude(_f(row['lon']))
             obs_lon, obs_converted = _normalise_longitude(_f(row['LON']))
             converted += int(lon_converted) + int(obs_converted)
+            key = (int(float(row['member_id'])), lead, row['cyclone_id'].strip())
+            position = (_f(row['lat']), lon)
+            if key in first_seen:
+                if first_seen[key] == position:
+                    # Byte-identical repeat. Counted and reported, never stored:
+                    # it carries no information and `ON CONFLICT DO NOTHING`
+                    # would drop it anyway, silently, which is the part that
+                    # cost a day.
+                    duplicates += 1
+                else:
+                    # The same member, lead and cyclone at two *different*
+                    # places. Not a duplicate and not reconcilable here.
+                    contradictions.append((key, first_seen[key], position))
+                continue
+            first_seen[key] = position
             tracks.append({
                 'member_id':    int(float(row['member_id'])),
                 'cyclone_id':   row['cyclone_id'].strip(),
@@ -437,6 +507,14 @@ def read_file(path, generation=None):
                     f'one-to-one — either way, not something to average over.')
             best[valid] = obs
 
+    if contradictions:
+        k, a, b = contradictions[0]
+        raise SourceError(
+            f'{name}: {len(contradictions)} row(s) place the same member, lead '
+            f'and cyclone at two different positions, first {k} at {a} and {b}. '
+            f'A duplicate would be identical; this is a contradiction, and '
+            f'picking one of the two would be inventing a track.')
+
     if not tracks:
         raise SourceError(f'{name}: no rows')
 
@@ -464,6 +542,7 @@ def read_file(path, generation=None):
         'source_generation': generation or generation_of(os.path.dirname(path)),
         'positionless_rows': positionless,
         'converted_longitudes': converted,
+        'duplicate_rows': duplicates,
     }
     return registry, tracks, best
 
@@ -482,6 +561,7 @@ def load(conn, source, storms=None, dry_run=False, skip_bad=False):
     # first spend four minutes parsing a thousand files.
     if conn is not None and not dry_run:
         refuse_mixed_generation(conn, generation)
+        print(f'  constraint       {widen_track_constraint(conn)}')
 
     all_tracks, all_registry, best_by_storm = [], [], defaultdict(dict)
     short, conflicts, skipped = [], [], []
@@ -552,6 +632,22 @@ def load(conn, source, storms=None, dry_run=False, skip_bad=False):
     # here is the only sign that the upstream processing changed convention —
     # the conversion itself is correct either way, so nothing else would show
     # it. See `_normalise_longitude`.
+    # Exact repeats. Reported rather than shrugged off: these used to vanish
+    # into ON CONFLICT DO NOTHING, and the only trace was that count(*) came
+    # back 525 lower than the load said. A doubled source file should name
+    # itself at load time, not two months later in a deployment document.
+    duplicated = sum(r['duplicate_rows'] for r in all_registry)
+    if duplicated:
+        worst = sorted(((r['duplicate_rows'], r['storm_name'], r['centre'])
+                        for r in all_registry if r['duplicate_rows']),
+                       reverse=True)
+        print(f'  {duplicated:,} byte-identical duplicate row(s) ignored, in '
+              f'{len(worst)} run(s):')
+        for n, storm, centre in worst[:5]:
+            print(f'    {centre} {storm}: {n:,}')
+        print('    these carry no information and were never stored; a run '
+              'with many is a sign the generating script emitted it twice')
+
     converted = sum(r['converted_longitudes'] for r in all_registry)
     if converted:
         print(f'  NOTE {converted:,} longitude(s) arrived in 0-360 form and '

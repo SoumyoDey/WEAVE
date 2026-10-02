@@ -154,16 +154,27 @@ negligible beside the 123 GB of forecast data, so §9's storage arithmetic does
 not change. `source_generation` must come back as exactly one value, `output`.
 
 **Two counts that do not match, and the smaller one is the table.** The loader
-reports 993,255 rows prepared; the table holds 992,730. The 525-row difference
-is `ON CONFLICT DO NOTHING` — the uniqueness constraint is
-`(centre, storm_name, init_time, member_id, lead_hours)` and excludes
-`cyclone_id`, so where a member tracked two genesis variants at the same lead,
-one row was dropped. Members disagreeing about genesis is real in this data
-(MOGREPS reports up to 23 variants for one storm), so these are **not
-necessarily duplicates**, and whether they were has not been checked against the
-source. It is 0.05% of the rows and affects no number currently on screen, but
-do not quote 993,255 as the table count, and see `NEXT_STEPS.md` §37 before
-relying on per-member track continuity.
+reports 993,255 rows read; the table holds **992,730**. The 525-row difference
+is one source file, `kwbc_0h_MATTHEW.csv`, which holds 1,050 rows that are 525
+records each written twice — identical in every field. They carry no
+information and are not stored.
+
+**The loader now says so**, which it did not when this was first written:
+
+```
+  525 byte-identical duplicate row(s) ignored, in 1 run(s):
+    kwbc MATTHEW: 525
+```
+
+Expect that line on this archive. A *different* count, or a different run named,
+means the source changed. A file whose rows repeat with **different** positions
+is refused outright rather than counted, because that is a contradiction rather
+than a duplicate and choosing between the two would be inventing a track.
+
+> An earlier version of this section guessed these might be distinct candidate
+> cyclones that the uniqueness constraint was discarding. They are not — checked
+> against the source, all 525 are exact repeats in a single file. The guess was
+> plausible enough to act on, which is the argument for checking before acting.
 
 ---
 

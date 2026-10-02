@@ -444,8 +444,20 @@ is ever wanted, it is one question — but nothing waits on it.
 5. ~~The spaghetti map and the denominator.~~ **BUILT 2026-10-02.**
    `/api/cyclones` and `/api/cyclone/tracks`, `src/components/CycloneTab.jsx`,
    a fourth tab, and 992,730 track rows over 1,180 runs loaded from `output/`
-   (the loader prepares 993,255; 525 collide on a constraint that excludes
-   `cyclone_id` — `NEXT_STEPS.md` §37).
+   (the loader reads 993,255; 525 are byte-identical repeats in one file,
+   `kwbc_0h_MATTHEW.csv`, now counted and named at load time — `NEXT_STEPS.md`
+   §37).
+
+   **One track per member, chosen in one place.** `cyclone_track_member`'s key
+   includes `cyclone_id`, so a member *may* carry two candidate cyclones. No run
+   in this archive does — measured across all 1,181 source files, no member ever
+   has more than one, at a lead or over its whole track. Every view here draws,
+   scores and counts one track per member, so where that stops being true
+   something must choose: longest candidate first, ties broken by earlier start
+   then by id, applied in a single shared CTE rather than copied into three
+   queries. `/api/cyclone/tracks` returns `variant_members` so a discarded
+   candidate is stated rather than inferred. The fixture seeds one, because a
+   selection rule nothing exercises is a rule nobody has tested.
 
    Two things the build found that no amount of design would have:
 

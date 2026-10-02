@@ -338,3 +338,137 @@ class TestAGoodFileIsActuallyAccepted:
         """The whole denominator argument in one assertion."""
         registry, _t, _b = loader.read_file(a_good_file(tmp_path))
         assert registry['tracked_members'] < registry['nominal_members']
+
+
+class TestExactDuplicatesAreCountedNotSwallowed:
+    """525 rows used to disappear into `ON CONFLICT DO NOTHING`.
+
+    They were all in one file, `kwbc_0h_MATTHEW.csv`, which holds 1,050 rows
+    that are 525 records each written twice — identical in every field,
+    `cyclone_id` included. Nothing reported them. The only symptom was that
+    `count(*)` came back 525 lower than the load had said, and that was noticed
+    two months later while writing a deployment document.
+
+    Dropping them is right; dropping them silently is not. A doubled source
+    file should name itself at load time.
+    """
+
+    def test_an_identical_repeat_is_counted_and_not_stored(self, tmp_path):
+        row = _row(0, 0, '2024-07-01 00:00:00')
+        path = write(tmp_path, 'kwbc_120h_MATTHEW.csv', [row, dict(row)])
+        registry, tracks, _b = loader.read_file(path)
+        assert len(tracks) == 1
+        assert registry['duplicate_rows'] == 1
+
+    def test_a_clean_file_reports_none(self, tmp_path):
+        registry, _t, _b = loader.read_file(a_good_file(tmp_path))
+        assert registry['duplicate_rows'] == 0
+
+    def test_the_whole_file_doubled_keeps_exactly_half(self, tmp_path):
+        """The shape of the real defect, in miniature."""
+        rows = [_row(m, lead, f'2024-07-01 {lead:02d}:00:00')
+                for m in (0, 1) for lead in (0, 6)]
+        path = write(tmp_path, 'kwbc_120h_MATTHEW.csv', rows + [dict(r) for r in rows])
+        registry, tracks, _b = loader.read_file(path)
+        assert len(tracks) == len(rows)
+        assert registry['duplicate_rows'] == len(rows)
+
+
+class TestTwoPositionsForOneCandidateAreRefused:
+    """A repeat that is *not* identical is a contradiction, not a duplicate.
+
+    The same member, lead and cyclone cannot be in two places. Picking one
+    would be inventing a track, and averaging them would invent a different
+    one — so the file is refused and names what it disagreed about.
+    """
+
+    def test_the_same_key_at_two_positions_refuses(self, tmp_path):
+        rows = [_row(0, 0, '2024-07-01 00:00:00', lat=15.0),
+                _row(0, 0, '2024-07-01 00:00:00', lat=25.0)]
+        path = write(tmp_path, 'kwbc_120h_BERYL.csv', rows)
+        with pytest.raises(SourceError, match='two different positions'):
+            loader.read_file(path)
+
+    def test_two_candidates_at_one_lead_are_kept_not_refused(self, tmp_path):
+        """Different `cyclone_id` is the case the widened constraint admits.
+
+        This is the whole reason the key gained `cyclone_id`: before, the
+        second row collided and was dropped with nothing said. It must now
+        survive the loader — choosing between the two is the views' job.
+        """
+        # Both ids must carry the same init stamp: the genesis part of a
+        # cyclone_id varies by member, the init part does not, and the loader
+        # refuses a file where it does.
+        a, b = '2024070100_150N_0500W', '2024070100_250N_0500W'
+        rows = [_row(0, 0, '2024-07-01 00:00:00', lat=15.0, cyclone_id=a),
+                _row(0, 0, '2024-07-01 00:00:00', lat=25.0, cyclone_id=b)]
+        path = write(tmp_path, 'kwbc_120h_BERYL.csv', rows)
+        registry, tracks, _b = loader.read_file(path)
+        assert len(tracks) == 2
+        assert {t['cyclone_id'] for t in tracks} == {a, b}
+        assert registry['duplicate_rows'] == 0
+
+
+class TestTheConstraintMigration:
+    """`CREATE TABLE IF NOT EXISTS` does nothing to a table that exists.
+
+    So a database loaded before 2026-10-02 keeps the narrow key while the DDL
+    in this file says otherwise — schema source and deployed database quietly
+    disagreeing, which is the shape of §24.
+    """
+
+    class _Cursor:
+        def __init__(self, table, constraint):
+            self._table, self._constraint, self._r = table, constraint, None
+            self.executed = []
+
+        def execute(self, sql, *_a):
+            self.executed.append(sql)
+            if 'to_regclass' in sql:
+                self._r = [(self._table,)]
+            elif 'pg_get_constraintdef' in sql:
+                self._r = [(self._constraint,)] if self._constraint else []
+            else:
+                self._r = []
+
+        def fetchone(self):
+            return self._r[0] if self._r else None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_e):
+            return False
+
+    class _Conn:
+        def __init__(self, cur):
+            self._cur = cur
+            self.commits = 0
+
+        def cursor(self):
+            return self._cur
+
+        def commit(self):
+            self.commits += 1
+
+    def test_a_narrow_constraint_is_widened(self):
+        cur = self._Cursor('cyclone_track_member',
+                           'UNIQUE (centre, storm_name, init_time, member_id, lead_hours)')
+        conn = self._Conn(cur)
+        assert loader.widen_track_constraint(conn) == 'widened'
+        added = [s for s in cur.executed if 'ADD CONSTRAINT' in s]
+        assert len(added) == 1 and 'cyclone_id' in added[0]
+        assert conn.commits == 1
+
+    def test_an_already_wide_constraint_is_left_alone(self):
+        cur = self._Cursor(
+            'cyclone_track_member',
+            'UNIQUE (centre, storm_name, init_time, member_id, lead_hours, cyclone_id)')
+        conn = self._Conn(cur)
+        assert loader.widen_track_constraint(conn) == 'already widened'
+        assert not [s for s in cur.executed if 'ALTER TABLE' in s]
+        assert conn.commits == 0
+
+    def test_no_table_yet_is_not_an_error(self):
+        conn = self._Conn(self._Cursor(None, None))
+        assert loader.widen_track_constraint(conn) == 'no table yet'

@@ -3056,6 +3056,39 @@ def list_cyclones():
         return_db_connection(conn)
 
 
+# ── One track per member ──────────────────────────────────────────────────────
+# `cyclone_track_member`'s key includes `cyclone_id`, so a member *may* carry
+# more than one candidate cyclone. Every view here draws, scores and counts one
+# track per member, so where that happens one has to be chosen — and the choice
+# is made in one place rather than three, because three copies of a tie-break
+# are three chances to disagree (`NEXT_STEPS.md`: grep the query, not the
+# function name).
+#
+# The rule: the candidate with the most points wins, ties broken by the earlier
+# start and then by id. "Most points" means the one the member tracked longest,
+# which is the member's storm in any reading; the rest of the ordering exists
+# only so the answer is deterministic rather than whatever the planner returns.
+#
+# **No run in the current archive exercises this.** Measured across all 1,181
+# source files, no member carries more than one `cyclone_id`. This is here so
+# that the widened constraint cannot turn a silent row-drop at load time into a
+# silently zigzagging polyline at render time — moving a defect rather than
+# fixing it.
+_PRIMARY_TRACK_CTE = """
+        WITH primary_track AS (
+            SELECT member_id, cyclone_id,
+                   row_number() OVER (
+                       PARTITION BY member_id
+                       ORDER BY count(*) DESC, min(lead_hours), cyclone_id) AS rn
+            FROM cyclone_track_member
+            WHERE storm_name = %s AND centre = %s AND init_time = %s
+            GROUP BY member_id, cyclone_id
+        )"""
+_PRIMARY_TRACK_JOIN = """
+            JOIN primary_track p ON p.member_id = t.member_id
+                                AND p.cyclone_id = t.cyclone_id AND p.rn = 1"""
+
+
 @app.route('/api/cyclone/tracks', methods=['GET'])
 def cyclone_tracks():
     """Every member's track for one storm, from one centre, at one init.
@@ -3093,13 +3126,13 @@ def cyclone_tracks():
         if run is None:
             return jsonify({'error': f'no run for {storm} from {centre}'}), 404
 
-        cursor.execute("""
-            SELECT member_id, lead_hours, valid_time, latitude, longitude,
-                   pressure_hpa, wind_ms
-            FROM cyclone_track_member
-            WHERE storm_name = %s AND centre = %s AND init_time = %s
-            ORDER BY member_id, lead_hours
-        """, (storm, centre, run['init_time']))
+        cursor.execute(_PRIMARY_TRACK_CTE + """
+            SELECT t.member_id, t.lead_hours, t.valid_time, t.latitude,
+                   t.longitude, t.pressure_hpa, t.wind_ms
+            FROM cyclone_track_member t""" + _PRIMARY_TRACK_JOIN + """
+            WHERE t.storm_name = %s AND t.centre = %s AND t.init_time = %s
+            ORDER BY t.member_id, t.lead_hours
+        """, (storm, centre, run['init_time'], storm, centre, run['init_time']))
         members = {}
         for r in cursor.fetchall():
             members.setdefault(r['member_id'], []).append({
@@ -3108,6 +3141,19 @@ def cyclone_tracks():
                 'lat': r['latitude'], 'lon': r['longitude'],
                 'pressure_hpa': r['pressure_hpa'], 'wind_ms': r['wind_ms'],
             })
+
+        # How many members had a second candidate cyclone that the selection
+        # above discarded. Reported rather than assumed-zero: it is zero for
+        # every run in this archive, and a response that quietly stopped saying
+        # so would be indistinguishable from one where it had stopped being
+        # true. Cheap — it reads the same rows the planner has just scanned.
+        cursor.execute("""
+            SELECT count(*) AS n FROM (
+                SELECT member_id FROM cyclone_track_member
+                WHERE storm_name=%s AND centre=%s AND init_time=%s
+                GROUP BY member_id HAVING count(DISTINCT cyclone_id) > 1) x
+        """, (storm, centre, run['init_time']))
+        variant_members = cursor.fetchone()['n']
 
         # The observed track over the same window, so the map can show what
         # actually happened beside what was forecast.
@@ -3139,6 +3185,9 @@ def cyclone_tracks():
             'nominal_members': run['nominal_members'],
             'tracked_members': run['tracked_members'],
             'genesis_variants': run['genesis_variants'],
+            # Members for which a second candidate cyclone was dropped so that
+            # one member draws one line. 0 everywhere in this archive.
+            'variant_members': variant_members,
             'members': [{'member_id': m, 'points': pts}
                         for m, pts in sorted(members.items())],
             'best_track': best,
@@ -3195,13 +3244,14 @@ def cyclone_strike_probability():
         if run is None:
             return jsonify({'error': f'no run for {storm} from {centre}'}), 404
 
-        cursor.execute("""
-            SELECT member_id, latitude, longitude
-            FROM cyclone_track_member
-            WHERE storm_name=%s AND centre=%s AND init_time=%s
-              AND lead_hours BETWEEN %s AND %s
-            ORDER BY member_id, lead_hours
-        """, (storm, centre, run['init_time'], hour_min, hour_max))
+        cursor.execute(_PRIMARY_TRACK_CTE + """
+            SELECT t.member_id, t.latitude, t.longitude
+            FROM cyclone_track_member t""" + _PRIMARY_TRACK_JOIN + """
+            WHERE t.storm_name=%s AND t.centre=%s AND t.init_time=%s
+              AND t.lead_hours BETWEEN %s AND %s
+            ORDER BY t.member_id, t.lead_hours
+        """, (storm, centre, run['init_time'],
+              storm, centre, run['init_time'], hour_min, hour_max))
         rows = cursor.fetchall()
         if not rows:
             # An honest empty rather than a field of zeros: no track in the
@@ -3279,12 +3329,13 @@ def cyclone_error_by_lead():
         if run is None:
             return jsonify({'error': f'no run for {storm} from {centre}'}), 404
 
-        cursor.execute("""
-            SELECT member_id, lead_hours, valid_time, latitude, longitude
-            FROM cyclone_track_member
-            WHERE storm_name=%s AND centre=%s AND init_time=%s
-            ORDER BY lead_hours, member_id
-        """, (storm, centre, run['init_time']))
+        cursor.execute(_PRIMARY_TRACK_CTE + """
+            SELECT t.member_id, t.lead_hours, t.valid_time, t.latitude,
+                   t.longitude
+            FROM cyclone_track_member t""" + _PRIMARY_TRACK_JOIN + """
+            WHERE t.storm_name=%s AND t.centre=%s AND t.init_time=%s
+            ORDER BY t.lead_hours, t.member_id
+        """, (storm, centre, run['init_time'], storm, centre, run['init_time']))
         points = [(r['member_id'], r['lead_hours'], r['valid_time'],
                    r['latitude'], r['longitude']) for r in cursor.fetchall()]
 

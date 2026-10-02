@@ -3667,33 +3667,54 @@ after the instruction to skip emailing `wang.shuoc`):
 
 Only `T`'s meaning is still unknown, and nothing reads it.
 
-**525 rows were dropped by `ON CONFLICT DO NOTHING`, and nobody noticed
-until the deployment docs needed a row count.** The loader reports 993,255 rows
-prepared; `cyclone_track_member` holds **992,730**. Every document written
-during the build quotes the first number as though it were the table.
+**525 rows dropped by `ON CONFLICT DO NOTHING` — found by a deployment
+document, then explained by going and looking.** The loader reported 993,255
+rows read; `cyclone_track_member` held 992,730. Six documents quoted the first
+number as the table.
 
-The cause is the uniqueness constraint,
-`(centre, storm_name, init_time, member_id, lead_hours)` — it excludes
-`cyclone_id`. Where one member tracked two genesis variants at the same lead,
-the second row collided and was discarded. **These are not necessarily
-duplicates**: members disagreeing about genesis is a real and documented
-property of this data, and MOGREPS reports up to 23 variants for a single
-storm, so some of the 525 may be distinct positions for distinct candidate
-cyclones. Which it is has not been checked against the source CSVs.
+The first explanation was a guess, and it was wrong. The uniqueness constraint
+excluded `cyclone_id`, so the obvious reading was that members tracking two
+candidate cyclones were losing one — plausible, because members disagreeing
+about genesis is real in this data and MOGREPS reports up to 23 variants for a
+single storm. It was written up with that caveat and acted on.
 
-It is 0.05% of the rows and changes no number currently on screen — every view
-selects one track per member and would have to choose between variants anyway.
-But the constraint encodes a decision ("one member has one position per lead")
-that was never stated, and `ON CONFLICT DO NOTHING` made it silent. The
-honest options are to widen the constraint to include `cyclone_id` and let the
-views choose, or to keep it and have the loader *count and report* the
-collisions the way it already counts positionless rows. Either is better than
-the current state, which is a number in six documents that does not match the
-table.
+**Checking the source settled it in one pass.** All 525 collisions are in one
+file, `kwbc_0h_MATTHEW.csv`, and all are identical in every field including
+`cyclone_id` — 1,050 rows that are 525 records each written twice. And across
+all 1,181 files, **no member ever carries more than one `cyclone_id`**, at one
+lead or over its whole track: the id is the member's genesis label and is
+constant along it. So the genesis-variant explanation was not merely unproven,
+it was impossible, and widening the constraint recovers exactly nothing.
 
-Worth noting how it surfaced: not from a test, not from the app, but from
-running `count(*)` because a deployment document needed a figure someone might
-verify. **The counts in a document are a test, if anyone ever runs them.**
+Three things were done anyway, and only one of them is about the 525:
+
+1. **The loader counts and names exact duplicates.** It drops them — that was
+   always right — but no longer silently. On this archive it prints
+   `525 byte-identical duplicate row(s) ignored ... kwbc MATTHEW: 525`. A
+   repeat with a *different* position is refused instead of counted, because
+   that is a contradiction and picking one would invent a track.
+2. **The constraint was widened to include `cyclone_id`** — not as a fix, but
+   because the narrow key asserted "a member has one position per lead", which
+   is a modelling claim nobody made. Nothing in this archive exercises it; it
+   is there so a future one cannot lose a row quietly. `widen_track_constraint`
+   migrates an existing database, since `CREATE TABLE IF NOT EXISTS` does
+   nothing to a table that already exists — schema source and deployed database
+   disagreeing is §24's shape.
+3. **The views choose one track per member, in one place.** Admitting the row
+   without this would have moved the defect rather than fixed it: a silent drop
+   at load time becomes a polyline teleporting between two storms at render
+   time. The rule is longest candidate first, ties by earlier start then id,
+   and `/api/cyclone/tracks` reports `variant_members` so a discard is visible.
+   The fixture seeds a member with two candidates, because a rule nothing
+   exercises is a rule nobody has tested.
+
+**The lesson is about the order of operations, not the bug.** The guess was
+written into six documents and a recommendation before anyone opened the source
+file, and the check that disproved it was a thirty-line script over data already
+sitting on Explorer. Worth noting too how it surfaced at all: not from a test,
+not from the app, but from running `count(*)` because a deployment document
+needed a figure someone might verify. **The counts in a document are a test, if
+anyone runs them.**
 
 **One defect found by re-opening the tab, 2026-10-02.** Every storm or centre
 change fired a request for the new storm with the *previous* storm's

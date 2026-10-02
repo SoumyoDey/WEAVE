@@ -637,6 +637,15 @@ CY_START      = (25.0, -70.0)          # inside the fixture's own domain
 CY_RUNS = [('ecmf', 'ECMWF-ENS', 51, 4), ('kwbc', 'GEFS', 31, 6)]
 CY_SPREAD_DEG_PER_LEAD = 0.01          # per member index, per lead hour
 
+# The decoy candidate cyclone (see _seed_cyclone). Deliberately shorter than
+# the real track and far enough away that its latitude cannot be confused with
+# any real one — the fan only reaches +-0.3 deg of CY_START at the last lead.
+CY_DECOY_CENTRE = 'kwbc'
+CY_DECOY_MEMBER = 0
+CY_DECOY_ID     = f'{CY_INIT:%Y%m%d%H}_900N_700W'
+CY_DECOY_LAT    = 40.0
+CY_DECOY_LEADS  = [0, 6]
+
 
 def _seed_cyclone(cur):
     """One storm, two centres, straight-line members and a known best track."""
@@ -656,6 +665,25 @@ def _seed_cyclone(cur):
         registry.append((centre, system, CY_STORM, CY_INIT, 'NA', 'AL', 1,
                          nominal, tracked, min(CY_LEADS), max(CY_LEADS),
                          0, 0, 'fixture'))
+
+    # ── One member with a second candidate cyclone ───────────────────────────
+    # `cyclone_track_member`'s key includes `cyclone_id` (widened 2026-10-02),
+    # so a member *may* carry two candidates. No run in the real archive does —
+    # measured across all 1,181 source files — which is exactly why the fixture
+    # has to: a widened constraint and a selection rule that nothing exercises
+    # are a constraint and a rule nobody has tested.
+    #
+    # Member 0 of the kwbc run gets a decoy at a clearly wrong latitude, with
+    # CY_DECOY_LEADS points against the real track's five. The views must pick
+    # the longer one, so a test can assert the decoy's latitude appears
+    # nowhere — which a test asserting the *real* latitude is present could not
+    # do, since it is present either way.
+    for lead in CY_DECOY_LEADS:
+        tracks.append((CY_DECOY_CENTRE, 'GEFS', CY_STORM, CY_DECOY_ID,
+                       CY_INIT, CY_DECOY_MEMBER, lead,
+                       CY_INIT + timedelta(hours=lead),
+                       CY_DECOY_LAT, round(CY_START[1] - 0.1 * lead, 4),
+                       1000.0, 20.0, 'NA', 'AL'))
 
     execute_values(cur, """
         INSERT INTO cyclone_track_member
