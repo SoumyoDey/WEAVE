@@ -3921,6 +3921,19 @@ purpose. Wind is exempt — instantaneous, so there is no window to reconcile.
 `f012`, `f018`, `f024` files that hold **6-hour** totals. Read `step` from the
 file, never the name. Verified on two independent runs.
 
+**`regridded_observation_shifted` and `regridded_observation_bankers` are not
+dead tables.** They hold **137,544 rows each** — 97,200 IMERG plus 40,344 ERA5,
+complete snapshots rather than fragments — and they are the documented rollback
+for two data corrections: the UTC time-base fix (§14) and the banker's-rounding
+fix (§7). Both revert procedures in this file rename them back, and **this
+database has no backup**, so dropping them removes the only path. They cost
+58 MB of 124 GB.
+
+They were nearly dropped on 2026-10-02 after being reported as empty — see the
+trap below. If they are ever genuinely unwanted, the revert SQL in §7 and §14
+has to be struck out in the same change, or this file will go on promising a
+rollback that cannot run.
+
 ## Method lessons, earned the hard way
 
 Three findings in this audit were wrong and had to be withdrawn. All three failed
@@ -4019,6 +4032,27 @@ the same way — a real signal, misread as to cause.
     itself — it reports a clean, symmetric, meaningless result. **Before
     believing a comparison, ask what it would have shown had the hypothesis been
     false.**
+
+17. **`n_live_tup` is an estimate, and on a table nobody writes to it is
+    `0` forever.** A table inventory read it as a row count and reported
+    `regridded_observation_shifted` and `regridded_observation_bankers` as
+    empty leftovers; they hold 137,544 rows each and are §7's and §14's only
+    rollback. A drop was requested on the strength of that and would have been
+    irreversible, against a database with no backup.
+
+    The mechanism is worth knowing because it is not the usual staleness: both
+    tables were created by `ALTER TABLE ... RENAME`, which carries no
+    statistics, and **autovacuum only analyses a table in response to writes**,
+    so a frozen archive table is never analysed at all — `last_analyze` and
+    `last_autoanalyze` were both `NULL`. The estimate was not merely out of
+    date, it had never existed. `ANALYZE` on both fixed it.
+
+    This is the same `reltuples` caveat `/api/health` already carries, where
+    the field is named `total_forecast_points_estimate` precisely so nobody
+    reads it as a count. **Use `count(*)` before acting on a row count**, and
+    treat `0` on an untouched table as "unknown", not "empty". More generally:
+    the cheap read is fine for a dashboard and not fine as the basis for a
+    `DROP`.
 
 The pattern throughout: a fingerprint in the data reliably shows *that* something
 is wrong, and reliably cannot say *which* explanation produced it. Three raw
