@@ -649,6 +649,63 @@ GEFS 31, CENS 21. Nothing should assume an ensemble size.
 
 Sizes: `kwbc` 66 GB + `ecmf` 41 GB + `egrr` 34 GB = 141 GB, which is the tree.
 
+### Which `kwbc` product `output/` uses — NCEP GEFS, throughout
+
+The worry was real and the answer is reassuring: **`output/`'s `kwbc_*` files are
+NCEP GEFS, consistently. Canada's CENS and CMC are not in them.**
+
+The member count alone would have said otherwise, and nearly did. Across
+`kwbc_0h_*`, some storms carry **21** members and others **31** — and CENS has
+21, so "the output mixes American and Canadian forecasts" fits the evidence.
+**It is wrong.** NCEP's GEFS also has 21 members before v12 and 31 after, and
+v12 went operational on **2020-09-23**. The split lands exactly there:
+
+| storm | first valid time | members |
+|---|---|---|
+| HAISHEN | 2020-09-01 | 21 |
+| TEDDY | 2020-09-14 | 21 |
+| *— GEFS v12, 2020-09-23 —* | | |
+| MARIE | 2020-09-29 | **31** |
+| DELTA | 2020-10-05 | **31** |
+
+Every storm 2016–2019 is 21; every storm 2021–2024 is 31; 2020 splits on that
+date. **A blend of two centres would not align itself with a known upgrade.**
+
+So the earlier warning stands against the *raw archive* — `kwbc/` carries NCEP
+and MSC side by side and the layout invites conflating them — while `output/`
+got it right. Worth stating in both directions: the trap is real, and this
+particular product did not fall into it.
+
+### The ensemble size is not a constant, for two separate reasons
+
+Found while settling the above, and it matters more for §37's features than the
+product question did.
+
+**1. The model changed.** GEFS is 21 members before 2020-09-23 and 31 after.
+Anything spanning the archive sees both.
+
+**2. Members that forecast no cyclone have no track.** ECMWF is nominally 51
+throughout, and `output/`'s files carry:
+
+| members present | storms |
+|---|---|
+| 51 | most |
+| 50, 49, 48, 47, 46, 45, 44, 42 | a few each |
+| 28 | one (2019) |
+
+Nothing changed about ECMWF's ensemble — those members simply did not develop a
+cyclone for that storm, so the tracker emitted nothing for them. (`kwbc` shows
+no such variation: exactly 21 or 31 with nothing between, across 134 storms, so
+its tracker appears to emit every member regardless. Another per-centre
+difference not to generalise across.)
+
+**This is a feature-design finding, not a loading detail.** "28 of 51 members
+tracked this storm" is a statement about forecast uncertainty — twenty-three
+members predicted no cyclone at all. Drawing 28 tracks and letting a reader
+assume that is the ensemble understates the spread of outcomes, and the missing
+members are arguably the most interesting thing on the chart. §37's feature 1
+should show the denominator.
+
 ## Open questions for whoever has context
 
 - Which storm, or storms? One case to prove the feature, or a season?
