@@ -391,8 +391,8 @@ side is more current than the forecast archive.
 - Whether `output/` covers every storm in the XML archive or a chosen subset —
   138 storms against 12 years of TIGGE suggests a subset, and the selection
   criterion matters.
-- Whether `old/` is superseded or still referenced. It holds its own IBTrACS and
-  the MICHAEL test case.
+- ~~Whether `old/` is superseded.~~ **Answered below — it is, but one thing in
+  it is not safely ignorable.**
 - Member counts per centre, beyond ECMWF's 51. `kwbc_0h_BERYL.csv` has 767 rows
   against ecmf's 1,210, so they differ — by members, by track length, or both.
 - Who produced `output/`, with what script, and whether it is reproducible.
@@ -434,6 +434,58 @@ guessing: either `output/` is still being generated, or it was deliberately
 narrowed and something disqualified those storms. Both readings fit the files.
 Ask `wang.shuoc` — this is the same question as "who produced `output/`" below,
 and now it has a concrete form.
+
+### `old/` — a development history, and a truth-vintage problem
+
+Checked 2026-10-02. 361 MB, and **superseded: nothing in it should be loaded.**
+It is the work's own history, readable from the mtimes:
+
+| when | what |
+|---|---|
+| 2025-09-17 | IBTrACS downloaded (CSV + NetCDF) |
+| 2025-09-24 | `storm.csv`, `storm_gefs.csv` — early, per-centre storm lists |
+| 2025-10-02 | `storm_2018_{0,24,48}h/` — first generation, one season |
+| 2025-10-22 | `storm_[2018]_{0,24,48}h/` — **the same thing, renamed by a bug** |
+| 2025-10-27/29 | `storm_[2013 … 2019]_{0,24,48}h/` — widened to seven seasons |
+| 2026-01-09 | `MICHAEL_{ecmf,egrr,kwbc}_0h.csv` — single-storm test case |
+| 2026-04-06 | *(current)* `<centre>/storm_2016_2024_{0,12,24}h/` |
+| 2026-06-03 | *(current)* `output/` |
+
+Three things in that are worth carrying forward.
+
+**1. The best-track vintage is not constant, and that is a correctness problem.**
+IBTrACS exists twice, and they are different downloads:
+
+| | last record | downloaded |
+|---|---|---|
+| `old/ibtracs.ALL.list.v04r01.csv` | KAJIKI, 2025-08-24 | 2025-09-17 |
+| `ibtracs.ALL.list.v04r01.csv` | SINLAKU, 2026-04-20 | **2026-04-27** |
+
+IBTrACS is revised continuously, including **retrospectively** — a past storm's
+best track changes between releases. The products carry `LAT`/`LON` and
+`distance_km` computed against *a* best track, and which one follows from when
+each was generated: `storm_2016_2024_*` predates the April download, `output/`
+postdates it. **So the two current products may be scored against different
+truth.** That is a hypothesis from mtimes, not a verified fact — but it is the
+§12 shape exactly (two sources that look identical and are not), and it has to
+be settled before any track error from these files is quoted.
+
+**2. The offset grid is a parameter someone is still tuning**, not a property of
+the data. It has been 0/24/48 (2025), then 0/12/24 (April), then 0/24/48/72
+(June). Nothing should treat the current set as fixed.
+
+**3. The tree contains failed runs.** `storm_[2013]_0h/` holds **zero files**.
+And `storm_[2018]_0h/` sits beside `storm_2018_0h/` with identical counts three
+weeks apart — the bracketed name is a stringified Python list reaching a path
+(`f"storm_{years}_0h"` with `years=[2018]`). Neither is harmful here; both say
+that in this tree **a directory existing does not mean it holds data**, which is
+the §11 generalisation trap waiting to happen again.
+
+**Also:** `storm.csv` is not a storm index. It is a scratch single-storm
+best-track extract — `old/storm.csv` is MICHAEL (2018-10-06, Caribbean, 8
+columns); the current one is **MELISSA only**, 2025-10-21 to 2025-11-01, in the
+full IBTrACS column set. A loader that reads it as a catalogue of available
+storms will be wrong about every one of them.
 
 ## Open questions for whoever has context
 
