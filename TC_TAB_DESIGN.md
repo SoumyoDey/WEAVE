@@ -33,7 +33,7 @@ worth more than either requested visualisation.
 
 ---
 
-## 2. The decision this document cannot make
+## 2. Feature 2 — DECIDED 2026-10-02: a field derived from the tracks
 
 **"Render all individual model runs as semi-transparent layers at once" has
 three readings, and they differ by two orders of magnitude in cost.**
@@ -50,15 +50,16 @@ storms anywhere in it.** Reading (a) is a new data acquisition, and for scale
 the existing three-model single-run load is 55 GB against §27's 250 GB review
 threshold.
 
-**The recommendation is (c).** It is a genuine translucent layer, it answers
-"do the scenarios cluster or diverge" more directly than fifty overplotted
-polylines, it is the standard operational idiom, and it computes from 197 MB
-already on disk. (a) and (c) look nearly identical in a mockup and differ
-enormously in cost, which is exactly why the choice should be made deliberately
-rather than discovered halfway through.
+**(c) is chosen** — decided 2026-10-02. It is a genuine translucent layer, it
+answers "do the scenarios cluster or diverge" more directly than fifty
+overplotted polylines, it is the standard operational idiom, and it computes
+from 197 MB already on disk. (a) and (c) look nearly identical in a mockup and
+differ enormously in cost, which is why the choice was worth making deliberately
+rather than discovering halfway through.
 
-**Owner: whoever requested the feature.** Everything else in this document
-holds under any of the three readings.
+§6a specifies it. (a) is not refused, only deferred: if member rasters are
+wanted later, the decoupling below is how to find out whether they are worth the
+ingest.
 
 ### A decoupling worth taking either way
 
@@ -175,7 +176,7 @@ tooltip.
 
 ## 6. What the tab shows
 
-Four views, and only the first is new vocabulary:
+Five views, and only the first and last are new vocabulary:
 
 1. **The spaghetti map.** Every member's track as a polyline, the best track
    over it, the ensemble mean distinct. With the denominator stated.
@@ -189,8 +190,8 @@ Four views, and only the first is new vocabulary:
 4. **Centres compared** — ECMWF against MOGREPS against GEFS on one storm, which
    is the Comparison tab's existing shape.
 
-Plus feature 2 as decided in §2; under reading (c) it is a fifth view and a
-server-side derived field.
+5. **Strike probability** — feature 2, a server-side derived field on the
+   analysis grid, rendered through the existing overlay. Specified in §6a.
 
 ### Scale: there isn't a problem
 
@@ -201,6 +202,90 @@ members is ~84,000 points, which is why `POINT_LIST_MAX_CELLS` exists.
 **Feature 1 needs no cap, no tiling and no binary format.** Say so plainly, so
 nobody imports the point-list machinery for a payload two orders of magnitude
 smaller than the thing it was built for.
+
+---
+
+## 6a. Feature 2, specified: strike probability
+
+**The field.** For each cell of the analysis grid, the fraction of the ensemble
+whose track passes within **R** kilometres of that cell at any lead time in the
+selected window:
+
+```
+strike_probability(cell) = members_whose_track_comes_within_R(cell) / nominal_members
+```
+
+Dimensionless, in [0, 1], one value per cell — **the same shape as every other
+field this app renders.** That is the point of choosing it: it goes through
+`_render_metric_map_png` and the browser canvas overlay unchanged, and through
+the existing legend machinery as a dimensionless metric with no wind variant,
+exactly like CSI or POD.
+
+### The denominator is `nominal_members`, and this is not a detail
+
+A member that forecast no cyclone contributes a **"no strike"**, not an absence.
+Dividing by `tracked_members` instead would be wrong by a factor of up to
+**51/28 ≈ 1.8** on the storms where it matters most — the ones where the
+ensemble disagreed about whether there would be a storm at all.
+
+That is the same shape of error as the export-divisor defect (§13, §22): a
+plausible number, silently wrong by a constant, with nothing downstream able to
+tell. §5 is why the registry carries `nominal_members`; this is what it is for.
+
+**A test must pin it**: a synthetic ensemble where half the members have no
+track must produce a maximum probability of 0.5, not 1.0.
+
+### R is a parameter, and it is exposed
+
+The radius changes the answer, so it is a control and not a constant. This is
+the pattern the app already has: `requires_threshold` metrics put their
+threshold in the panel, and `/api/config` declares which ones need it. Strike
+probability is the same shape — a dimensionless field whose value depends on a
+stated parameter.
+
+Default **120 km**, the usual operational choice, stated in the UI beside the
+value rather than buried. The lead window reuses the existing `hour_min` /
+`hour_max` vocabulary the comparison endpoints already take.
+
+### Grid
+
+The existing **0.5° analysis lattice**, which over the North Atlantic domain is
+1,681 cells — measured, not estimated. At ~55 km, a cell is comfortably smaller
+than the default radius, so the field is smooth rather than pixellated, and
+reusing the lattice is what lets the whole render path be reused.
+
+If the tab later covers basins outside the current extent, the lattice extends
+with the extent (§9); the metric does not change.
+
+### Endpoint
+
+```
+GET /api/cyclone/strike-probability
+      ?storm=<SID>&centre=<c>&init=<t>&radius_km=120&hour_min=0&hour_max=144
+   -> {points: [{lat, lon, value}], nominal_members, tracked_members, radius_km}
+```
+
+Same response shape as `/api/spatial-metric`, so the canvas overlay needs no new
+case. **It returns both member counts**, because a probability without its
+denominator cannot be checked by the person reading it.
+
+1,681 cells is ~80 KB of JSON. No cap, no tiling, no binary format — see §6.
+
+### What a test should assert, beyond the arithmetic
+
+The invariants are cheap and they catch real mistakes:
+
+- every value in [0, 1];
+- **R → very large ⇒ every cell → 1.0**, and only if every member has a track;
+- **R → very small ⇒ non-zero only at cells a track actually passes through**;
+- a **tightly clustered** synthetic ensemble gives a narrow high-probability
+  core; a **diverging** one gives a broad low-probability spread. This is the
+  thing the feature exists to show, so it is the thing to assert — a field that
+  could not tell those two cases apart would render beautifully and mean
+  nothing.
+
+The last is the lesson from §31's binning scene: construct the case the metric
+is named for and prove the metric detects it, rather than checking it runs.
 
 ---
 
@@ -271,21 +356,24 @@ wrong twice before measuring it per centre.
 
 | # | decision | owner |
 |---|---|---|
-| 1 | **What feature 2 means** — (a), (b) or (c) in §2 | whoever requested it |
+| ~~1~~ | ~~What feature 2 means~~ **DECIDED 2026-10-02: (c), the derived field. Specified in §6a.** | — |
 | 2 | Which IBTrACS vintage each product was scored against | `wang.shuoc` |
 | 3 | What the June re-selection was selecting for | `wang.shuoc` |
 | 4 | What the `T` column is | `wang.shuoc` |
 | 5 | Which generation to load — `output/` (deeper lead) or the April set (more storms) | follows from 2 and 3 |
 | 6 | North Atlantic only, or make the extent data | ours |
 
-**1 and 5 block design; 2, 3 and 4 block trusting a number.** None of them block
-loading the forecast positions themselves, which are unambiguous.
+**Nothing now blocks design.** 5 blocks choosing which files to load; 2, 3 and 4
+block trusting a derived number. None of them block loading the forecast
+positions themselves, which are unambiguous — and strike probability is computed
+from those positions, not from the derived columns, so **feature 2 is not
+blocked by the open provenance questions either.**
 
 ---
 
 ## 11. Sequence
 
-1. Settle decision 1. Everything about feature 2 follows from it.
+1. ~~Settle decision 1.~~ **Done — §6a.**
 2. Load `cyclone_track_member` + `cyclone_best_track` + `cyclone_run_registry`
    from `output/`, normalising per §8, recording `nominal_members` per §5.
 3. Recompute the derived columns and report the difference (§7). **Do not
@@ -294,7 +382,9 @@ loading the forecast positions themselves, which are unambiguous.
 5. The spaghetti map and the denominator. This is the whole of feature 1.
 6. Error-against-lead and spread-against-error, reusing the existing chart
    shapes.
-7. Feature 2, as decided.
+7. Strike probability (§6a), with its invariant tests. It depends only on the
+   loaded positions and `nominal_members`, so it can be built in parallel with
+   steps 6–7 rather than after them.
 
 Steps 2–4 are a loader and a comparison script, and are worth doing before any
 frontend work: if step 3 or 4 fails, the visualisation would have been built on
