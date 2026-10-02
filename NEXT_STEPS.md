@@ -17,6 +17,13 @@ in this repository.
 
 **Changes the rest of this document assumes**, newest first:
 
+- **2026-10-02 — a tropical cyclone tab is requested** (§37), and it is the
+  first *new* workstream since the consistency audit closed. Two features —
+  every member's storm track on the map at once, and every member's field as a
+  translucent layer — in a new tab, from data on the HPC. **Not started, and
+  the first task is not code**: the request came with the warnings that the
+  structure and the dates may differ from ours, which names this project's two
+  most expensive defects (§13/§22 and §12). Read §37 before opening an editor.
 - **2026-09-29 — the 09-08 run is a MIXTURE of two forecasts** (§20). §18's AIFS
   wind was not isolated: **four of six model/variable combinations were the
   09-16 run**, including all three models' wind and GEFS precipitation. Only
@@ -3618,6 +3625,124 @@ person to read it will otherwise wonder where the flush went.
 
 A mechanical edit across 43 call sites needs the suite run before it is
 believed. It was, and that is the only reason this is a footnote.
+
+## 37. Tropical cyclone tab — REQUESTED 2026-10-02, not started
+
+Two features asked for, both about showing an ensemble's *disagreement* rather
+than its mean:
+
+1. **Hurricane track display** — every ensemble member's predicted storm track
+   on the map at once, so track uncertainty is visible across the forecast
+   period. The conventional name is a spaghetti plot.
+2. **Ensemble scenario overlay** — every member's field rendered as a
+   semi-transparent layer simultaneously, so a reader can see whether the
+   scenarios cluster tightly or diverge.
+
+In a new tab. **The data is on the HPC**, and the request came with two warnings
+attached that are worth more than the feature description: *the data structure
+may be different from ours, and the dates may be different too.*
+
+### Take those two warnings seriously — they name this project's two worst bugs
+
+This repository has paid for both already, and the cost was weeks:
+
+- **"The structure might be different."** The export-convention reconstruction
+  (§13, §22) took days and produced `SCALED_EXPORT_DIVISOR_HOURS`, because
+  nothing recorded how the stored numbers had been scaled. The GEFS filenames
+  still lie — every file is named `..._3_Hour_Accumulation_...` including the
+  ones holding 6-hour totals (Standing decisions). A new source with an
+  unrecorded convention is the same trap with a new name.
+- **"The dates can be different."** The single most expensive defect here was a
+  **4-hour UTC shift** in the precipitation truth and not the wind truth (§12),
+  which moved every precipitation number in the app and *changed which model
+  looked better*. Right behind it, five of nine model/variable combinations
+  carried a different run's data under the 09-08 label (§20, §24).
+
+So the first task is not code and not schema design. **It is opening the files
+and writing down what is actually in them**, and the test that settles
+provenance is already known: §24's method lesson — *plot MAE against lead time;
+a forecast scored against its own valid times decays monotonically, the wrong
+week gives a flat curve at a higher level.*
+
+### What is genuinely new, and what is not
+
+**The track feature is a new data shape.** Everything in this app is
+`(model, variable, init_time, forecast_hour, latitude, longitude, value)` on a
+0.5° lattice. A cyclone track is not that: it is an ordered polyline per member
+— `(member, forecast_hour) -> (lat, lon)` plus intensity attributes such as
+minimum MSLP and maximum 10 m wind — with no grid at all. That wants its own
+table and its own endpoint shape, not a variant of
+`regridded_forecast_member`. It is also *small*: tens of points per member,
+against 1,681 cells per field.
+
+**The scenario overlay is mostly not new data.** `regridded_forecast_member`
+already holds per-member fields on the analysis grid, and that is exactly what
+feature 2 renders. What is new is the volume on the wire and the rendering.
+
+### The one number to design against
+
+Measured: **1,681 cells** on the analysis grid, and the registry's member counts
+are **AIFS 50, GEFS 30, UKMO 18**.
+
+So one lead time of one variable, all AIFS members, is 1,681 × 50 ≈ **84,000
+points** — against a `POINT_LIST_MAX_CELLS` of 20,000 that exists because the
+*single-field* worst case was 7,597 cells and 946 KB (§6). **The current
+endpoints refuse this by design, and they are right to.** Feature 2 therefore
+needs a decision before it needs code, and the options are already visible in
+this codebase:
+
+- **render server-side**, which the Cartopy path (`_render_metric_map_png`)
+  already does for metric maps — one PNG of 50 translucent layers instead of
+  50 layers of JSON;
+- **send a compact binary** (typed arrays) rather than JSON objects per cell;
+- **reduce before sending** — contours or quantile envelopes rather than every
+  member's every cell, which may be the better *visualisation* anyway.
+
+Worth noting that 50 translucent canvas layers is a rendering problem as much as
+a transfer one, and that the honest version of "do the scenarios cluster" is
+often a spread or quantile field rather than 50 overplotted ones.
+
+### Two things that will bite, from this codebase specifically
+
+- **The domain is hardcoded**, and S4 still lists that as open. The analysis
+  grid spans roughly 24–46 N, −86 to −64 W. **A hurricane track will leave it.**
+  Whatever else happens, the extent has to become data before a track can be
+  drawn across a basin.
+- **Storage.** §27 set retention at "no limit yet, revisit at 250 GB" against a
+  measured 123.52 GB, with a three-model run at 55.30 GB. A cyclone case loaded
+  as full member fields is another run-sized ingest, so this feature and that
+  threshold meet each other at about the second load.
+
+### What to answer from the HPC files before designing anything
+
+- Format: ATCF a-deck/b-deck, NetCDF, GRIB, CSV, TC-vitals?
+- **Is it tracker output or raw fields?** Already-identified cyclone centres per
+  member is a loading job. Deriving centres from MSLP or vorticity is a
+  different project, and the difference should be settled before anyone
+  estimates this.
+- Which models, how many members, which initialisations, what track cadence
+  (6-hourly is typical for tracks, against our 3- and 6-hourly fields)?
+- Does the storm period overlap any loaded run? If not, feature 2 needs its own
+  ingest rather than reading what is already here.
+- Which intensity attributes exist — minimum MSLP, maximum wind, radius of
+  maximum wind?
+- Which basin, and how far outside the current extent does it go?
+
+### Sequencing
+
+1. Read the files. Write down the structure, the dates, the units and the
+   conventions, the way `fixture_db.py`'s docstring records this project's.
+2. Verify provenance with MAE-against-lead before trusting a single number.
+3. Then a design note — probably its own document, as
+   `DATA_EXPANSION_DESIGN.md` was — covering the track table, the endpoint
+   shapes, and the chosen answer to the 84,000-point question.
+4. Then the tab. That part is cheap: the tab bar is a literal array in
+   `src/App.js` (`[['visualization', …], ['analysis', …], ['comparison', …]]`)
+   and adding a fourth entry plus a component is the established pattern.
+   One caution — `AnalysisTab.jsx` is 1,264 lines and is on S4's deferred-refactor
+   list. A cyclone tab should not become the fifth large component.
+
+**Nothing here is started**, and nothing should be until step 1 is written down.
 
 ## Standing decisions — do not undo these by accident
 
