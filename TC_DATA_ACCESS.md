@@ -792,6 +792,55 @@ assume that is the ensemble understates the spread of outcomes, and the missing
 members are arguably the most interesting thing on the chart. §37's feature 1
 should show the denominator.
 
+### Three things the loader found that the survey had not
+
+Writing `Data/load_cyclone_tracks.py` surfaced three more per-centre
+differences. All three were found by the loader **refusing** rather than by
+inspection, which is the argument for validating on load rather than trusting a
+survey.
+
+**1. The `<offset>h` in the filename is wrong for ECMWF, by a factor of two.**
+The generating script stepped back `T` initialisation cycles and labelled the
+file `T * 6` hours — correct for MOGREPS and GEFS, which run 6-hourly, and wrong
+for ECMWF, which runs 00Z and 12Z only. Measured on BERYL, IDA, ETA, LAN and
+GONI: every ECMWF file labelled `24h` is a **48-hour** earlier initialisation.
+`egrr`/LAN is 30 h rather than 24 h for a different reason — a gap in that
+archive, so four cycles back landed further than four cycles should.
+
+**A cross-centre comparison at "24h" would compare a 48-hour-old ECMWF forecast
+against a 24-hour-old MOGREPS one.** The loader records the label as
+`source_label_hours` and never uses it as a duration; `init_time` comes from the
+data, where it is derivable two independent ways that must agree.
+
+**2. `cyclone_id` is not one per file.** It is
+`<init><genesis lat><genesis lon>`, and **the genesis part varies by member**,
+because members disagree about where the storm formed. ALCIDE at 0 h has one id
+from ECMWF, five from GEFS and **eighteen from MOGREPS**. Only the init prefix
+is a property of the file.
+
+That disagreement is itself a spread measure the ensemble mean hides, so the
+registry records it as `genesis_variants`. ALCIDE/MOGREPS goes 18, 13, 18, 25
+across the four initialisations.
+
+**3. The basin vocabularies have different *granularity*, not just different
+spellings.** Enumerated across every file:
+
+| centre | values |
+|---|---|
+| `ecmf` | Northwest Pacific, Southwest Pacific, Northeast Pacific, North Atlantic, North Indian |
+| `egrr` | WP, **SH**, EP, AL, **IO**, CP |
+| `kwbc` | WP, **SI**, EP, AL, **SP**, CP, **BB** |
+
+**`egrr` writes `SH` where `kwbc` writes `SI` or `SP`.** That is not a synonym
+to map away — the Met Office files do not say which southern basin, and a
+lookup table picking one would invent a fact. Same for `IO` against
+`North Indian`.
+
+So the loader keeps `basin_source` verbatim and sets canonical `basin` only
+where the source determines one, NULL otherwise. For the case the app cares
+about this is unambiguous: all three centres identify the North Atlantic
+distinctly, and `NA` unifies 25 `AL` runs with 10 `North Atlantic` ones.
+
 ## Open questions for whoever has context
 
 - Which storm, or storms? One case to prove the feature, or a season?

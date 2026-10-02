@@ -1,0 +1,521 @@
+#!/usr/bin/env python
+"""Load the ensemble cyclone track CSVs into PostgreSQL.
+
+Why this exists
+---------------
+`TC_TAB_DESIGN.md` step 2. The source is `output/` from
+`/projects/k.aggarwal/Shuochen` on Explorer — 1,181 CSVs, 197 MB, named
+`<centre>_<offset>h_<STORM>.csv`, each holding one storm forecast from one
+initialisation by one centre, every ensemble member, every lead time.
+
+`TC_DATA_ACCESS.md` is the survey this is built on. Read it before changing a
+convention here; every normalisation below exists because the files were
+measured and found to disagree with each other.
+
+What this refuses to do
+-----------------------
+**It does not trust the filename.** The `<offset>h` in the name is wrong for
+ECMWF, systematically and by a factor of two. The generating script stepped back
+`T` initialisation cycles and labelled the file `T * 6` hours — right for MOGREPS
+and GEFS, which run 6-hourly, and wrong for ECMWF, which runs 00Z and 12Z only.
+Measured on BERYL, IDA, ETA, LAN and GONI: every ECMWF file labelled `24h` is a
+**48-hour** earlier initialisation. `egrr`/LAN is 30 h rather than 24 h for a
+different reason — a gap in that archive, so four cycles back landed further
+than four cycles should.
+
+So the label is recorded as `source_label_hours` and **never used as a time**.
+`init_time` comes from the data, where it is unambiguous and derivable two
+independent ways that this loader requires to agree (`_init_time_of`).
+
+**It does not load a column nobody can name.** `T` is loaded — because the
+survey established what it is, a count of initialisation cycles — and
+`distance_km`, `mean_lat`, `mean_lon` and `dist_to_ens_mean_km` are **not**.
+Those four are derived quantities whose derivation is unverified, and
+`TC_TAB_DESIGN.md` §7 is explicit: recompute and compare rather than import.
+Loading them would make a number true by assertion, which is how
+`SCALED_EXPORT_DIVISOR_HOURS` cost days (§13, §22).
+
+**It does not infer the ensemble size from the rows present.** A member that
+forecast no cyclone has no track, so counting distinct `member_id` gives the
+number that *developed* a storm, not the number that ran. ECMWF files carry
+anywhere from 28 to 51. The registry records both, and `NOMINAL_MEMBERS` below
+is the declared table — the same bargain `run_registry.DECLARED` strikes, and
+for the same reason.
+
+Usage
+-----
+    python load_cyclone_tracks.py --source /path/to/output --dry-run
+    python load_cyclone_tracks.py --source /path/to/output
+    python load_cyclone_tracks.py --source /path/to/output --storms BERYL,IDA
+"""
+import argparse
+import csv
+import math
+import os
+import re
+import sys
+from collections import defaultdict
+from datetime import datetime, timedelta
+
+import psycopg2
+from psycopg2.extras import execute_values
+from dotenv import load_dotenv
+
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
+
+DB_CONFIG = {
+    'dbname':   os.environ.get('DB_NAME',     'weave_weather'),
+    'user':     os.environ.get('DB_USER',     'k.aggarwal'),
+    'password': os.environ.get('DB_PASSWORD', ''),
+    'host':     os.environ.get('DB_HOST',     'localhost'),
+    'port':     int(os.environ.get('DB_PORT', 5432)),
+}
+
+# ── What the centres actually are ─────────────────────────────────────────────
+# `centre` is the TIGGE distribution node; `system` is the model that produced
+# the forecast. They are not the same thing and the directory layout hides it:
+# `kwbc/` carries NCEP's GEFS and GFS *and* Canada's CENS and CMC. `output/` was
+# built from GEFS throughout — established by the member count stepping 21 -> 31
+# exactly at the GEFS v12 upgrade of 2020-09-23, which a blend of two centres
+# would not do. Recording both columns is what stops that distinction being lost
+# the next time someone extends this (NEXT_STEPS.md §20, §24).
+SYSTEM_OF_CENTRE = {
+    'ecmf': 'ECMWF-ENS',
+    'egrr': 'MOGREPS',
+    'kwbc': 'GEFS',
+}
+
+# Declared, not measured — see the module docstring. A value here is the size of
+# the ensemble that *ran*, against which members that produced no track are the
+# interesting minority rather than missing data.
+#
+# GEFS is a function of the initialisation: v12 took it from 21 members to 31 on
+# 2020-09-23, and the loaded archive straddles that date.
+GEFS_V12 = datetime(2020, 9, 23)
+
+
+def nominal_members(system, init_time):
+    if system == 'ECMWF-ENS':
+        return 51
+    if system == 'MOGREPS':
+        return 36
+    if system == 'GEFS':
+        return 31 if init_time >= GEFS_V12 else 21
+    raise ValueError(f'no declared ensemble size for {system!r}; add it to '
+                     f'nominal_members() rather than letting the loader guess')
+
+
+# Basin labels differ by centre, and **not merely in spelling** — the three
+# vocabularies have different granularity. Enumerated from every file in
+# `output/`, not guessed:
+#
+#   ecmf   Northwest Pacific, Southwest Pacific, Northeast Pacific,
+#          North Atlantic, North Indian
+#   egrr   WP, SH, EP, AL, IO, CP
+#   kwbc   WP, SI, EP, AL, SP, CP, BB
+#
+# **`egrr` writes `SH` where `kwbc` writes `SI` or `SP`.** That is not a synonym
+# to map away; the Met Office files simply do not say which southern basin, and
+# a lookup table that picked one would be inventing a fact. Likewise `IO`
+# against `North Indian` and `BB`.
+#
+# So two columns. `basin_source` keeps what the file said, verbatim and always.
+# `basin` is the canonical code **only where the source is precise enough to
+# determine one**, and NULL where it is not. An unrecognised code is refused
+# rather than passed through — the previous version of this used a dict `.get`
+# with the raw value as its default, so `IO` and `SH` sailed into the database
+# as if they were canonical, which is the silent-widening this project keeps
+# paying for.
+#
+# For the one case the app currently cares about this is unambiguous: all three
+# centres identify the North Atlantic distinctly.
+BASIN_CANONICAL = {
+    'north atlantic': 'NA', 'al': 'NA',
+    'northeast pacific': 'EP', 'ep': 'EP',
+    'central pacific': 'CP', 'cp': 'CP',
+    'northwest pacific': 'WP', 'wp': 'WP',
+    'southwest pacific': 'SP', 'sp': 'SP',
+    'south indian': 'SI', 'si': 'SI',
+    'north indian': 'NI', 'ni': 'NI',
+    'bay of bengal': 'BB', 'bb': 'BB',
+    # Genuinely ambiguous: the source is coarser than the vocabulary.
+    'sh': None,          # Southern Hemisphere — SI or SP, unstated
+    'io': None,          # Indian Ocean — NI or SI, unstated
+}
+
+
+def canonical_basin(raw):
+    """(canonical_or_None, verbatim). Refuses a code nobody has declared."""
+    verbatim = (raw or '').strip()
+    key = verbatim.lower()
+    if key not in BASIN_CANONICAL:
+        raise SourceError(
+            f'unknown basin {verbatim!r}. Add it to BASIN_CANONICAL — mapping '
+            f'it to None if the source is coarser than the canonical code — '
+            f'rather than letting an undeclared value into the database.')
+    return BASIN_CANONICAL[key], verbatim
+
+FILENAME = re.compile(r'^(?P<centre>[a-z]+)_(?P<label>\d+)h_(?P<storm>.+)\.csv$')
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS cyclone_track_member (
+    centre          TEXT      NOT NULL,
+    system          TEXT      NOT NULL,
+    storm_name      TEXT      NOT NULL,
+    cyclone_id      TEXT      NOT NULL,
+    init_time       TIMESTAMP NOT NULL,
+    member_id       INTEGER   NOT NULL,
+    lead_hours      INTEGER   NOT NULL,
+    valid_time      TIMESTAMP NOT NULL,
+    latitude        REAL      NOT NULL,
+    longitude       REAL      NOT NULL,
+    pressure_hpa    REAL,
+    wind_ms         REAL,
+    basin           TEXT,             -- canonical, NULL where the source is coarser
+    basin_source    TEXT,             -- what the file actually said
+    CONSTRAINT uq_cyclone_track_member
+        UNIQUE (centre, storm_name, init_time, member_id, lead_hours)
+);
+CREATE INDEX IF NOT EXISTS cyclone_track_storm
+    ON cyclone_track_member (storm_name, centre, init_time);
+
+CREATE TABLE IF NOT EXISTS cyclone_best_track (
+    storm_name      TEXT      NOT NULL,
+    valid_time      TIMESTAMP NOT NULL,
+    latitude        REAL,
+    longitude       REAL,
+    nature          TEXT,
+    wmo_pressure    REAL,
+    wmo_wind        REAL,
+    dist_to_land_km REAL,
+    landfall_km     REAL,
+    storm_speed     REAL,
+    storm_dir       REAL,
+    CONSTRAINT uq_cyclone_best_track UNIQUE (storm_name, valid_time)
+);
+
+CREATE TABLE IF NOT EXISTS cyclone_run_registry (
+    centre              TEXT      NOT NULL,
+    system              TEXT      NOT NULL,
+    storm_name          TEXT      NOT NULL,
+    init_time           TIMESTAMP NOT NULL,
+    basin               TEXT,
+    basin_source        TEXT,
+    -- Distinct genesis positions the members identified. ECMWF reports one for
+    -- ALCIDE; MOGREPS reports eighteen. That disagreement is a result.
+    genesis_variants    INTEGER,
+    -- What ran, and what produced a track. The gap is the point: see §5.
+    nominal_members     INTEGER   NOT NULL,
+    tracked_members     INTEGER   NOT NULL,
+    lead_min            INTEGER,
+    lead_max            INTEGER,
+    -- The filename's claim, kept because it is what the file is called, and
+    -- never used as a duration: it is wrong by 2x for ECMWF. See the docstring.
+    source_label_hours  INTEGER,
+    source_cycles       INTEGER,          -- the `T` column: initialisation cycles back
+    source_generation   TEXT,
+    loaded_at           TIMESTAMP DEFAULT now(),
+    CONSTRAINT uq_cyclone_run_registry UNIQUE (centre, storm_name, init_time)
+);
+"""
+
+
+class SourceError(Exception):
+    """The files disagree with themselves. Refused rather than reconciled."""
+
+
+def _f(value):
+    """A float, or None for the blanks IBTrACS leaves everywhere."""
+    value = (value or '').strip()
+    if value in ('', 'NaN', 'nan'):
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def _normalise_longitude(lon):
+    """Signed ±180.
+
+    `output/` is already signed — measured, BERYL runs −94.0 to −42.9 in the
+    North Atlantic. This is a guard rather than a conversion: a 0–360 value
+    reaching here would mean the upstream processing changed, and silently
+    plotting it 180° out is the failure this prevents. The raw CXML archives
+    each use a *different* convention (TC_DATA_ACCESS.md), so the possibility is
+    real rather than theoretical.
+    """
+    if lon is None:
+        return None
+    if -180.0 <= lon <= 180.0:
+        return lon
+    if 180.0 < lon <= 360.0:
+        return lon - 360.0
+    raise SourceError(f'longitude {lon} is outside any convention this '
+                      f'loader recognises')
+
+
+def _check_latitude(lat):
+    """Latitude, guarded.
+
+    Separate from the longitude guard on purpose. In the raw CXML, latitude
+    carries `units="deg S"` on an *already signed* value, and applying both the
+    sign and the unit flips the hemisphere — a storm in the Coral Sea drawn off
+    Japan. `output/` has the sign already applied and the unit dropped, so this
+    only has to catch the case where that stops being true.
+    """
+    if lat is None:
+        return None
+    if -90.0 <= lat <= 90.0:
+        return lat
+    raise SourceError(f'latitude {lat} is out of range; if a hemisphere unit '
+                      f'has been applied twice this is where it shows')
+
+
+def _init_time_of(rows, path):
+    """The initialisation, derived two ways, which must agree.
+
+    1. `valid_time - lead_hours` on every row.
+    2. The `cyclone_id` prefix, which is the CXML disturbance ID and begins
+       `YYYYMMDDHH`.
+
+    Requiring both is not belt-and-braces. The AIFS wind stored at 2025-09-08
+    was the 2025-09-16 run, and the file's own `time` variable said so in every
+    one of those files — nothing read it (§18, §20). Here there are two
+    independent statements of the same fact in every row, so checking costs
+    nothing and refuses exactly that class of defect.
+    """
+    from_rows = {r['valid_time'] - timedelta(hours=r['lead_hours']) for r in rows}
+    if len(from_rows) != 1:
+        raise SourceError(f'{os.path.basename(path)}: valid_time - lead_time is '
+                          f'not constant; got {sorted(from_rows)[:3]}')
+    init = from_rows.pop()
+
+    # `cyclone_id` is `<init><genesis lat><genesis lon>`, and only the init part
+    # is a property of the file. **The genesis part varies by member**, because
+    # members disagree about where the storm formed: ALCIDE at 0 h has one id
+    # from ECMWF, five from GEFS and eighteen from MOGREPS. An earlier version
+    # of this function required a single id per file and refused every MOGREPS
+    # file — correctly, in that the assumption was wrong, which is the whole
+    # argument for checking rather than assuming.
+    stamps = {r['cyclone_id'].split('_', 1)[0] for r in rows}
+    if len(stamps) != 1:
+        raise SourceError(f'{os.path.basename(path)}: cyclone_id carries more '
+                          f'than one initialisation: {sorted(stamps)}')
+    stamp = stamps.pop()
+    if len(stamp) == 10 and stamp.isdigit():
+        from_id = datetime.strptime(stamp, '%Y%m%d%H')
+        if from_id != init:
+            raise SourceError(
+                f'{os.path.basename(path)}: the two statements of the '
+                f'initialisation disagree — rows say {init}, cyclone_id '
+                f'says {from_id}')
+    # How many distinct genesis positions the members found. Not bookkeeping:
+    # it is a spread measure in its own right, and one the ensemble mean hides.
+    return init, len({r['cyclone_id'] for r in rows})
+
+
+def read_file(path):
+    """One CSV -> (registry row, track rows, best-track rows). Refuses on doubt."""
+    name = os.path.basename(path)
+    match = FILENAME.match(name)
+    if not match:
+        raise SourceError(f'{name}: not <centre>_<label>h_<STORM>.csv')
+    centre = match.group('centre')
+    # Split from the LEFT on the fixed prefix, never on '_': KYAAR_KYARR carries
+    # an underscore inside the storm name and splitting on it loses half.
+    storm = match.group('storm')
+    if centre not in SYSTEM_OF_CENTRE:
+        raise SourceError(f'{name}: unknown centre {centre!r}; add it to '
+                          f'SYSTEM_OF_CENTRE rather than guessing its system')
+    system = SYSTEM_OF_CENTRE[centre]
+
+    tracks, best = [], {}
+    with open(path, newline='') as fh:
+        for row in csv.DictReader(fh):
+            valid = datetime.strptime(row['time'].strip(), '%Y-%m-%d %H:%M:%S')
+            lead = int(float(row['lead_time']))
+            tracks.append({
+                'member_id':    int(float(row['member_id'])),
+                'cyclone_id':   row['cyclone_id'].strip(),
+                'basin':        canonical_basin(row['basin'])[0],
+                'basin_source': canonical_basin(row['basin'])[1],
+                'valid_time':   valid,
+                'lead_hours':   lead,
+                'latitude':     _check_latitude(_f(row['lat'])),
+                'longitude':    _normalise_longitude(_f(row['lon'])),
+                'pressure_hpa': _f(row['pressure_hPa']),
+                'wind_ms':      _f(row['wind_mps']),
+                'cycles':       int(float(row['T'])) if row.get('T') else None,
+            })
+            # The best track is repeated on every member row — 51x redundant,
+            # and it makes an observation look like a property of a forecast.
+            # Collapsed here, and disagreements are refused rather than
+            # last-write-wins: two products built against different IBTrACS
+            # vintages would show up exactly here (TC_DATA_ACCESS.md §9).
+            obs = (
+                _f(row['LAT']), _normalise_longitude(_f(row['LON'])),
+                row['NATURE'].strip() or None, _f(row['WMO_PRES']),
+                _f(row['WMO_WIND']), _f(row['DIST2LAND']), _f(row['LANDFALL']),
+                _f(row['STORM_SPEED']), _f(row['STORM_DIR']),
+            )
+            if valid in best and best[valid] != obs:
+                raise SourceError(
+                    f'{name}: the best track disagrees with itself at {valid}. '
+                    f'Two IBTrACS vintages in one file, or a join that is not '
+                    f'one-to-one — either way, not something to average over.')
+            best[valid] = obs
+
+    if not tracks:
+        raise SourceError(f'{name}: no rows')
+
+    init, genesis_variants = _init_time_of(tracks, path)
+    members = {t['member_id'] for t in tracks}
+    declared = nominal_members(system, init)
+    if max(members) >= declared:
+        raise SourceError(
+            f'{name}: member_id {max(members)} with only {declared} declared '
+            f'for {system} at {init}. The declaration in nominal_members() is '
+            f'wrong — fix it there, do not widen it here.')
+
+    cycles = {t['cycles'] for t in tracks}
+    registry = {
+        'centre': centre, 'system': system, 'storm_name': storm,
+        'init_time': init, 'genesis_variants': genesis_variants,
+        'basin': tracks[0]['basin'],
+        'basin_source': tracks[0]['basin_source'],
+        'nominal_members': declared,
+        'tracked_members': len(members),
+        'lead_min': min(t['lead_hours'] for t in tracks),
+        'lead_max': max(t['lead_hours'] for t in tracks),
+        'source_label_hours': int(match.group('label')),
+        'source_cycles': cycles.pop() if len(cycles) == 1 else None,
+        'source_generation': 'output',
+    }
+    return registry, tracks, best
+
+
+def load(conn, source, storms=None, dry_run=False):
+    paths = sorted(
+        os.path.join(source, f) for f in os.listdir(source)
+        if f.endswith('.csv') and FILENAME.match(f)
+        and (storms is None or FILENAME.match(f).group('storm') in storms))
+    if not paths:
+        raise SourceError(f'{source}: no files matching '
+                          f'<centre>_<label>h_<STORM>.csv')
+
+    all_tracks, all_registry, best_by_storm = [], [], defaultdict(dict)
+    short, conflicts = [], []
+    for path in paths:
+        registry, tracks, best = read_file(path)
+        all_registry.append(registry)
+        for t in tracks:
+            all_tracks.append((
+                registry['centre'], registry['system'], registry['storm_name'],
+                t['cyclone_id'], registry['init_time'], t['member_id'],
+                t['lead_hours'], t['valid_time'], t['latitude'], t['longitude'],
+                t['pressure_hpa'], t['wind_ms'], t['basin'], t['basin_source'],
+            ))
+        if registry['tracked_members'] < registry['nominal_members']:
+            short.append(registry)
+        # Across files, the same storm's best track must agree. This is the
+        # cross-product check the per-file one cannot make.
+        store = best_by_storm[registry['storm_name']]
+        for valid, obs in best.items():
+            if valid in store and store[valid] != obs:
+                conflicts.append((registry['storm_name'], valid))
+            store[valid] = obs
+
+    if conflicts:
+        raise SourceError(
+            f'{len(conflicts)} best-track disagreements across files, first '
+            f'{conflicts[:3]}. Different products scored against different '
+            f'IBTrACS vintages is the likely cause and it is not reconcilable '
+            f'here — settle which vintage is wanted first.')
+
+    best_rows = [(storm, valid, *obs)
+                 for storm, store in best_by_storm.items()
+                 for valid, obs in sorted(store.items())]
+
+    print(f'  files            {len(paths):,}')
+    print(f'  track rows       {len(all_tracks):,}')
+    print(f'  best-track rows  {len(best_rows):,}')
+    print(f'  runs             {len(all_registry):,}')
+    print(f'  runs where some members produced no track: {len(short):,} '
+          f'of {len(all_registry):,}')
+    if short:
+        worst = min(short, key=lambda r: r['tracked_members'] / r['nominal_members'])
+        print(f"    fewest: {worst['storm_name']} {worst['centre']} "
+              f"{worst['tracked_members']}/{worst['nominal_members']} members — "
+              f"the other {worst['nominal_members'] - worst['tracked_members']} "
+              f"forecast no cyclone, which is a result, not a gap")
+
+    if dry_run:
+        print('\n  --dry-run: nothing written')
+        return 0
+
+    with conn.cursor() as cur:
+        cur.execute(SCHEMA)
+        execute_values(cur, """
+            INSERT INTO cyclone_track_member
+                (centre, system, storm_name, cyclone_id, init_time, member_id,
+                 lead_hours, valid_time, latitude, longitude, pressure_hpa,
+                 wind_ms, basin, basin_source) VALUES %s
+            ON CONFLICT ON CONSTRAINT uq_cyclone_track_member DO NOTHING
+        """, all_tracks, page_size=5000)
+        execute_values(cur, """
+            INSERT INTO cyclone_best_track
+                (storm_name, valid_time, latitude, longitude, nature,
+                 wmo_pressure, wmo_wind, dist_to_land_km, landfall_km,
+                 storm_speed, storm_dir) VALUES %s
+            ON CONFLICT ON CONSTRAINT uq_cyclone_best_track DO NOTHING
+        """, best_rows, page_size=5000)
+        execute_values(cur, """
+            INSERT INTO cyclone_run_registry
+                (centre, system, storm_name, init_time, basin, basin_source,
+                 genesis_variants, nominal_members, tracked_members, lead_min, lead_max,
+                 source_label_hours, source_cycles, source_generation) VALUES %s
+            ON CONFLICT ON CONSTRAINT uq_cyclone_run_registry DO UPDATE SET
+                tracked_members = EXCLUDED.tracked_members,
+                lead_min = EXCLUDED.lead_min, lead_max = EXCLUDED.lead_max,
+                loaded_at = now()
+        """, [tuple(r[k] for k in (
+                'centre', 'system', 'storm_name', 'init_time',
+                'basin', 'basin_source', 'genesis_variants', 'nominal_members', 'tracked_members', 'lead_min',
+                'lead_max', 'source_label_hours', 'source_cycles',
+                'source_generation')) for r in all_registry])
+    conn.commit()
+    print('\n  committed')
+    return len(all_tracks)
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--source', required=True,
+                    help="directory of <centre>_<label>h_<STORM>.csv files")
+    ap.add_argument('--storms', help='comma-separated storm names, for a subset')
+    ap.add_argument('--dry-run', action='store_true',
+                    help='read, validate and report; write nothing')
+    args = ap.parse_args()
+
+    if not os.path.isdir(args.source):
+        sys.exit(f'not a directory: {args.source}')
+    storms = set(s.strip() for s in args.storms.split(',')) if args.storms else None
+
+    conn = None if args.dry_run else psycopg2.connect(**DB_CONFIG)
+    try:
+        load(conn, args.source, storms=storms, dry_run=args.dry_run)
+    except SourceError as e:
+        # Refused, not crashed: the message names the file and the contradiction
+        # so it can be checked against the source rather than guessed at.
+        sys.exit(f'refusing to load: {e}')
+    finally:
+        if conn is not None:
+            conn.close()
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
