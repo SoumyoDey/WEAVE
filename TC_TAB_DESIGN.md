@@ -405,17 +405,31 @@ wrong twice before measuring it per centre.
 | # | decision | owner |
 |---|---|---|
 | ~~1~~ | ~~What feature 2 means~~ **DECIDED 2026-10-02: (c), the derived field. Specified in §6a.** | — |
-| 2 | Which IBTrACS vintage each product was scored against | `wang.shuoc` |
-| 3 | What the June re-selection was selecting for | `wang.shuoc` |
-| 4 | What the `T` column is | `wang.shuoc` |
-| 5 | Which generation to load — `output/` (deeper lead) or the April set (more storms) | follows from 2 and 3 |
+| ~~2~~ | ~~Which IBTrACS vintage each product was scored against~~ **ANSWERED 2026-10-02 from the files.** | — |
+| ~~3~~ | ~~What the June re-selection was selecting for~~ **ANSWERED 2026-10-02 from the files.** | — |
+| 4 | What the `T` column is | open — **not blocking**, see below |
+| ~~5~~ | ~~Which generation to load~~ **SETTLED by 2 and 3: `output/`, already loaded.** | — |
 | 6 | North Atlantic only, or make the extent data | ours |
 
-**Nothing now blocks design.** 5 blocks choosing which files to load; 2, 3 and 4
-block trusting a derived number. None of them block loading the forecast
-positions themselves, which are unambiguous — and strike probability is computed
-from those positions, not from the derived columns, so **feature 2 is not
-blocked by the open provenance questions either.**
+**2 and 3 were answered from the data rather than by email** (`TC_DATA_ACCESS.md`
+§9), after the instruction to skip contacting `wang.shuoc` for now. Both were
+provenance questions, and provenance turned out to be recoverable:
+
+- **2.** `output/` was scored against the 2026-04-27 IBTrACS download, the April
+  `storm_2016_2024_*` set against the 2025-09-17 one. The two vintages disagree
+  for **24 of 138 storms**, so the two generations carry different truth and
+  **must not be mixed**.
+- **3.** A complete **+144 h** window. All **1,180** loaded runs reach exactly
+  +144 h and none falls short, so the storms dropped between generations were
+  excluded for not supplying a full six-day forecast — a selection on
+  completeness, not on quality. Nothing was dropped for being wrong.
+- **5** follows directly: `output/` has both the deeper lead and the newer best
+  track, and mixing was never an option. It is what is loaded.
+
+**4 stays open and is now explicitly not blocking.** The `T` column is not read
+by the loader, is not stored, and is not used by any of the five views; every
+number on screen derives from the forecast positions and the best track. If it
+is ever wanted, it is one question — but nothing waits on it.
 
 ---
 

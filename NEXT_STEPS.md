@@ -3626,7 +3626,7 @@ person to read it will otherwise wonder where the flush went.
 A mechanical edit across 43 call sites needs the suite run before it is
 believed. It was, and that is the only reason this is a footnote.
 
-## 37. Tropical cyclone tab — REQUESTED 2026-10-02, not started
+## 37. Tropical cyclone tab — REQUESTED and BUILT 2026-10-02
 
 Two features asked for, both about showing an ensemble's *disagreement* rather
 than its mean:
@@ -3641,6 +3641,31 @@ than its mean:
 In a new tab. **The data is on the HPC**, and the request came with two warnings
 attached that are worth more than the feature description: *the data structure
 may be different from ours, and the dates may be different too.*
+
+### Status — built, and both provenance questions closed
+
+A fourth tab, five views, **993,255 track rows over 1,180 runs** from three
+centres. `TC_DATA_ACCESS.md` is the survey and `TC_TAB_DESIGN.md` the design;
+both carry what the build found that the design had not.
+
+Both warnings landed. The structure *was* different — CXML tracker output, one
+row per member per lead, not a gridded field — which made feature 2 a derived
+strike-probability field rather than a stack of layers. And the dates were
+different twice over: a different init cadence, and **two generations of the
+same product scored against two different IBTrACS vintages.**
+
+**Both open provenance questions were settled from the files** (2026-10-02,
+after the instruction to skip emailing `wang.shuoc`):
+
+- `output/` was scored against the 2026-04-27 best track, the April
+  `storm_2016_2024_*` set against the 2025-09-17 one. They disagree for **24 of
+  138 storms** — IBTrACS revises retrospectively — so the two generations must
+  not be mixed.
+- The June re-selection was selecting for a **complete +144 h window**: all
+  1,180 loaded runs reach exactly +144 h and none falls short. The storms it
+  dropped were dropped for not reaching six days, not for being wrong.
+
+Only `T`'s meaning is still unknown, and nothing reads it.
 
 ### Take those two warnings seriously — they name this project's two worst bugs
 
@@ -3865,6 +3890,26 @@ the same way — a real signal, misread as to cause.
     different commits is a fact about the environment, not about the code. And
     when moving a test to a database that has different data, assert the data is
     there first — otherwise the skip simply moves with it.
+
+15. **A sample that agrees is not a check that passed.** Asking whether the two
+    IBTrACS vintages differed, five storms were compared, all five matched
+    exactly, and the conclusion was forming that the vintage did not matter.
+    The full 138-storm comparison found **24 revised**. Nothing about the five
+    was unrepresentative — they were simply five. The same shape produced both
+    longitude retractions in `TC_DATA_ACCESS.md`: one centre read as signed
+    ±180, generalised to all three, and two of the three encode it differently.
+    **When the question is "do these two sources ever disagree", a sample can
+    only answer yes.** A no needs the whole set, and the whole set is usually
+    cheap — both of these were one query.
+16. **The question that cannot discriminate still returns a number.** Two
+    attempts to find what the June re-selection selected for looked sound and
+    were worthless: the first compared mean lead depth between dropped and kept
+    storms **in a set truncated at +72 h**, so both groups averaged 72 h by
+    construction and the test could not have found a difference if one existed.
+    A test whose answer is fixed by the data's own shape will not announce
+    itself — it reports a clean, symmetric, meaningless result. **Before
+    believing a comparison, ask what it would have shown had the hypothesis been
+    false.**
 
 The pattern throughout: a fingerprint in the data reliably shows *that* something
 is wrong, and reliably cannot say *which* explanation produced it. Three raw

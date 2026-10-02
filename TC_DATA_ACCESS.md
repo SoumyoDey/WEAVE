@@ -462,31 +462,64 @@ side is more current than the forecast archive.
 
 ---
 
-## 9. Still open after the survey
+## 9. Both remaining questions — ANSWERED FROM THE DATA, 2026-10-02
 
-Everything this document set out to answer is answered in §10 except two, and
-both are about **provenance rather than structure** — which is why they go to
-`wang.shuoc` rather than to another pass over the files.
+These were listed as needing `wang.shuoc`, on the grounds that they were about
+**provenance rather than structure**. That was half right: they were about
+provenance, and the provenance turned out to be recoverable from the files. The
+emails were not needed.
 
-1. **Which IBTrACS vintage each product was scored against.** Two downloads
-   exist seven months apart, IBTrACS revises past storms retrospectively, and
-   the products' `LAT`/`LON` and `distance_km` were computed against one of
-   them. `storm_2016_2024_*` predates the newer download; `output/` postdates
-   it. Until this is settled, a track error from these files should not be
-   quoted as a measurement.
-2. **What the June re-selection was selecting for.** `output/` dropped 29 ecmf
-   storms and added five. Not a basin filter — the loss is broad and the
-   Atlantic gains one. The hypothesis on file is the extension from +72 h to
-   +144 h, which would thin every basin at once; unverified.
+### 1. Which IBTrACS vintage each product was scored against
 
-Both sit inside the larger question §2 raises: **who produced `output/`, with
-what script, and is it reproducible.** That is the `era5_subset.py` trail §11
-followed, and it is still the cheapest next move.
+**`output/` used the 2026-04-27 download; `storm_2016_2024_*` used the
+2025-09-17 one. The two generations are scored against different truth.**
 
-Answered in §10, listed here so the trail is visible: what
-`storm_2016_2024_{0,12,24}h/` holds; whether `output/` is complete; whether
-`old/` is superseded; member counts per centre; which `kwbc` product `output/`
-uses.
+Established by difference rather than assertion. The two IBTrACS files disagree
+for **24 of the 138 storms** — IBTrACS revises past storms retrospectively, and
+the newer file carries 45,729 rows against 45,355 for the same storm set. On
+three of those revised storms, matching each product's *embedded* `LAT`/`LON`
+against both vintages:
+
+| storm | `output/` (June) vs new / old | `storm_2016_2024_*` (April) vs new / old |
+|---|---|---|
+| ANGGREK | **50/50** / 5/50 | 2/13 / **13/13** |
+| BHEKI | **42/42** / 16/36 | 5/13 / **13/13** |
+| DORA | **50/50** / 48/50 | 15/15 / 15/15 *(unrevised at these times)* |
+
+Clean and symmetric, and consistent with the mtimes: `output/` was generated
+2026-06-03, after the April download; the staged set 2026-04-06, before it.
+
+**The consequence is the useful part: do not mix the two generations.** They
+differ in lead depth, in storm coverage, *and* in the observations they were
+scored against. A figure built from both would be comparing forecasts against
+two different best tracks for a sixth of the storms.
+
+A first pass compared five storms, found all five identical, and would have
+concluded the vintage did not matter. It was the full 138-storm comparison that
+showed 24 revisions. **Five was a sample, not a test** — the same error this
+document records twice about longitude.
+
+### 2. What the June re-selection was selecting for
+
+**A complete +144 h forecast window.** `output/` extends to +144 h where the
+April set stopped at +72 h, and **every one of the 1,180 loaded runs reaches
+exactly +144 h — not one is shorter.** A storm whose forecast ran out earlier
+would appear with a smaller `lead_max`; none does.
+
+So the 29 ecmf storms dropped between generations were excluded for *not
+supplying a full six-day forecast from that initialisation*, which is a
+selection on completeness rather than on quality. That is the reassuring answer:
+nothing was dropped for being wrong. It also explains the shape the basin
+breakdown showed — a proportional thinning of every basin rather than a filter
+on one — and why the storms *added* (ETA, IAN, IDA) are long-lived major
+systems.
+
+Two earlier attempts at this failed and are worth recording, because both looked
+reasonable: comparing mean `lead_max` between dropped and kept storms **in the
+April set**, which cannot discriminate because that set is truncated at +72 h so
+every storm reaches it; and a best-track-lifetime comparison that was too
+fragile to run remotely. The test that worked asked the question of the data
+that was actually loaded.
 
 ---
 
