@@ -338,6 +338,30 @@ column nobody can name.**
 error must grow monotonically with lead. A flat curve means the forecast is not
 paired with its own valid times.
 
+**Run 2026-10-02 over all 400 `0h` files — GATE PASSED.**
+`compare_cyclone_derived.py --provenance`, Spearman rather than Pearson because
+the question is whether error *rises*, not whether it rises linearly:
+
+| centre | rho | +0 h | +144 h | growth |
+|---|---|---|---|---|
+| `ecmf` | **+1.0000** | 55.2 km | 558.4 km | 84 km/day |
+| `egrr` | **+1.0000** | 71.9 km | 659.8 km | 98 km/day |
+| `kwbc` | **+1.0000** | 40.2 km | 610.3 km | 95 km/day |
+
+Perfectly monotone for all three. **And the magnitudes are independently
+plausible**, which matters as much as the shape: ~250 km at day 3 and
+550–660 km at day 6 is where published tropical-cyclone track verification sits,
+and ECMWF leading at long lead is the known result. A fabricated or mispaired
+set would have had to reproduce that by accident.
+
+Two of 400 storm-centre pairs fell below rho 0.5 — LESTER and GAEMI, both
+MOGREPS. **Looked at rather than waved through: neither is a defect.** Both
+still rise overall, both are clean at another centre (kwbc/GAEMI runs
+35 → 540 km, textbook), and `egrr`/LESTER is scored on 24 of 36 members, the
+subset that tracked the storm at all. A single storm's curve has no reason to be
+monotone. The per-storm check is therefore a flag, not a gate; the wording in
+the script was corrected to say so.
+
 ---
 
 ## 8. Normalisation, decided from the files

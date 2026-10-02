@@ -245,16 +245,116 @@ def run(source, storms=None):
     return 0
 
 
+def provenance(source, storms=None):
+    """Does track error grow with lead time? The gate before trusting anything.
+
+    §24's method lesson 10, in track space. Row counts, grids, member counts and
+    lead ranges were identical between two different forecast runs and told them
+    apart not at all; what did was that **a forecast scored against its own
+    valid times loses skill monotonically with lead, and the wrong week gives a
+    flat curve at a higher level.**
+
+    The same test works here and is cheaper, because `distance_km` is already
+    the error and `compare_cyclone_derived` has shown it is reproducible.
+
+    Spearman rather than Pearson, per this project's first method lesson: the
+    question is whether error *rises* with lead, not whether it rises linearly,
+    and track error against lead is not a straight line.
+    """
+    from scipy.stats import spearmanr
+
+    paths = sorted(os.path.join(source, f) for f in os.listdir(source)
+                   if f.endswith('.csv')
+                   and (storms is None or any(f'_{s}.csv' in f for s in storms)))
+    if not paths:
+        sys.exit(f'{source}: no CSVs')
+
+    by_centre = defaultdict(lambda: defaultdict(list))
+    by_storm = defaultdict(lambda: defaultdict(list))
+    for path in paths:
+        centre = os.path.basename(path).split('_', 1)[0]
+        storm = os.path.basename(path).rsplit('h_', 1)[-1][:-4]
+        with open(path, newline='') as fh:
+            for r in csv.DictReader(fh):
+                d = _f(r['distance_km'])
+                if d is None:
+                    continue
+                lead = int(float(r['lead_time']))
+                by_centre[centre][lead].append(d)
+                by_storm[(centre, storm)][lead].append(d)
+
+    print(f'provenance check over {len(paths):,} files\n')
+    print('track error against lead time, by centre\n')
+    failures = []
+    for centre in sorted(by_centre):
+        leads = sorted(by_centre[centre])
+        means = [sum(by_centre[centre][l]) / len(by_centre[centre][l]) for l in leads]
+        rho, _ = spearmanr(leads, means)
+        growth = means[-1] - means[0]
+        rate = growth / (leads[-1] - leads[0]) * 24 if leads[-1] != leads[0] else 0
+        verdict = 'rises' if rho > 0.9 else 'FLAT OR FALLING'
+        if rho <= 0.9:
+            failures.append(centre)
+        print(f'  {centre}:  rho={rho:+.4f}  {verdict}')
+        print(f'     +{leads[0]}h {means[0]:7.1f} km  ->  '
+              f'+{leads[-1]}h {means[-1]:7.1f} km   '
+              f'({rate:.0f} km/day)')
+        sparse = [f'+{l}h {m:.0f}' for l, m in zip(leads, means)
+                  if l % 24 == 0]
+        print(f'     {"  ".join(sparse)}')
+
+    # Per storm, because one mispaired storm inside a healthy aggregate is
+    # exactly what an aggregate hides.
+    #
+    # **This is a flag, not a gate.** A single storm's error-vs-lead curve has
+    # no reason to be monotone: an ensemble can be lucky at day 5 and unlucky at
+    # day 2, and a storm only some members tracked is scored on a biased subset
+    # of them. Run over 400 pairs it flagged two — LESTER and GAEMI, both from
+    # MOGREPS, both still rising overall and both clean at another centre. That
+    # is sampling, not provenance. Read these as "worth a look", and let the
+    # aggregate decide.
+    bad = []
+    for (centre, storm), leads_map in by_storm.items():
+        leads = sorted(leads_map)
+        if len(leads) < 5:
+            continue
+        means = [sum(leads_map[l]) / len(leads_map[l]) for l in leads]
+        rho, _ = spearmanr(leads, means)
+        if rho <= 0.5:
+            bad.append((rho, centre, storm, means[0], means[-1]))
+    print(f'\n  per storm-centre pairs checked: {len(by_storm):,}')
+    if bad:
+        print(f'  {len(bad)} with rho <= 0.5 — noisy rather than suspect, '
+              f'unless one is flat at a HIGH level, which is the mispaired '
+              f'signature. Worth a look:')
+        for rho, centre, storm, first, last in sorted(bad)[:10]:
+            print(f'     {storm:<14} {centre}  rho={rho:+.3f}  '
+                  f'{first:.0f} -> {last:.0f} km')
+    else:
+        print('  none with rho <= 0.5 — every storm-centre pair loses skill '
+              'with lead, which is what correctly paired forecasts do')
+
+    if failures:
+        print(f'\n  GATE FAILED for {failures}. Do not trust these tracks.')
+        return 1
+    print('\n  gate passed')
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--source', required=True, help='directory of output/ CSVs')
     ap.add_argument('--storms', help='comma-separated storm names, for a subset')
+    ap.add_argument('--provenance', action='store_true',
+                    help='check that track error grows with lead, and stop there')
     args = ap.parse_args()
     if not os.path.isdir(args.source):
         sys.exit(f'not a directory: {args.source}')
     storms = [s.strip() for s in args.storms.split(',')] if args.storms else None
+    if args.provenance:
+        return provenance(args.source, storms)
     return run(args.source, storms)
 
 
