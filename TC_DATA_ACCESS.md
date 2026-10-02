@@ -365,9 +365,11 @@ more than feature 1 needs, and supplies §5's provenance test for free.
 - **Longitude in `output/` is signed ±180.** `ecmf_0h_BERYL.csv` runs −94.0 to
   −42.9 in the North Atlantic, and its first forecast point (9.2, −42.9) sits
   beside the best track (9.2, −43.1).
-- ~~**The CXML files are 0–360 east** (90.1 °E above), so the two layers
-  disagree.~~ **WRONG — retracted 2026-10-02; see “`ecmf/` — the raw CXML archive, and a retraction” below.** The CXML is signed
-  ±180 as well. The two layers agree, and there is no conversion to redo.
+- ~~**The CXML files are 0–360 east.**~~ ~~**Retracted: the CXML is signed ±180
+  as well.**~~ **Both statements were wrong, because both generalised from one
+  centre.** The three centres encode longitude three different ways. See
+  “`egrr/` and `kwbc/`” below — this is the single most important finding in
+  this document.
 - **Basin labels are not consistent between centres**: ECMWF writes
   `North Atlantic`, NCEP writes `AL`, for the same storm. Normalisation needed.
 - Latitude carries `units="deg S"` with a *signed* value (−17.5), which the
@@ -596,6 +598,56 @@ with position, pressure, wind and speed — and `output/` is a 197 MB
 pre-processed extract of the same thing, already joined to best track. The
 archive is the fallback if the selection in `output/` turns out to be wrong for
 our purposes; it is not a second source to reconcile.
+
+### `egrr/` and `kwbc/` — three centres, three longitude encodings
+
+**This is the finding that matters most here, and it took two wrong answers from
+me to reach.**
+
+| centre | encoding | the evidence that settles it |
+|---|---|---|
+| `ecmf` | **signed ±180**, `units` is decorative | `units="deg W"` carries `-100.1`; range −180.0 … 179.9, 9,943 negatives |
+| `egrr` | **positive magnitude, `units` carries the sign** | `units="deg W"` carries `103.0` — *positive*; zero negatives, nothing above 180 |
+| `kwbc` | **0–360 east**, only ever `units="deg E"` | max 188.2 (GEFS), **216.5** (CENS); no `deg W` element exists |
+
+In one `egrr` file, `units="deg W">103.0<` and `units="deg E">100.2<` sit three
+apart as numbers and **203 degrees apart on the Earth**. Read egrr's value
+without its `units` attribute and the storm lands in the wrong hemisphere. The
+wrong-ocean trap is real — it is just not where I first said it was, and not
+where I said it was when I retracted that.
+
+**My own error, twice, in opposite directions.** I first called the CXML 0–360
+from one eastern `ecmf` value; measured `ecmf` properly, found signed ±180, and
+retracted — generalising *again*, from the same single centre. Both statements
+were over-generalisations with a sample of one. The rule §0 states, restated
+because I broke it twice in one afternoon: **a convention is established by a
+value that would falsify it.** For longitude that means a western-hemisphere
+value, and for a multi-centre archive it means one *per centre*.
+
+### What each directory actually holds
+
+**`kwbc/` is a distribution node, not a model.** 66 GB, and it carries **two
+production centres** — read from `<productionCenter>`, not inferred:
+
+| product | `<productionCenter>` | kind | members |
+|---|---|---|---|
+| `GEFS … esttr` | NCEP | ensemble | **31** |
+| `GFS … sttr` | NCEP | deterministic | — |
+| `CENS … esttr` | **MSC** (Canada) | ensemble | **21** |
+| `CMC … sttr` | **MSC** (Canada) | deterministic | — |
+
+**Treating `kwbc/` as "GEFS" would silently blend American and Canadian
+forecasts.** This is the §20/§24 mislabel with a new set of names, and the
+directory layout actively invites it.
+
+**`egrr/` is the Met Office**, 34 GB, two products: `mogreps … etctr`
+(MOGREPS ensemble, **36 members**) and `mogm … tctr` (the deterministic global
+model). Initialised **6-hourly** — 00/06/12/18Z — where `ecmf` is twice daily.
+
+**Member counts differ by system and none match ours**: ECMWF 51, MOGREPS 36,
+GEFS 31, CENS 21. Nothing should assume an ensemble size.
+
+Sizes: `kwbc` 66 GB + `ecmf` 41 GB + `egrr` 34 GB = 141 GB, which is the tree.
 
 ## Open questions for whoever has context
 
