@@ -8,15 +8,33 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Pinned rather than `ubuntu-latest`, which migrates to Ubuntu 26 from
-# 2026-10-19. The backend job apt-installs libgeos-dev / libproj-dev /
-# proj-data / proj-bin and Cartopy links against GEOS and PROJ, so a runner
-# image change moves those versions underneath the render tests — and it would
-# do it on a date nobody chose, to a push that changed nothing. Pinning makes
-# that migration a deliberate commit instead.
+# Pinned rather than `ubuntu-latest`, so a runner migration is a deliberate
+# commit whose diff points at the cause, instead of happening on a date nobody
+# chose to a push that changed nothing. **Bumped 24.04 -> 26.04 on 2026-10-02**,
+# ahead of `ubuntu-latest` moving to Ubuntu 26 from 2026-10-19 — which is the
+# pin working as intended: the migration lands in its own commit, with its own
+# CI result, rather than arriving inside someone else's.
 #
-# The cost is that a pin ages: 24.04 is supported into 2029, but this needs
-# revisiting rather than being left to rot. See NEXT_STEPS.md §6.
+# **The reason this pin used to give was wrong, and is corrected here.** It said
+# the backend job apt-installs libgeos-dev / libproj-dev / proj-data / proj-bin
+# and "Cartopy links against GEOS and PROJ", so an image change would move those
+# versions underneath the render tests. Measured instead of assumed (2026-10-02):
+# Cartopy's only compiled extension, `trace.cpython-313-x86_64-linux-gnu.so`,
+# declares DT_NEEDED of libstdc++, libm, libgcc_s, libpthread and libc —
+# **no GEOS and no PROJ**. It reaches geometry through `shapely`, whose wheel
+# bundles libgeos and libgeos_c, and projections through `pyproj`, whose wheel
+# bundles libproj. Both are manylinux wheels, and the manylinux policy forbids
+# linking either library from the system in the first place.
+#
+# So the apt packages below are not what the render tests run against, and this
+# pin is a general caution about runner images rather than the specific GEOS/PROJ
+# hazard it claimed. Whether that apt step is needed at all is a separate
+# question, deliberately not answered in the same commit as a runner bump — two
+# changes where one invalidates the other's rationale make a red run ambiguous.
+# See NEXT_STEPS.md §34.
+#
+# The cost is unchanged: a pin ages. 26.04 is supported into 2031, and this still
+# wants revisiting rather than being left to rot.
 
 # Superseding is right for a pull request and WRONG for `main`.
 #
@@ -46,7 +64,7 @@ jobs:
   # ── Layer 1: components and pure helpers, in jsdom ──────────────────────────
   frontend-unit:
     name: frontend · jest
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
 
@@ -68,7 +86,7 @@ jobs:
   # ── Layer 2: real Chromium, for what jsdom structurally cannot reach ────────
   frontend-e2e:
     name: frontend · playwright
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
 
@@ -119,7 +137,7 @@ jobs:
   # ── The production bundle actually compiles ─────────────────────────────────
   frontend-build:
     name: frontend · build
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
 
@@ -151,7 +169,7 @@ jobs:
   # ── Layer 3: the science, the endpoints, and the SQL against real Postgres ──
   backend:
     name: backend · pytest
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
 
     services:
       postgres:

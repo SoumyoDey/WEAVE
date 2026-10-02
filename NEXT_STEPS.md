@@ -304,8 +304,10 @@ So: the records are reconciled against the code, and any claim resting on a
 5. ~~**Item 6, the lower-priority list.**~~ **Empty as of 2026-09-22**, this
    time with nothing pending behind it: endpoint caching and row caps done, the
    Vite migration dropped, the CI actions bumped and the runners pinned. CI
-   emits no annotations. The one thing §6 still asks of a future reader is to
-   revisit the `ubuntu-24.04` pin before it ages out.
+   emits no annotations. The runner pin §6 asked a future reader to revisit was
+   moved to `ubuntu-26.04` on 2026-10-02, ahead of the `ubuntu-latest`
+   migration (§34) — which also found the reason the pin gave for itself was
+   wrong.
 6. ~~**`DATA_EXPANSION_DESIGN.md`: phase 5 only.**~~ **ALL FIVE PHASES ARE NOW
    CLOSED** — phase 5 decided 2026-10-01 (§27). History below.
    ~~Phase 3, the run-selector UI~~ **done 2026-09-24** — `RunProvider`, a header selector, and switch
@@ -977,12 +979,19 @@ fallback. That is one less thing for DATA_EXPANSION_DESIGN.md to trip over.
   ```
 
 - ~~**`ubuntu-latest` migrates to Ubuntu 26 from 2026-10-19.**~~ **Pinned to
-  `ubuntu-24.04` on 2026-09-22.** The backend job `apt-get install`s
-  `libgeos-dev`, `libproj-dev`, `proj-data` and `proj-bin`, and Cartopy links
-  against GEOS and PROJ — so the migration would have moved those versions
-  underneath the render tests **on a date nobody chose, attached to whatever
-  push happened to be next**. Pinning does not avoid the migration; it makes it
-  a deliberate commit whose diff points at the cause.
+  `ubuntu-24.04` on 2026-09-22, bumped to `ubuntu-26.04` on 2026-10-02 (§34).**
+  The migration would otherwise have happened **on a date nobody chose, attached
+  to whatever push happened to be next**. Pinning does not avoid it; it makes it
+  a deliberate commit whose diff points at the cause — which is exactly how the
+  bump landed.
+
+  **The justification written here was wrong**, and §34 corrects it rather than
+  deleting it. It said the backend job `apt-get install`s `libgeos-dev`,
+  `libproj-dev`, `proj-data` and `proj-bin` and that "Cartopy links against GEOS
+  and PROJ", so an image change would move those versions underneath the render
+  tests. Cartopy's compiled extension declares no GEOS or PROJ at all: shapely
+  and pyproj bundle their own, as the manylinux policy requires. The pin is a
+  general caution about runner images, not that specific guard.
 
   24.04 is what `ubuntu-latest` resolved to already, so nothing about the run
   changed — confirmed: all four jobs green and **CI now emits no annotations at
@@ -3351,6 +3360,68 @@ run at all" and a recommendation to pin coverage backwards. Both were wrong; the
 scoped invocations the README and `requirements-dev.txt` document had always
 worked. Reach for the explanation in front of you before the one you are
 carrying.
+
+## 34. The runner pin moved, and its reason turned out to be wrong — 2026-10-02
+
+`ubuntu-24.04` -> **`ubuntu-26.04`**, all four jobs, ahead of `ubuntu-latest`
+migrating to Ubuntu 26 from 2026-10-19. **This is the pin working as designed**:
+§6 pinned it so the migration would be "a deliberate commit whose diff points at
+the cause" instead of arriving attached to whatever push happened to be next,
+and that is what this is — its own commit, its own CI result.
+
+Checked before changing the label, since a label that does not exist fails the
+job before it starts: `actions/runner-images` carries `Ubuntu2604-Readme.md` and
+is shipping image updates for it (20260927).
+
+### The reason the pin gave was wrong
+
+§6 and the workflow header both said: the backend job apt-installs
+`libgeos-dev` / `libproj-dev` / `proj-data` / `proj-bin`, and **"Cartopy links
+against GEOS and PROJ"**, so a runner image change moves those versions
+underneath the render tests. Plausible, and false.
+
+Measured rather than assumed, by parsing the ELF dynamic section of the wheel
+that CI actually installs:
+
+| wheel | compiled extension | DT_NEEDED |
+|---|---|---|
+| `cartopy-0.25.0-cp313-…manylinux_2_28` | `trace.cpython-313-x86_64-linux-gnu.so` | libstdc++, libm, libgcc_s, libpthread, libc — **no GEOS, no PROJ** |
+| `shapely-2.1.2` | — | bundles `libgeos`, `libgeos_c` |
+| `pyproj-3.8.0` | — | bundles `libproj` (and libsqlite3, libtiff, libcurl) |
+
+Cartopy reaches geometry through shapely and projections through pyproj, and
+both ship their own copies. It could not be otherwise: these are manylinux
+wheels, and the manylinux policy forbids linking GEOS or PROJ from the system —
+auditwheel either bundles a library or the wheel is not manylinux. So the apt
+packages are not what the render tests run against.
+
+The pin is still worth having, as a general caution about runner images — a
+toolchain, a locale, a system library some *other* dependency does use. It is
+just not the specific GEOS/PROJ guard it claimed to be.
+
+§30's wheel arithmetic survives the bump in the direction that matters. It
+recorded that `netCDF4`'s abi3 wheel is tagged `manylinux_2_28` and that
+ubuntu-24.04's glibc 2.39 clears it. A newer image only raises glibc, and a
+manylinux floor is a minimum — so every wheel that resolved on 24.04 still
+resolves. The hazard would be a wheel tagged *below* the image, which cannot
+happen by moving forward.
+
+### Why the bump was low-risk, stated before it ran
+
+The render tests assert the response is 200, that the body starts with the PNG
+magic bytes, and structural figures like `n_common` and `n_models`. **Nothing
+compares pixels.** A GEOS or PROJ version change could not have failed them by
+shifting a coastline; only a crash would, and the libraries that could crash are
+vendored in the wheels and travel with them rather than with the image.
+
+### Deliberately not done here
+
+**Whether the apt step is needed at all.** The evidence says the render path does
+not use it, but something else might — a source build on a wheel-less platform, a
+`proj` binary, a transitive dependency — and removing it belongs in its own
+commit where a red run has one possible cause. Two changes where one invalidates
+the other's rationale make a failure ambiguous, which is the whole argument for
+pinning in the first place.
 
 ## Standing decisions — do not undo these by accident
 
