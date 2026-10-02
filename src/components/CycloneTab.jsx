@@ -47,6 +47,7 @@ export function CycloneTab({ active }) {
   const [runs, setRuns]       = useState([]);
   const [storm, setStorm]     = useState(null);
   const [centre, setCentre]   = useState(null);
+  const [init, setInit]       = useState(null);
   const [data, setData]       = useState(null);
   const [error, setError]     = useState(null);
   const [loading, setLoading] = useState(false);
@@ -75,6 +76,19 @@ export function CycloneTab({ active }) {
   const centresFor = useMemo(
     () => (s) => [...new Set(runs.filter((r) => r.storm_name === s)
                                  .map((r) => r.centre))].sort(), [runs]);
+  /**
+   * The initialisations available for a storm and centre, newest first.
+   *
+   * Keyed on the **actual** `init_time`, never on the source filename's
+   * `<offset>h` label: that label is wrong for ECMWF by a factor of two,
+   * because the generating script wrote `T * 6` hours while ECMWF runs
+   * 12-hourly (TC_DATA_ACCESS.md). Two centres' "24h" files are not the same
+   * age, so the only honest label is the timestamp itself.
+   */
+  const initsFor = useMemo(
+    () => (s, c) => runs.filter((r) => r.storm_name === s && r.centre === c)
+                        .sort((a, b) => b.init_time.localeCompare(a.init_time)),
+    [runs]);
 
   // Pick something as soon as there is something to pick, so the tab is never
   // an empty map with no explanation.
@@ -87,27 +101,35 @@ export function CycloneTab({ active }) {
     if (!options.includes(centre)) setCentre(options[0] ?? null);
   }, [storm, centre, centresFor]);
 
-  // ── The tracks ─────────────────────────────────────────────────────────────
+  // Reset the initialisation whenever the storm or centre changes, because an
+  // init from another run is not a valid choice here and would 404.
   useEffect(() => {
     if (!storm || !centre) return;
+    const options = initsFor(storm, centre).map((r) => r.init_time);
+    if (!options.includes(init)) setInit(options[0] ?? null);
+  }, [storm, centre, init, initsFor]);
+
+  // ── The tracks ─────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!storm || !centre || !init) return;
     let alive = true;
     setLoading(true);
     setError(null);
-    fetchCycloneTracks({ storm, centre })
+    fetchCycloneTracks({ storm, centre, init })
       .then((d) => { if (alive) { setData(d); setLoading(false); } })
       .catch((e) => { if (alive) { setError(e.message); setLoading(false); } });
     return () => { alive = false; };
-  }, [storm, centre]);
+  }, [storm, centre, init]);
 
   // ── The strike-probability field ───────────────────────────────────────────
   useEffect(() => {
-    if (!showStrike || !storm || !centre) { setStrike(null); return; }
+    if (!showStrike || !storm || !centre || !init) { setStrike(null); return; }
     let alive = true;
-    fetchStrikeProbability({ storm, centre, radiusKm })
+    fetchStrikeProbability({ storm, centre, init, radiusKm })
       .then((d) => { if (alive) setStrike(d); })
       .catch((e) => { if (alive) setError(e.message); });
     return () => { alive = false; };
-  }, [showStrike, storm, centre, radiusKm]);
+  }, [showStrike, storm, centre, init, radiusKm]);
 
   // ── The map ────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -202,6 +224,25 @@ export function CycloneTab({ active }) {
                   style={selectStyle}>
             {(storm ? centresFor(storm) : []).map((c) => (
               <option key={c} value={c}>{CENTRE_LABEL[c] ?? c}</option>
+            ))}
+          </select>
+        </label>
+
+        <label style={{ color: 'rgba(255,255,255,0.45)', fontSize: t.fontSize.micro,
+                        textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          Initialised
+          <select aria-label="Initialisation" value={init ?? ''}
+                  onChange={(e) => setInit(e.target.value)}
+                  style={{ ...selectStyle, minWidth: '230px' }}>
+            {(storm && centre ? initsFor(storm, centre) : []).map((r) => (
+              // The member counts are in the option itself: how many members
+              // developed the storm varies between initialisations, and that
+              // variation is a result rather than a detail. Reading it only
+              // after selecting would hide the comparison.
+              <option key={r.init_time} value={r.init_time}>
+                {r.init_time.replace('T', ' ').slice(0, 16)}
+                {'  ·  '}{r.tracked_members}/{r.nominal_members} members
+              </option>
             ))}
           </select>
         </label>

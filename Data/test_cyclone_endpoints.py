@@ -125,3 +125,58 @@ class TestStrikeProbability:
     def test_an_unknown_storm_is_404(self, db_client):
         r = db_client.get('/api/cyclone/strike-probability?storm=NOPE&centre=ecmf')
         assert r.status_code == 404
+
+
+class TestChoosingAnInitialisation:
+    """A storm has several initialisations and they are not interchangeable —
+    how many members developed the storm varies between them, which is the
+    reason to be able to pick one.
+
+    The fixture seeds a single init per centre, so these pin the *contract*:
+    an explicit init is honoured, an absent one defaults to the newest, and an
+    init that does not belong to this run is refused rather than quietly
+    serving a different one.
+    """
+
+    def _init_of(self, db_client, centre='ecmf'):
+        return db_client.get(
+            f'/api/cyclone/tracks?storm={fx.CY_STORM}&centre={centre}'
+        ).get_json()['init_time']
+
+    def test_an_explicit_init_is_honoured(self, db_client):
+        init = self._init_of(db_client)
+        body = db_client.get(
+            f'/api/cyclone/tracks?storm={fx.CY_STORM}&centre=ecmf&init={init}'
+        ).get_json()
+        assert body['init_time'] == init
+
+    def test_an_init_from_another_run_is_404_not_a_substitution(self, db_client):
+        """Serving the newest run when asked for a specific one would be a
+        silent substitution: the user sees a different forecast from the one
+        they selected, with nothing saying so."""
+        r = db_client.get(
+            f'/api/cyclone/tracks?storm={fx.CY_STORM}&centre=ecmf'
+            f'&init=1999-01-01T00:00:00')
+        assert r.status_code == 404
+
+    def test_strike_probability_honours_it_too(self, db_client):
+        init = self._init_of(db_client)
+        body = db_client.get(
+            f'/api/cyclone/strike-probability?storm={fx.CY_STORM}&centre=ecmf'
+            f'&init={init}').get_json()
+        assert body['init_time'] == init
+
+    def test_strike_probability_refuses_a_foreign_init_as_well(self, db_client):
+        r = db_client.get(
+            f'/api/cyclone/strike-probability?storm={fx.CY_STORM}&centre=ecmf'
+            f'&init=1999-01-01T00:00:00')
+        assert r.status_code == 404
+
+    def test_the_listing_carries_what_the_selector_needs(self, db_client):
+        """The selector is built from `/api/cyclones` rather than a fourth
+        endpoint, so the run rows must carry the init and both member counts."""
+        runs = db_client.get('/api/cyclones').get_json()['runs']
+        mine = [r for r in runs if r['storm_name'] == fx.CY_STORM]
+        assert mine
+        for r in mine:
+            assert r['init_time'] and r['nominal_members'] and r['tracked_members']

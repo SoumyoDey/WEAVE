@@ -41,8 +41,9 @@ export const fetchCycloneTracks = ({ storm, centre, init }) => {
  * changes the answer and a caller that forgets it should be visible in the
  * request rather than silently taking whatever the server prefers.
  */
-export const fetchStrikeProbability = ({ storm, centre, radiusKm, hourMin, hourMax }) => {
+export const fetchStrikeProbability = ({ storm, centre, init, radiusKm, hourMin, hourMax }) => {
   const q = new URLSearchParams({ storm, centre });
+  if (init) q.set('init', init);
   if (radiusKm != null) q.set('radius_km', String(radiusKm));
   if (hourMin != null) q.set('hour_min', String(hourMin));
   if (hourMax != null) q.set('hour_max', String(hourMax));

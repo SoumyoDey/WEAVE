@@ -3167,6 +3167,7 @@ def cyclone_strike_probability():
     """
     storm  = request.args.get('storm')
     centre = request.args.get('centre')
+    init   = request.args.get('init')
     if not storm or not centre:
         return jsonify({'error': 'storm and centre are required'}), 400
     try:
@@ -3187,8 +3188,9 @@ def cyclone_strike_probability():
             SELECT init_time, nominal_members, tracked_members, system
             FROM cyclone_run_registry
             WHERE storm_name = %s AND centre = %s
+              AND (%s::timestamp IS NULL OR init_time = %s::timestamp)
             ORDER BY init_time DESC LIMIT 1
-        """, (storm, centre))
+        """, (storm, centre, init, init))
         run = cursor.fetchone()
         if run is None:
             return jsonify({'error': f'no run for {storm} from {centre}'}), 404
