@@ -19,6 +19,31 @@ omit =
     test_*.py
     conftest.py
     fixture_db.py
+# ── Why a coverage config omits other people's compiled code ──────────────────
+# `source = .` means "everything under the working directory", which ought to
+# exclude site-packages — and does not, because **Cython extension modules
+# report RELATIVE source filenames**. `netCDF4`'s code objects carry
+# `src/cftime/_cftime.pyx` and Cartopy's carry `lib/cartopy/trace.pyx`, with no
+# leading path. Coverage resolves a relative filename against the working
+# directory, so from `Data/` they resolve to `Data/src/...` and `Data/lib/...`
+# and land inside `source`.
+#
+# The consequence was not a wrong number, it was a crash, and a different one
+# per machine depending on which compiled extension the import order reached
+# first: `python -m pytest --cov` died here with
+# `SystemError: cannot instrument shim code object 'project_linear'` — sysmon
+# cannot instrument a Cython shim — and elsewhere with numpy's
+# `cannot load module more than once per process` from `_pocketfft_umath`.
+# Both from measuring libraries this project does not own. It cost an hour and
+# a wrong diagnosis (NEXT_STEPS.md §33); the scoped invocations the README and
+# `requirements-dev.txt` document were always fine.
+#
+# These patterns make the broken invocation impossible rather than merely
+# undocumented. Nothing in this project has a `src/` or `lib/` directory or ships
+# a `.pyx`, so they can only ever match somebody else's relative path.
+    *.pyx
+    src/*
+    lib/*
 
 [report]
 exclude_also =

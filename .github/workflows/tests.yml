@@ -250,6 +250,26 @@ jobs:
           until pg_isready -h localhost -p 5432 -U postgres; do sleep 1; done
           psql "postgresql://postgres:postgres@localhost:5432/postgres" -c 'SELECT version();'
 
+      # Coverage is measured here rather than asserted in a document. The claim
+      # that flask_api.py and metrics.py were both at 100% decayed to 97%
+      # unnoticed, because nothing had ever run --cov: /api/runs landed with no
+      # test at all and the number moved with no signal (NEXT_STEPS.md §33).
+      # The section making the claim even said "worth re-checking rather than
+      # trusting if the number ever matters" — and it was never re-checked.
+      #
+      # Scoped to the two modules that carry a documented figure. A whole-tree
+      # percentage would be dominated by loader and migration scripts the suite
+      # does not exercise, and a number nobody can act on is the kind that rots.
+      #
+      # 98.5 is a FLOOR, not a target. Measured 98.86% on 2026-10-01 — 2365
+      # statements, 27 missing — so it catches roughly a ten-statement
+      # regression, smaller than the untested endpoint that prompted it. Raising
+      # it as coverage improves, or lowering it for a reason, is a deliberate
+      # commit; that is the point of a number in CI rather than in prose.
       - name: Run pytest
         working-directory: Data
-        run: python -m pytest -q
+        run: >-
+          python -m pytest -q
+          --cov=flask_api --cov=metrics
+          --cov-report=term-missing
+          --cov-fail-under=98.5

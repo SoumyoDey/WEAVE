@@ -3311,12 +3311,46 @@ contract tests fail.
 and `available_runs` both at zero. The remaining 27 are singles and pairs
 scattered across ~20 endpoints — error branches, not a second hole like this one.
 
-**Still unguarded: nothing measures this in CI.** The claim decayed in the first
-place because the workflow has never run `--cov`, and the section asserting 100%
-said "worth re-checking rather than trusting if the number ever matters" — it was
-never re-checked. Adding `--cov` to the backend job, and scoping `source = .` in
-`.coveragerc` so an unscoped `--cov` cannot measure site-packages and die on
-whichever compiled extension the import order reaches first, are both still open.
+### Now guarded — 2026-10-01
+
+The claim decayed because nothing measured it. Two changes close that.
+
+**CI measures coverage and fails under a floor.** The backend job runs
+`--cov=flask_api --cov=metrics --cov-report=term-missing
+--cov-fail-under=98.5`. Scoped to the two modules that carry a documented
+figure, because a whole-tree percentage would be dominated by loader and
+migration scripts the suite does not exercise, and a number nobody can act on is
+the kind that rots. 98.5 is a floor, not a target: measured **98.86%**, 2365
+statements and 27 missing, identical in a CI-like environment since the seven
+local-only audits touch neither module.
+
+Falsified rather than trusted, because a gate that reports without failing is
+the same non-result as a skipped test. Appending a twelve-statement untested
+helper to `flask_api.py` takes it to 98.40% and **pytest exits 1** — checked as
+the process exit code, not as the `FAIL` line in the output, which a pipe will
+happily hide.
+
+**An unscoped `--cov` can no longer break.** `.coveragerc` now omits `*.pyx`,
+`src/*` and `lib/*`. The mechanism is worth recording because it is not
+guessable: **Cython extension modules report relative source filenames.**
+`netCDF4`'s code objects carry `src/cftime/_cftime.pyx` and Cartopy's carry
+`lib/cartopy/trace.pyx`, with no leading path, and coverage resolves a relative
+filename against the working directory — so from `Data/` they resolve *inside*
+`source = .` and get instrumented. The result was a crash rather than a wrong
+number, and a different crash per machine depending on which compiled extension
+the import order reached first: `SystemError: cannot instrument shim code
+object 'project_linear'` here, numpy's `cannot load module more than once per
+process` elsewhere. `python -m pytest --cov` and `--cov=.` both now pass, 903
+tests, where the first failed 15 and the second died during collection.
+
+**The hour it cost is the lesson.** The traceback named `cartopy/trace.pyx` in
+its own stack — evidence about *what was being measured*. It was read as
+evidence about *which tracer core was in use*, because §6's sysmon/ctrace trap
+was already in mind, and that produced a confident report that "coverage cannot
+run at all" and a recommendation to pin coverage backwards. Both were wrong; the
+scoped invocations the README and `requirements-dev.txt` document had always
+worked. Reach for the explanation in front of you before the one you are
+carrying.
 
 ## Standing decisions — do not undo these by accident
 
@@ -3383,7 +3417,17 @@ the same way — a real signal, misread as to cause.
    monotonically with lead; the wrong week gives a flat curve at a higher level.
    Cheaper than any of the correlation work in §24 and it answers the actual
    question.
-11. **What is installed says nothing about what `pip install -r` will find.**
+11. **A traceback names what it was doing, not what you were thinking about.**
+    `python -m pytest --cov` died with `cannot instrument shim code object
+    'project_linear'` and a stack frame in `cartopy/trace.pyx`. That frame said
+    coverage was measuring *Cartopy*, which is a scope problem; it was read as a
+    *tracer-core* problem, because §6's sysmon/ctrace trap was already in mind.
+    The result was a confident report that coverage could not run at all and a
+    recommendation to pin coverage backwards, both wrong (§33). A second session
+    could not reproduce it, which is what forced the re-read. **When a traceback
+    names a file, ask why that file was involved before reaching for the
+    explanation you already have.**
+12. **What is installed says nothing about what `pip install -r` will find.**
     netCDF4 is a hard dependency of all three converters and was in no
     requirements file for the life of the project, because the conda
     environment had it and nobody ever installed from the file alone (§30).
@@ -3391,7 +3435,7 @@ the same way — a real signal, misread as to cause.
     requirements file, not `pip list` — and check a pin resolves on the target
     platform before committing it, since the version you have locally may have
     come from a different channel entirely.
-12. **A passing test can be worse than a skipped one.** Nine cap tests skipped
+13. **A passing test can be worse than a skipped one.** Nine cap tests skipped
     in CI and passed locally, and the local passes verified nothing at all: the
     fixture checked a database was reachable and then handed the endpoints
     conftest's MagicMock pool, which iterates empty (§28). A skip at least
@@ -3399,7 +3443,7 @@ the same way — a real signal, misread as to cause.
     code on every machine, and was found only because someone went to fix the
     skips. **Before trusting a test that talks to a database, check that it
     asserts a non-empty result** — and check which connection it actually got.
-13. **A skipped test and a passing test look identical in a green tick.**
+14. **A skipped test and a passing test look identical in a green tick.**
     Fourteen registry tests skipped on every CI run this repository ever had,
     because one environment variable was unset (§26). Nothing was red, nothing
     was wrong, and three commits to the registry went through untested. Read the
