@@ -198,7 +198,8 @@ class TestTheArgsAllowlistIsComplete:
         re-checks is the shape of defect this project keeps finding.
         """
         for name in ('list_cyclones', 'cyclone_tracks',
-                     'cyclone_strike_probability'):
+                     'cyclone_strike_probability',
+                     'cyclone_error_by_lead'):
             body = inspect.getsource(getattr(api, name))
             assert '_cache_get' not in body and '_cache_set' not in body, (
                 f'{name} now uses the cache, so its query parameters must be '

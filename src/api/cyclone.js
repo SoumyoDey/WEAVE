@@ -69,6 +69,20 @@ export const strikeColour = (value) => {
 };
 
 /**
+ * Track error and ensemble spread against lead time, for one run.
+ *
+ * Recomputed server-side from the loaded positions rather than read from the
+ * source's `distance_km` — see `TC_TAB_DESIGN.md` §7. Of the four derived
+ * columns shipped with the data, one reproduced exactly and one was out by up
+ * to 213°, and nothing distinguished them by inspection.
+ */
+export const fetchErrorByLead = ({ storm, centre, init }) => {
+  const q = new URLSearchParams({ storm, centre });
+  if (init) q.set('init', init);
+  return json(`${API_BASE}/cyclone/error-by-lead?${q}`);
+};
+
+/**
  * Rewrite a track's longitudes so it is continuous across the antimeridian.
  *
  * Leaflet draws a polyline through increasing longitude, so a step from +179 to

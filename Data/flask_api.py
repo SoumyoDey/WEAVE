@@ -3243,6 +3243,77 @@ def cyclone_strike_probability():
         return_db_connection(conn)
 
 
+@app.route('/api/cyclone/error-by-lead', methods=['GET'])
+def cyclone_error_by_lead():
+    """Track error and ensemble spread against lead time, for one run.
+
+    `TC_TAB_DESIGN.md` §6 view 2, and the data for view 3. This is the existing
+    metric-against-lead shape with `distance_km` in place of MAE, and it asks
+    the question the whole application asks — does the ensemble's disagreement
+    match its error — in track space.
+
+    **Recomputed from the loaded positions, not read from the source's
+    `distance_km`.** `compare_cyclone_derived.py` established that their column
+    is haversine at R = 6371.0 and reproduces to 2e-13 km, so this returns the
+    same numbers; the difference is that these have a derivation a reader can
+    check. The column beside it, `mean_lon`, was wrong by up to 213° and the two
+    were indistinguishable by inspection.
+    """
+    storm  = request.args.get('storm')
+    centre = request.args.get('centre')
+    init   = request.args.get('init')
+    if not storm or not centre:
+        return jsonify({'error': 'storm and centre are required'}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cursor.execute("""
+            SELECT init_time, system, nominal_members, tracked_members
+            FROM cyclone_run_registry
+            WHERE storm_name = %s AND centre = %s
+              AND (%s::timestamp IS NULL OR init_time = %s::timestamp)
+            ORDER BY init_time DESC LIMIT 1
+        """, (storm, centre, init, init))
+        run = cursor.fetchone()
+        if run is None:
+            return jsonify({'error': f'no run for {storm} from {centre}'}), 404
+
+        cursor.execute("""
+            SELECT member_id, lead_hours, valid_time, latitude, longitude
+            FROM cyclone_track_member
+            WHERE storm_name=%s AND centre=%s AND init_time=%s
+            ORDER BY lead_hours, member_id
+        """, (storm, centre, run['init_time']))
+        points = [(r['member_id'], r['lead_hours'], r['valid_time'],
+                   r['latitude'], r['longitude']) for r in cursor.fetchall()]
+
+        cursor.execute("""
+            SELECT valid_time, latitude, longitude
+            FROM cyclone_best_track WHERE storm_name = %s
+        """, (storm,))
+        best = {r['valid_time']: (r['latitude'], r['longitude'])
+                for r in cursor.fetchall()}
+
+        rows = cyclone_metrics.error_by_lead(points, best)
+        return jsonify({
+            'storm': storm, 'centre': centre, 'system': run['system'],
+            'init_time': run['init_time'].isoformat(),
+            'nominal_members': run['nominal_members'],
+            'tracked_members': run['tracked_members'],
+            # The lead beyond which the observation record stops. Named rather
+            # than left for a reader to infer from a line that simply ends:
+            # "the forecast outruns the truth" is a live behaviour here, not an
+            # error (NEXT_STEPS.md item 4).
+            'last_verified_lead': max((r['lead'] for r in rows
+                                       if r['verified']), default=None),
+            'points': rows,
+        })
+    finally:
+        cursor.close()
+        return_db_connection(conn)
+
+
 @app.route('/api/runs', methods=['GET'])
 def get_runs():
     """What forecast data is actually loaded, per model, variable and run.

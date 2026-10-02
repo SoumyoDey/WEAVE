@@ -129,6 +129,93 @@ def strike_probability(tracks, nominal_members, radius_km=DEFAULT_RADIUS_KM,
             for (lat, lon), members in sorted(hit.items())]
 
 
+def circular_mean_lon(lons):
+    """The mean of an angle, which an arithmetic mean is not.
+
+    **This is the function the source data got wrong.** `output/`'s `mean_lon`
+    is an arithmetic mean, so for members straddling ±180 it returns the wrong
+    side of the planet — measured against this, a median of 65° and a maximum of
+    213° out, across 63 files and 15 storms (`TC_DATA_ACCESS.md`). The
+    arithmetic mean of +179 and −179 is 0.
+
+    Returns None for an antipodal spread, where no mean direction exists. That
+    is a real answer rather than an error: it means the ensemble disagrees by
+    half the planet, and a number there would be an invention.
+    """
+    if not lons:
+        return None
+    x = sum(math.cos(math.radians(v)) for v in lons)
+    y = sum(math.sin(math.radians(v)) for v in lons)
+    if abs(x) < 1e-12 and abs(y) < 1e-12:
+        return None
+    return math.degrees(math.atan2(y, x))
+
+
+def _percentile(ordered, p):
+    if not ordered:
+        return None
+    i = min(int(round(p / 100 * len(ordered) + 0.5)) - 1, len(ordered) - 1)
+    return ordered[max(i, 0)]
+
+
+def error_by_lead(points, best):
+    """Track error and ensemble spread at each lead time.
+
+    `points` is `(member_id, lead_hours, valid_time, lat, lon)`; `best` maps a
+    valid time to the observed `(lat, lon)`.
+
+    **Recomputed here rather than read from the source's `distance_km`**, which
+    the loader deliberately does not import (`TC_TAB_DESIGN.md` §7). That is not
+    distrust for its own sake: of the four derived columns shipped alongside,
+    `distance_km` reproduces exactly and `mean_lon` is catastrophically wrong,
+    and they are indistinguishable by inspection. Recomputing costs nothing and
+    means every number here has a derivation someone can check.
+
+    `spread_km` is the mean distance from each member to the **ensemble mean
+    position** at that lead — the same quantity the rest of this application
+    calls spread, in track space. Its longitude uses the circular mean above.
+
+    A forecast point with no observation at its valid time is excluded and
+    counted, because scoring against a guessed observation is worse than
+    scoring against none.
+    """
+    by_lead = {}
+    for member, lead, valid, lat, lon in points:
+        by_lead.setdefault(lead, []).append((member, valid, lat, lon))
+
+    rows = []
+    for lead in sorted(by_lead):
+        members = by_lead[lead]
+        lats = [m[2] for m in members]
+        lons = [m[3] for m in members]
+        mean_lat = sum(lats) / len(lats)
+        mean_lon = circular_mean_lon(lons)
+
+        errors, spreads, unverified = [], [], 0
+        for _member, valid, lat, lon in members:
+            observed = best.get(valid)
+            if observed is None:
+                unverified += 1
+            else:
+                errors.append(haversine_km(lat, lon, observed[0], observed[1]))
+            if mean_lon is not None:
+                spreads.append(haversine_km(lat, lon, mean_lat, mean_lon))
+
+        ordered = sorted(errors)
+        rows.append({
+            'lead': lead,
+            'members': len(members),
+            'verified': len(errors),
+            'unverified': unverified,
+            'mean_km':   round(sum(errors) / len(errors), 2) if errors else None,
+            'median_km': round(_percentile(ordered, 50), 2) if errors else None,
+            'p10_km':    round(_percentile(ordered, 10), 2) if errors else None,
+            'p90_km':    round(_percentile(ordered, 90), 2) if errors else None,
+            'spread_km': round(sum(spreads) / len(spreads), 2) if spreads else None,
+        })
+    return rows
+
+
 def summarise(field):
     """(max, cells) — small, and enough for a test or a header to state."""
     if not field:

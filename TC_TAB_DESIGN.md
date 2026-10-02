@@ -452,8 +452,26 @@ blocked by the open provenance questions either.**
 
    Also: 6 rows of 994,161 carry only one coordinate, all in EMERAUDE. Dropped
    and counted, because a latitude with no longitude is not a position.
-6. Error-against-lead and spread-against-error, reusing the existing chart
-   shapes.
+6. ~~Error-against-lead and spread-against-error.~~ **BUILT 2026-10-02** as one
+   chart beside the map — `GET /api/cyclone/error-by-lead`,
+   `cyclone_metrics.error_by_lead`, and the recharts idiom the comparison tab
+   already uses.
+
+   **Recomputed, not imported.** `compare_cyclone_derived.py` showed their
+   `distance_km` is haversine at R = 6371.0 and reproduces to 2e-13 km, so the
+   numbers are the same; the difference is that these have a derivation a reader
+   can check — and the column beside it, `mean_lon`, was out by up to 213° with
+   nothing to tell them apart. The ensemble mean here uses the **circular** mean.
+
+   **A second denominator, which the build found and the design had not.**
+   Members drop out at long leads as their forecast storm dissipates: Dorian's
+   earliest ECMWF run falls from **28 members at +0 h to 4 at +144 h**. The line
+   continues at full weight, so a reader would take the whole ensemble to be
+   behind it. The count is now in the tooltip and the fall is stated in the
+   caption. It is the same mistake as the headline denominator, one level down.
+
+   ALCIDE reads as a calibrated ensemble — spread converging on error — which is
+   the spread-skill question this application already asks, now in track space.
 7. ~~Strike probability (§6a), with its invariant tests.~~ **BUILT 2026-10-02.**
    `Data/cyclone_metrics.py` (pure, no Flask and no database),
    `GET /api/cyclone/strike-probability`, and a toggle with an exposed radius on

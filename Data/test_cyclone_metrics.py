@@ -160,3 +160,100 @@ class TestItAgreesWithTheRestOfTheProject:
     def test_a_known_separation_comes_out_right(self):
         # One degree of latitude is 111.19 km on this sphere.
         assert cm.haversine_km(0.0, 0.0, 1.0, 0.0) == pytest.approx(111.19, abs=0.02)
+
+
+# ── Error and spread against lead ─────────────────────────────────────────────
+
+from datetime import datetime, timedelta
+
+INIT = datetime(2024, 7, 1, 0, 0, 0)
+
+
+def pts(member_offsets, leads=(0, 24, 48, 72), lat=20.0, lon=-60.0, drift=0.0):
+    """Members drifting apart in latitude as lead grows, by `offset * lead`."""
+    out = []
+    for member, off in enumerate(member_offsets):
+        for lead in leads:
+            out.append((member, lead, INIT + timedelta(hours=lead),
+                        lat + off * lead / 24.0 + drift, lon - lead * 0.1))
+    return out
+
+
+def truth(leads=(0, 24, 48, 72), lat=20.0, lon=-60.0):
+    return {INIT + timedelta(hours=l): (lat, lon - l * 0.1) for l in leads}
+
+
+class TestCircularMeanLongitude:
+    def test_it_is_the_arithmetic_mean_away_from_the_dateline(self):
+        assert cm.circular_mean_lon([-60.0, -62.0, -64.0]) == pytest.approx(-62.0, abs=1e-6)
+
+    def test_it_does_not_put_the_mean_on_the_wrong_side_of_the_planet(self):
+        """The defect in the source data, stated as a test. The arithmetic mean
+        of +179 and -179 is 0 — the Gulf of Guinea, for a storm at the
+        dateline."""
+        got = cm.circular_mean_lon([179.0, -179.0])
+        assert abs(abs(got) - 180.0) < 1e-6
+        assert abs(got) > 170        # emphatically not 0
+
+    def test_an_antipodal_spread_has_no_mean_direction(self):
+        # Returning a number here would be an invention; None is the answer.
+        assert cm.circular_mean_lon([0.0, 180.0]) is None
+
+    def test_an_empty_ensemble_is_none_not_zero(self):
+        assert cm.circular_mean_lon([]) is None
+
+
+class TestErrorByLead:
+    def test_a_member_on_the_best_track_has_no_error(self):
+        rows = cm.error_by_lead(pts([0.0]), truth())
+        assert all(r['mean_km'] == pytest.approx(0.0, abs=1e-6) for r in rows)
+
+    def test_error_grows_with_lead_for_a_diverging_ensemble(self):
+        """The shape the provenance gate checks for, here per run. A forecast
+        scored against its own valid times loses skill monotonically."""
+        rows = cm.error_by_lead(pts([-1.0, -0.5, 0.5, 1.0]), truth())
+        errors = [r['mean_km'] for r in rows]
+        assert errors == sorted(errors)
+        assert errors[-1] > errors[0]
+
+    def test_spread_is_zero_when_every_member_agrees(self):
+        rows = cm.error_by_lead(pts([0.0, 0.0, 0.0]), truth())
+        assert all(r['spread_km'] == pytest.approx(0.0, abs=1e-6) for r in rows)
+
+    def test_spread_grows_as_the_members_fan_out(self):
+        rows = cm.error_by_lead(pts([-1.0, 0.0, 1.0]), truth())
+        spreads = [r['spread_km'] for r in rows]
+        assert spreads == sorted(spreads)
+        assert spreads[-1] > spreads[0]
+
+    def test_spread_and_error_are_different_quantities(self):
+        """A biased ensemble: every member agrees with every other and all of
+        them are wrong. Spread near zero, error large. Conflating the two is
+        the mistake the spread-skill work exists to prevent."""
+        rows = cm.error_by_lead(pts([0.0, 0.0, 0.0], drift=2.0), truth())
+        last = rows[-1]
+        assert last['spread_km'] == pytest.approx(0.0, abs=1e-6)
+        assert last['mean_km'] > 100
+
+    def test_an_unobserved_lead_is_counted_not_scored(self):
+        """Forecasts outrun the observation record. Scoring against a guessed
+        observation is worse than scoring against none, so those points are
+        excluded and the count is reported."""
+        partial = {k: v for k, v in truth().items()
+                   if k < INIT + timedelta(hours=48)}
+        rows = cm.error_by_lead(pts([0.0, 0.5]), partial)
+        tail = [r for r in rows if r['lead'] >= 48]
+        assert all(r['mean_km'] is None for r in tail)
+        assert all(r['unverified'] == r['members'] for r in tail)
+        # ...and spread is still computable without any observation at all.
+        assert all(r['spread_km'] is not None for r in tail)
+
+    def test_the_percentiles_bracket_the_mean(self):
+        rows = cm.error_by_lead(pts([-1.0, -0.3, 0.3, 1.0]), truth())
+        for r in rows[1:]:
+            assert r['p10_km'] <= r['median_km'] <= r['p90_km']
+
+    def test_every_lead_appears_once_and_in_order(self):
+        rows = cm.error_by_lead(pts([0.0, 1.0]), truth())
+        leads = [r['lead'] for r in rows]
+        assert leads == sorted(set(leads))

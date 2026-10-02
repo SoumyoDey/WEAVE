@@ -10,6 +10,8 @@ The fixture's cyclone scene is deliberately asymmetric. Its ECMWF run tracks
 got wrong (`TC_TAB_DESIGN.md` §5) and a fixture where every member tracked the
 storm cannot catch it.
 """
+import pytest
+
 import fixture_db as fx
 
 
@@ -180,3 +182,51 @@ class TestChoosingAnInitialisation:
         assert mine
         for r in mine:
             assert r['init_time'] and r['nominal_members'] and r['tracked_members']
+
+
+class TestErrorByLead:
+    """View 2. The arithmetic is pinned in `test_cyclone_metrics.py`; these pin
+    the endpoint — that it recomputes rather than reading a shipped column, and
+    that it says where the observation record stops rather than letting a line
+    simply end."""
+
+    URL = f'/api/cyclone/error-by-lead?storm={fx.CY_STORM}&centre=ecmf'
+
+    def test_it_returns_a_row_per_lead(self, db_client):
+        body = db_client.get(self.URL).get_json()
+        assert [r['lead'] for r in body['points']] == list(fx.CY_LEADS)
+
+    def test_the_fixture_members_fan_out_so_spread_grows(self, db_client):
+        """`fixture_db` fans members by index times lead, so spread must rise
+        with lead by construction — a number the fixture states rather than one
+        measured with the code under test."""
+        body = db_client.get(self.URL).get_json()
+        spreads = [r['spread_km'] for r in body['points']]
+        assert spreads[0] == pytest.approx(0.0, abs=1e-6)   # all together at +0
+        assert spreads == sorted(spreads)
+        assert spreads[-1] > spreads[1]
+
+    def test_error_is_present_where_the_best_track_reaches(self, db_client):
+        body = db_client.get(self.URL).get_json()
+        assert all(r['mean_km'] is not None for r in body['points'])
+        assert body['last_verified_lead'] == max(fx.CY_LEADS)
+
+    def test_it_carries_the_denominator_like_the_other_endpoints(self, db_client):
+        body = db_client.get(self.URL).get_json()
+        assert body['nominal_members'] == 51
+        assert body['tracked_members'] == 4
+
+    def test_percentiles_bracket_the_median(self, db_client):
+        for r in db_client.get(self.URL).get_json()['points']:
+            if r['verified']:
+                assert r['p10_km'] <= r['median_km'] <= r['p90_km']
+
+    def test_it_honours_an_init_and_refuses_a_foreign_one(self, db_client):
+        init = db_client.get(
+            f'/api/cyclone/tracks?storm={fx.CY_STORM}&centre=ecmf'
+        ).get_json()['init_time']
+        assert db_client.get(f'{self.URL}&init={init}').get_json()['init_time'] == init
+        assert db_client.get(f'{self.URL}&init=1999-01-01T00:00:00').status_code == 404
+
+    def test_the_required_parameters_are_required(self, db_client):
+        assert db_client.get('/api/cyclone/error-by-lead?storm=X').status_code == 400

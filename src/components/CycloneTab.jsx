@@ -19,8 +19,13 @@
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
+import {
+  ComposedChart, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, ReferenceLine, Legend,
+} from 'recharts';
 
 import { fetchCyclones, fetchCycloneTracks, fetchStrikeProbability,
+         fetchErrorByLead,
          unwrapTrack, referenceLongitude, strikeColour } from '../api/cyclone';
 import { t } from '../theme';
 import { ESRI_CANVAS_BASE } from '../constants';
@@ -61,6 +66,7 @@ export function CycloneTab({ active }) {
   const [showStrike, setShowStrike] = useState(false);
   const [radiusKm, setRadiusKm]     = useState(120);
   const [strike, setStrike]         = useState(null);
+  const [errorByLead, setErrorByLead] = useState(null);
 
   // ── What is available ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -130,6 +136,16 @@ export function CycloneTab({ active }) {
       .catch((e) => { if (alive) setError(e.message); });
     return () => { alive = false; };
   }, [showStrike, storm, centre, init, radiusKm]);
+
+  // ── Error and spread against lead ──────────────────────────────────────────
+  useEffect(() => {
+    if (!storm || !centre || !init) { setErrorByLead(null); return; }
+    let alive = true;
+    fetchErrorByLead({ storm, centre, init })
+      .then((d) => { if (alive) setErrorByLead(d); })
+      .catch((e) => { if (alive) setError(e.message); });
+    return () => { alive = false; };
+  }, [storm, centre, init]);
 
   // ── The map ────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -311,10 +327,123 @@ export function CycloneTab({ active }) {
                       fontSize: t.fontSize.sm }}>Loading tracks…</div>
       )}
 
-      <div ref={divRef} style={{ flex: 1, minHeight: 0 }} />
+      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+        <div ref={divRef} style={{ flex: 1, minWidth: 0 }} />
+
+        {/* Error and spread against lead. Beside the map rather than below it:
+            the map answers "where", this answers "how wrong, and did the
+            ensemble know" — the question the rest of this application is about,
+            asked in track space. */}
+        <div style={{ width: '340px', flexShrink: 0, padding: '12px 14px',
+                      background: 'rgba(17,27,39,0.97)',
+                      borderLeft: '1px solid rgba(255,255,255,0.08)',
+                      overflowY: 'auto' }}>
+          <div style={{ color: 'rgba(255,255,255,0.75)', fontSize: t.fontSize.sm,
+                        fontWeight: t.fontWeight.semibold, marginBottom: '2px' }}>
+            Track error and spread
+          </div>
+          <div style={{ color: 'rgba(255,255,255,0.35)',
+                        fontSize: t.fontSize.micro, marginBottom: '10px',
+                        lineHeight: 1.5 }}>
+            Error is each member against the best track; spread is each member
+            against the ensemble mean. They are different quantities — an
+            ensemble can agree with itself and be wrong together.
+          </div>
+
+          {errorByLead && errorByLead.points?.length ? (
+            <>
+              <ResponsiveContainer width="100%" height={230}>
+                <ComposedChart data={errorByLead.points}
+                               margin={{ top: 6, right: 8, left: -14, bottom: 14 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                  <XAxis dataKey="lead" stroke="rgba(255,255,255,0.3)"
+                         tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
+                         tickFormatter={(h) => `+${h}h`} />
+                  <YAxis stroke="rgba(255,255,255,0.3)" width={46}
+                         tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
+                         tickFormatter={(v) => `${Math.round(v)}`} />
+                  <Tooltip contentStyle={TOOLTIP_STYLE}
+                           labelFormatter={(h) => `+${h} h`}
+                           formatter={(v, n) => (n === 'members'
+                             ? [v, 'members still forecasting a storm']
+                             : [v == null ? '—' : `${v} km`, n])} />
+                  <Legend wrapperStyle={{ fontSize: 10, color: 'rgba(255,255,255,0.6)' }} />
+                  {/* The member range, so the mean is not read as the forecast. */}
+                  <Area type="monotone" dataKey="p90_km" name="p10–p90"
+                        stroke="none" fill="rgba(111,177,255,0.16)" />
+                  <Area type="monotone" dataKey="p10_km" name=" "
+                        stroke="none" fill="#0f1923" />
+                  <Line type="monotone" dataKey="mean_km" name="error"
+                        stroke="#ff9f6f" strokeWidth={2} dot={false}
+                        connectNulls={false} />
+                  <Line type="monotone" dataKey="spread_km" name="spread"
+                        stroke="#6fb1ff" strokeWidth={2} strokeDasharray="4 3"
+                        dot={false} />
+                  {/* Hidden from the plot, present in the tooltip: the count is
+                      needed to read any point honestly but shares no axis with
+                      kilometres. */}
+                  <Line dataKey="members" name="members" stroke="none"
+                        dot={false} activeDot={false} legendType="none" />
+                  {/* Where the observation record stops. The error line simply
+                      ending would otherwise read as the forecast ending. */}
+                  {errorByLead.last_verified_lead != null
+                    && errorByLead.last_verified_lead
+                       < errorByLead.points[errorByLead.points.length - 1].lead && (
+                    <ReferenceLine x={errorByLead.last_verified_lead}
+                                   stroke="rgba(255,255,255,0.35)"
+                                   strokeDasharray="2 3"
+                                   label={{ value: 'truth ends', fill: 'rgba(255,255,255,0.45)',
+                                            fontSize: 9, position: 'insideTopRight' }} />
+                  )}
+                </ComposedChart>
+              </ResponsiveContainer>
+              <div style={{ color: 'rgba(255,255,255,0.4)',
+                            fontSize: t.fontSize.micro, marginTop: '6px',
+                            lineHeight: 1.5 }}>
+                km, against lead time.
+                {errorByLead.last_verified_lead != null
+                  && ` Scored to +${errorByLead.last_verified_lead} h, where the best track stops.`}
+                {/* The second denominator, and the one a line chart hides
+                    hardest: members drop out as their forecast storm
+                    dissipates, so a long lead can be scored over a handful.
+                    Dorian's earliest ECMWF run falls from 28 members at +0 h to
+                    4 at +144 h — the same line, a tenth of the ensemble. */}
+                {(() => {
+                  const pts = errorByLead.points;
+                  const first = pts[0]?.members;
+                  const last = pts[pts.length - 1]?.members;
+                  if (first == null || last == null || last >= first) return null;
+                  return (
+                    <>
+                      {' '}
+                      <span style={{ color: 'rgba(255,200,140,0.85)' }}>
+                        Members still forecasting a storm falls from {first} at
+                        {' '}+{pts[0].lead} h to {last} at +{pts[pts.length - 1].lead} h,
+                        so the long leads are scored over fewer.
+                      </span>
+                    </>
+                  );
+                })()}
+              </div>
+            </>
+          ) : (
+            <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.sm }}>
+              {errorByLead ? 'No scored lead times for this run.' : 'Loading…'}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
+
+const TOOLTIP_STYLE = {
+  background: '#1a2535',
+  border: '1px solid rgba(255,255,255,0.15)',
+  borderRadius: t.radius,
+  color: 'white',
+  fontSize: t.fontSize.sm,
+};
 
 const selectStyle = {
   display: 'block', marginTop: '4px', padding: '5px 8px',
