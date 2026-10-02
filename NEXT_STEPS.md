@@ -3667,6 +3667,26 @@ after the instruction to skip emailing `wang.shuoc`):
 
 Only `T`'s meaning is still unknown, and nothing reads it.
 
+**One defect found by re-opening the tab, 2026-10-02.** Every storm or centre
+change fired a request for the new storm with the *previous* storm's
+initialisation — a pair that cannot exist — which 404ed, and was then followed
+by the correct request. The init was held in state and reset in an effect,
+which is one commit too late: effects run after the render, so the three fetch
+effects had already gone out with the stale value. The `alive` guards meant the
+404 was never *displayed*, which is why it survived the original build and the
+screenshots: the tab looked right and only the network log disagreed.
+
+Two costs, neither visible on screen. Each doomed request was a real database
+query, and a tab that reliably emits 404s is a tab whose logs cannot be used to
+find the 404s that matter — which undoes some of §36's point. Fixed by deriving
+the initialisation during render instead of storing it, so the invalid pair
+never exists rather than existing briefly and being cleaned up.
+
+`src/components/CycloneTab.test.js` pins it by asserting a property of **every**
+request made rather than of the final state — the final state was always
+correct, which was the whole problem. Three of its four cases fail against the
+previous version; the fourth passes either way and guards something else.
+
 ### Take those two warnings seriously — they name this project's two worst bugs
 
 This repository has paid for both already, and the cost was weeks:

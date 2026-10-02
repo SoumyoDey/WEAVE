@@ -107,45 +107,69 @@ export function CycloneTab({ active }) {
     if (!options.includes(centre)) setCentre(options[0] ?? null);
   }, [storm, centre, centresFor]);
 
-  // Reset the initialisation whenever the storm or centre changes, because an
-  // init from another run is not a valid choice here and would 404.
+  /**
+   * The initialisation actually used — **derived during render, not stored.**
+   *
+   * An init belongs to one storm at one centre, so the moment the storm
+   * changes the one in state is stale. Resetting it in an effect is too late:
+   * effects run after the commit, so the fetch effects below have already
+   * fired for the new storm with the *old* init — a pair that cannot exist and
+   * returns 404. Measured on a storm switch: two doomed requests, each a real
+   * database query, before the corrected pair goes out.
+   *
+   * The `alive` guards meant the 404 was never *displayed*, which is why this
+   * looked fine for as long as nobody read the network log. It was still being
+   * sent, and a tab that reliably emits 404s is a tab whose logs cannot be used
+   * to find the 404s that matter.
+   *
+   * Deriving it means the invalid pair never exists in the first place, rather
+   * than existing briefly and being cleaned up afterwards.
+   */
+  const initOptions = useMemo(
+    () => initsFor(storm, centre).map((r) => r.init_time),
+    [initsFor, storm, centre]);
+  const activeInit = (storm && centre)
+    ? (initOptions.includes(init) ? init : (initOptions[0] ?? null))
+    : null;
+
+  // State still follows, so the <select> stays controlled and a user's explicit
+  // choice survives. This no longer gates any request — by the time it runs,
+  // the fetches below have already used the derived value.
   useEffect(() => {
-    if (!storm || !centre) return;
-    const options = initsFor(storm, centre).map((r) => r.init_time);
-    if (!options.includes(init)) setInit(options[0] ?? null);
-  }, [storm, centre, init, initsFor]);
+    if (activeInit !== init) setInit(activeInit);
+  }, [activeInit, init]);
 
   // ── The tracks ─────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!storm || !centre || !init) return;
+    if (!storm || !centre || !activeInit) return;
     let alive = true;
     setLoading(true);
     setError(null);
-    fetchCycloneTracks({ storm, centre, init })
+    fetchCycloneTracks({ storm, centre, init: activeInit })
       .then((d) => { if (alive) { setData(d); setLoading(false); } })
       .catch((e) => { if (alive) { setError(e.message); setLoading(false); } });
     return () => { alive = false; };
-  }, [storm, centre, init]);
+  }, [storm, centre, activeInit]);
 
   // ── The strike-probability field ───────────────────────────────────────────
   useEffect(() => {
-    if (!showStrike || !storm || !centre || !init) { setStrike(null); return; }
+    if (!showStrike || !storm || !centre || !activeInit) { setStrike(null); return; }
     let alive = true;
-    fetchStrikeProbability({ storm, centre, init, radiusKm })
+    fetchStrikeProbability({ storm, centre, init: activeInit, radiusKm })
       .then((d) => { if (alive) setStrike(d); })
       .catch((e) => { if (alive) setError(e.message); });
     return () => { alive = false; };
-  }, [showStrike, storm, centre, init, radiusKm]);
+  }, [showStrike, storm, centre, activeInit, radiusKm]);
 
   // ── Error and spread against lead ──────────────────────────────────────────
   useEffect(() => {
-    if (!storm || !centre || !init) { setErrorByLead(null); return; }
+    if (!storm || !centre || !activeInit) { setErrorByLead(null); return; }
     let alive = true;
-    fetchErrorByLead({ storm, centre, init })
+    fetchErrorByLead({ storm, centre, init: activeInit })
       .then((d) => { if (alive) setErrorByLead(d); })
       .catch((e) => { if (alive) setError(e.message); });
     return () => { alive = false; };
-  }, [storm, centre, init]);
+  }, [storm, centre, activeInit]);
 
   // ── The map ────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -247,7 +271,7 @@ export function CycloneTab({ active }) {
         <label style={{ color: 'rgba(255,255,255,0.45)', fontSize: t.fontSize.micro,
                         textTransform: 'uppercase', letterSpacing: '0.06em' }}>
           Initialised
-          <select aria-label="Initialisation" value={init ?? ''}
+          <select aria-label="Initialisation" value={activeInit ?? ''}
                   onChange={(e) => setInit(e.target.value)}
                   style={{ ...selectStyle, minWidth: '230px' }}>
             {(storm && centre ? initsFor(storm, centre) : []).map((r) => (
