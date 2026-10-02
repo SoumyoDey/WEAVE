@@ -1,6 +1,6 @@
 # Finding and characterising the tropical-cyclone data on Explorer
 
-**Status: not started. Written 2026-10-02.**
+**Status: stages A–C run 2026-10-02 — see §8, Findings. Stages D/E partly done.**
 
 This is step 1 of `NEXT_STEPS.md` §37, and only step 1. It is about **locating
 the data and writing down what is actually in it** — not about the track table,
@@ -260,6 +260,146 @@ files:
 **Then** §37's design note, and only then any code. The order is the point: this
 project's two most expensive defects both came from building on a convention
 nobody had verified.
+
+---
+
+---
+
+## 8. Findings — stages A, B and C, run 2026-10-02
+
+Read-only, from a login node. Every claim below was taken from a listing or a
+file's own contents, and the ones that were *not* settled are named in §9.
+
+### A — the root
+
+```
+/projects/k.aggarwal/Shuochen    drwxrws---+  wang.shuoc : k.aggarwal   140 GB
+```
+
+**Owned by `wang.shuoc`, group `k.aggarwal`.** §2 called this correctly: it is a
+collaborator's working area inside our allocation. Readable — we are in the
+group — and not ours to assume is stable.
+
+**140 GB.** For scale, the entire current database is 123.52 GB and §27's
+retention review sits at 250 GB. Copying this wholesale is not an option and is
+not necessary; see `output/` below.
+
+### B — the shape
+
+```
+Shuochen/
+├── ecmf/   3,437 dirs   6,964 files     ECMWF
+├── egrr/   4,324 dirs  17,997 files     UK Met Office
+├── kwbc/   4,224 dirs  48,275 files     NCEP
+│     └── <year>/<YYYYMMDD>/   2013 … 2024, plus storm_2016_2024_{0,12,24}h/
+├── old/       11 dirs     690 files     earlier IBTrACS + MICHAEL test case
+├── output/     1 dir    1,181 files     197 MB  ← the processed layer
+├── ibtracs.ALL.list.v04r01.csv          330 MB  best track, all basins
+└── storm.csv                             46 KB  IBTrACS extract, reaches 2025
+```
+
+75,109 files: **71,865 `.xml`**, 3,243 `.csv`, 1 `.nc`.
+
+`ecmf` / `egrr` / `kwbc` are WMO centre codes, and they line up with the app's
+three models — **with one trap.** The app's ECMWF model is **AIFS**, the AI
+forecast system; `ecmf` here is the physics ensemble (`CENS`). Labelling this
+data "AIFS" would be precisely the mislabel §20/§24 punished.
+
+### C — tracker output, not raw fields
+
+**This is the answer that sizes §37, and it is the cheap branch.**
+
+Confirmed from the file, not the filename, as this project's rule requires:
+
+```xml
+<cxml ... cxml.1.1.xsd">
+  <header><product>Cyclone Forecast</product>
+    <generatingApplication><applicationType>Global ensemble prediction system</applicationType>
+    <productionCenter>ECMWF</productionCenter>
+    <baseTime>2024-12-31T00:00:00</baseTime>
+  <data origin="ecmf" type="analysis">
+    <disturbance ID="2024123100_175S_901E">
+      <cycloneNumber>05S</cycloneNumber><basin>Southwest Pacific</basin>
+      <fix source="synoptic"><validTime>2024-12-31T00:00:00Z</validTime>
+        <latitude units="deg S" precision="0.1">-17.5</latitude>
+        <longitude units="deg E" precision="0.1">90.1</longitude>
+```
+
+**CXML** (Cyclone XML, the BoM/THORPEX schema) from TIGGE — cyclone centres
+already identified per member. No tracking algorithm is needed. The different
+project §37 warned about is not this one.
+
+### The `output/` directory is what to load
+
+1,181 CSVs, **197 MB**, named `<centre>_<offset>h_<STORM>.csv`:
+
+| centre | 0h | 24h | 48h | 72h |
+|---|---|---|---|---|
+| ecmf | 131 | 99 | 69 | 40 |
+| egrr | 135 | 118 | 98 | 81 |
+| kwbc | 134 | 111 | 92 | 73 |
+
+**138 distinct storms.** The `0h/24h/48h/72h` in the name is an *initialisation
+offset*, not forecast lead — `lead_time` is a column, and runs to 144 h.
+
+The header is already most of feature 1:
+
+```
+member_id, cyclone_id, cycloneName, basin, time, lat, lon, pressure_hPa,
+wind_mps, lead_time, NATURE, LAT, LON, DIST2LAND, LANDFALL, STORM_SPEED,
+STORM_DIR, WMO_PRES, WMO_WIND, distance_km, T, mean_lat, mean_lon,
+dist_to_ens_mean_km
+```
+
+Lower-case `lat`/`lon` are the **forecast** track; upper-case `LAT`/`LON` are the
+**IBTrACS best track**, already matched in. `distance_km` is the track error,
+`mean_lat`/`mean_lon`/`dist_to_ens_mean_km` the ensemble mean and the member's
+distance from it. **Forecast, truth, and error are already joined** — which is
+more than feature 1 needs, and supplies §5's provenance test for free.
+
+`ecmf_0h_ALCIDE.csv`: 1,250 rows = **51 members (0–50) × 25 six-hourly steps to
++144 h**, exactly.
+
+### Conventions, checked
+
+- **Longitude in `output/` is signed ±180.** `ecmf_0h_BERYL.csv` runs −94.0 to
+  −42.9 in the North Atlantic, and its first forecast point (9.2, −42.9) sits
+  beside the best track (9.2, −43.1).
+- **The CXML files are 0–360 east** (90.1 °E above). So the two layers
+  **disagree**, and the conversion already happened inside Shuochen's
+  processing. Anything re-derived from the XML must redo it. This is the
+  "wrong ocean" trap §3 Stage E names, found live.
+- **Basin labels are not consistent between centres**: ECMWF writes
+  `North Atlantic`, NCEP writes `AL`, for the same storm. Normalisation needed.
+- Latitude carries `units="deg S"` with a *signed* value (−17.5), which the
+  disturbance ID `..._175S_901E` cross-checks. The unit string is descriptive;
+  the sign is the data. Do not apply both.
+
+### Dates — the warning was right, by a decade
+
+The archive is **2013–2024**. The loaded forecast runs are **2025-09-08** and
+**2025-09-16**. They do not overlap at all, so §37 feature 2 (member fields)
+cannot read `regridded_forecast_member` for these storms — there is no storm
+period in the database. `storm.csv` reaches 2025-10 (MELISSA), so the best-track
+side is more current than the forecast archive.
+
+---
+
+## 9. Not settled by this survey
+
+- What `storm_2016_2024_{0,12,24}h/` under each centre holds, and how it relates
+  to `output/`.
+- Whether `output/` covers every storm in the XML archive or a chosen subset —
+  138 storms against 12 years of TIGGE suggests a subset, and the selection
+  criterion matters.
+- Whether `old/` is superseded or still referenced. It holds its own IBTrACS and
+  the MICHAEL test case.
+- Member counts per centre, beyond ECMWF's 51. `kwbc_0h_BERYL.csv` has 767 rows
+  against ecmf's 1,210, so they differ — by members, by track length, or both.
+- Who produced `output/`, with what script, and whether it is reproducible.
+  **This is the §2 question and still the cheapest next move:** ask
+  `wang.shuoc`. It is the `era5_subset.py` trail that let §11 confirm bounds
+  instead of assuming them.
 
 ---
 
