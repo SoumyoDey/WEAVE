@@ -3730,8 +3730,20 @@ often a spread or quantile field rather than 50 overplotted ones.
 
 ### Sequencing
 
-1. Read the files. Write down the structure, the dates, the units and the
-   conventions, the way `fixture_db.py`'s docstring records this project's.
+1. Read the files. **`TC_DATA_ACCESS.md` is the plan for this step** — where to
+   look on Explorer, whose directory it is and what that obliges, the survey
+   stages, and the gate it has to pass before anything is designed. It leads
+   with §11's two failures, because the last search on this cluster produced a
+   wrong recorded decision by generalising from one directory, and spent three
+   weeks reading "not on the development machine" as "does not exist".
+
+   The data is in **`/projects/k.aggarwal/Shuochen`** — inside our own
+   allocation, next to the `WEAVE/` directory §11 used, so §11's
+   "someone else's directory" caution does **not** transfer. What does carry
+   over is enumerating the whole tree before concluding anything, and asking
+   whoever produced it how it was produced: that trail (`era5_subset.py`,
+   `regions_config.json`) is how §11 confirmed the ERA5 bounds instead of
+   assuming them.
 2. Verify provenance with MAE-against-lead before trusting a single number.
 3. Then a design note — probably its own document, as
    `DATA_EXPANSION_DESIGN.md` was — covering the track table, the endpoint
@@ -3742,7 +3754,8 @@ often a spread or quantile field rather than 50 overplotted ones.
    One caution — `AnalysisTab.jsx` is 1,264 lines and is on S4's deferred-refactor
    list. A cyclone tab should not become the fifth large component.
 
-**Nothing here is started**, and nothing should be until step 1 is written down.
+**Nothing here is started**, and nothing should be until step 1 is written
+down. `TC_DATA_ACCESS.md` says what "written down" has to contain.
 
 ## Standing decisions — do not undo these by accident
 
