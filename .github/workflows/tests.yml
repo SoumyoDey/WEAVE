@@ -229,26 +229,59 @@ jobs:
             Data/requirements.txt
             Data/requirements-dev.txt
 
-      # Cartopy links against GEOS and PROJ (see Data/requirements.txt).
-      - name: Install GEOS and PROJ
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libgeos-dev libproj-dev proj-data proj-bin
-
+      # There was an `apt-get install libgeos-dev libproj-dev proj-data
+      # proj-bin` here, removed 2026-10-02. It installed nothing this job uses:
+      # Cartopy's compiled extension declares no GEOS or PROJ (§34), reaching
+      # geometry through `shapely` and projections through `pyproj`, and both
+      # ship their own copies because the manylinux policy forbids linking
+      # either from the system. Nothing in the repository shells out to
+      # `projinfo` or `cs2cs` either.
+      #
+      # The step below is what makes that a measurement rather than an absence
+      # of failure — it prints the library files actually mapped into the
+      # process. If a future install really does need the system ones, they are
+      # missing now and it fails here, loudly, before pytest.
       - name: Install Python dependencies
         run: pip install -r Data/requirements.txt -r Data/requirements-dev.txt
 
-      # Both link against bundled or system C libraries, so `pip install`
-      # succeeding does not mean `import` will. The same reasoning as the
-      # PostgreSQL check below: these tests skip themselves when their
-      # dependency is missing, so a broken install would shrink the run rather
-      # than fail it. test_convert_aifs.py's 14 file-reading tests did exactly
-      # that on every run until netCDF4 was declared (NEXT_STEPS.md §30).
+      # These link against bundled or system C libraries, so `pip install`
+      # succeeding does not mean `import` will. Same reasoning as the PostgreSQL
+      # check below: a dependency that imports but is broken, or is missing
+      # entirely, shrinks the run rather than failing it —
+      # `test_convert_aifs.py`'s 14 file-reading tests did exactly that on every
+      # run until netCDF4 was declared (NEXT_STEPS.md §30).
+      #
+      # It forces a real projection and a real geometry operation rather than a
+      # bare import, because a lazily-loaded `.so` is not mapped until something
+      # needs it — an import alone would prove less than it appears to.
       - name: Verify the compiled dependencies import
         run: |
           python -c "import netCDF4; print('netCDF4', netCDF4.__version__, '| HDF5', netCDF4.__hdf5libversion__, '| netcdf', netCDF4.__netcdf4libversion__)"
-          python -c "import cartopy; print('cartopy', cartopy.__version__)"
+          python - <<'PY'
+          import re, pathlib
+          import cartopy, cartopy.crs as ccrs, shapely, pyproj
+          from shapely.geometry import Point
+
+          ccrs.PlateCarree().transform_point(-75.0, 36.0, ccrs.PlateCarree())
+          Point(0, 0).buffer(1.0)          # force GEOS to load
+
+          print('cartopy', cartopy.__version__)
+          print('shapely', shapely.__version__, '| GEOS', shapely.geos_version_string)
+          print('pyproj ', pyproj.__version__, '| PROJ', pyproj.proj_version_str)
+
+          # Matched on the BASENAME, not the path: a workspace directory that
+          # happened to contain "proj" would otherwise look like a hit.
+          maps = pathlib.Path('/proc/self/maps').read_text()
+          hits = sorted({m for m in re.findall(r'/\S+\.so[^\s]*', maps)
+                         if re.match(r'lib(geos|proj)', pathlib.Path(m).name)})
+          print('GEOS/PROJ libraries actually mapped into this process:')
+          for h in hits:
+              origin = 'VENDORED in a wheel' if 'site-packages' in h else 'SYSTEM (apt)'
+              print(f'  {origin:20s} {h}')
+          system = [h for h in hits if 'site-packages' not in h]
+          assert hits, 'no GEOS/PROJ library mapped at all — did the force-load work?'
+          assert not system, f'loaded from the system after the apt step was removed: {system}'
+          PY
 
       # The Cartopy renders pull Natural Earth 50m coastlines on first use.
       # Cache them so only the first run on a given key hits the network.
