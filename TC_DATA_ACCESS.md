@@ -1,15 +1,91 @@
 # Finding and characterising the tropical-cyclone data on Explorer
 
-**Status: stages A–C run 2026-10-02 — see §8, Findings. Stages D/E partly done.**
+**Status: surveyed 2026-10-02. Two questions remain, both for `wang.shuoc`.**
 
 This is step 1 of `NEXT_STEPS.md` §37, and only step 1. It is about **locating
 the data and writing down what is actually in it** — not about the track table,
-the endpoints, or the tab. Those decisions depend on answers this document is
-designed to produce, and making them first is how a schema gets built around a
-file nobody opened.
+the endpoints, or the tab. Those decisions depend on answers this document
+produces, and making them first is how a schema gets built around a file nobody
+opened.
 
-**The path is `/projects/k.aggarwal/Shuochen`** (given 2026-10-02), and the
-data is somewhere inside it. The directory is known; what is in it is not.
+---
+
+## Summary — what the data is
+
+`/projects/k.aggarwal/Shuochen`, **140 GB**, owned by `wang.shuoc`, group
+`k.aggarwal`. Everything below was read from the files; the detail and the
+method are in §8–§10.
+
+**It is tropical-cyclone track forecasts, not gridded fields.** CXML — the
+WMO/THORPEX cyclone-track format — from TIGGE, with cyclone centres already
+identified per ensemble member. No tracking algorithm is needed, which is the
+cheap branch of §37's estimate.
+
+### Three raw archives, 2013–2024
+
+| directory | size | production centre(s) | products | ensemble | cadence |
+|---|---|---|---|---|---|
+| `ecmf/` | 41 GB | ECMWF | `ifs … all` | 51 | 00Z, 12Z |
+| `egrr/` | 34 GB | Met Office | MOGREPS (ens) + MOGM (det) | 36 | 6-hourly |
+| `kwbc/` | 66 GB | **NCEP *and* MSC** | GEFS, GFS (US); CENS, CMC (Canada) | 31 / 21 | several daily |
+
+Every file is a whole ensemble — `<data type="ensembleForecast" member="N">` —
+and every fix carries lead hour, position, minimum pressure, maximum wind and
+speed. One ECMWF file holds ~1,215 disturbances and ~14,671 fixes, globally.
+
+### Two processed generations of the same pipeline
+
+| | `<centre>/storm_2016_2024_*h/` | `output/` |
+|---|---|---|
+| written | 2026-04-06 | **2026-06-03** |
+| initialisation offsets | 0, 12, 24 h | 0, 24, 48, 72 h |
+| forecast lead reaches | +72 h | **+144 h** |
+| storms (`ecmf`, 0 h) | 155 | 131 |
+| size | ~45 MB | **197 MB** |
+
+**`output/` is complete, not unfinished**, and neither generation is a subset of
+the other. **`output/` is what to load**: its 24 columns already carry the
+forecast track (`lat`/`lon`), the IBTrACS best track matched in (`LAT`/`LON`),
+the track error (`distance_km`) and the ensemble mean with each member's
+distance from it.
+
+### Truth, and one thing that looks like an index and is not
+
+`ibtracs.ALL.list.v04r01.csv` — 330 MB, all basins, fetched 2026-04-27, with an
+older vintage in `old/`. **`storm.csv` is not a storm catalogue**; it is a
+scratch single-storm extract, currently MELISSA alone. `old/` (361 MB) is a
+superseded development history.
+
+### Nothing about the conventions is uniform
+
+- **Longitude is encoded three ways across the raw archives**: `ecmf` signed
+  ±180, `egrr` a positive magnitude whose `units` attribute carries the sign,
+  `kwbc` 0–360 east. `output/` is signed ±180.
+- **Basin labels differ by centre** — `North Atlantic` against `AL`.
+- **Ensemble size varies three ways**: by model, by era (GEFS 21→31 at v12,
+  2020-09-23), and **by storm** — ECMWF files range 28 to 51 members, because a
+  member that forecast no cyclone has no track.
+
+### Two things to settle before designing anything
+
+- **The dates do not overlap the database.** Archive 2013–2024; the loaded runs
+  are 2025-09-08 and 2025-09-16.
+- **There are no gridded fields here.** §37's feature 1 (member tracks) is well
+  supplied. **Feature 2 — "all individual model runs as semi-transparent
+  layers" — has no data in this folder** if it means member *fields*. If it
+  means member tracks, it is feature 1 under another name. Worth settling with
+  whoever asked for it.
+
+Of 131 ECMWF storms at 0 h: 48 NW Pacific, 32 SW Pacific, 28 NE Pacific,
+**21 North Atlantic**, 2 N Indian.
+
+### Still open
+
+1. **Which IBTrACS vintage each product was scored against.** Two downloads
+   exist, seven months apart, and IBTrACS revises past storms retrospectively.
+   `storm_2016_2024_*` predates the newer one; `output/` postdates it.
+2. **What the June re-selection was selecting for.** Not basin — the loss is
+   broad and the Atlantic gains one.
 
 ---
 
@@ -388,19 +464,29 @@ side is more current than the forecast archive.
 
 ## 9. Still open after the survey
 
-- ~~What `storm_2016_2024_{0,12,24}h/` holds.~~ **Answered below.**
-- ~~Whether `output/` is complete or still generating.~~ **Answered below: it is
-  complete.** The selection *criterion* is still open.
-- ~~Whether `old/` is superseded.~~ **Answered below — it is, but one thing in
-  it is not safely ignorable.**
-- Member counts per centre, beyond ECMWF's 51. `kwbc_0h_BERYL.csv` has 767 rows
-  against ecmf's 1,210, so they differ — by members, by track length, or both.
-- Who produced `output/`, with what script, and whether it is reproducible.
-  **This is the §2 question and still the cheapest next move:** ask
-  `wang.shuoc`. It is the `era5_subset.py` trail that let §11 confirm bounds
-  instead of assuming them.
+Everything this document set out to answer is answered in §10 except two, and
+both are about **provenance rather than structure** — which is why they go to
+`wang.shuoc` rather than to another pass over the files.
 
----
+1. **Which IBTrACS vintage each product was scored against.** Two downloads
+   exist seven months apart, IBTrACS revises past storms retrospectively, and
+   the products' `LAT`/`LON` and `distance_km` were computed against one of
+   them. `storm_2016_2024_*` predates the newer download; `output/` postdates
+   it. Until this is settled, a track error from these files should not be
+   quoted as a measurement.
+2. **What the June re-selection was selecting for.** `output/` dropped 29 ecmf
+   storms and added five. Not a basin filter — the loss is broad and the
+   Atlantic gains one. The hypothesis on file is the extension from +72 h to
+   +144 h, which would thin every basin at once; unverified.
+
+Both sit inside the larger question §2 raises: **who produced `output/`, with
+what script, and is it reproducible.** That is the `era5_subset.py` trail §11
+followed, and it is still the cheapest next move.
+
+Answered in §10, listed here so the trail is visible: what
+`storm_2016_2024_{0,12,24}h/` holds; whether `output/` is complete; whether
+`old/` is superseded; member counts per centre; which `kwbc` product `output/`
+uses.
 
 ---
 
