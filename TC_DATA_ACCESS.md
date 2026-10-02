@@ -365,10 +365,9 @@ more than feature 1 needs, and supplies §5's provenance test for free.
 - **Longitude in `output/` is signed ±180.** `ecmf_0h_BERYL.csv` runs −94.0 to
   −42.9 in the North Atlantic, and its first forecast point (9.2, −42.9) sits
   beside the best track (9.2, −43.1).
-- **The CXML files are 0–360 east** (90.1 °E above). So the two layers
-  **disagree**, and the conversion already happened inside Shuochen's
-  processing. Anything re-derived from the XML must redo it. This is the
-  "wrong ocean" trap §3 Stage E names, found live.
+- ~~**The CXML files are 0–360 east** (90.1 °E above), so the two layers
+  disagree.~~ **WRONG — retracted 2026-10-02; see “`ecmf/` — the raw CXML archive, and a retraction” below.** The CXML is signed
+  ±180 as well. The two layers agree, and there is no conversion to redo.
 - **Basin labels are not consistent between centres**: ECMWF writes
   `North Atlantic`, NCEP writes `AL`, for the same storm. Normalisation needed.
 - Latitude carries `units="deg S"` with a *signed* value (−17.5), which the
@@ -385,7 +384,7 @@ side is more current than the forecast archive.
 
 ---
 
-## 9. Not settled by this survey
+## 9. Still open after the survey
 
 - ~~What `storm_2016_2024_{0,12,24}h/` holds.~~ **Answered below.**
 - ~~Whether `output/` is complete or still generating.~~ **Answered below: it is
@@ -400,6 +399,10 @@ side is more current than the forecast archive.
   instead of assuming them.
 
 ---
+
+---
+
+## 10. What each remaining directory turned out to hold
 
 ### `storm_2016_2024_*h/` versus `output/` — two generations, not two stages
 
@@ -532,6 +535,67 @@ unconfirmed, and cheap for `wang.shuoc` to confirm or deny.
 One naming artifact for whoever writes the loader: `KYAAR_KYARR` carries an
 underscore inside the storm name, so a filename parsed on `_` will split it
 wrongly.
+
+### `ecmf/` — the raw CXML archive, and a retraction
+
+**First, the retraction, because it is a recorded fact that was wrong.**
+
+§8 said *"the CXML files are 0–360 east, so the two layers disagree, and the
+conversion already happened inside Shuochen's processing."* **That is false.**
+Measured across a whole file: longitude runs **−180.0 to 179.9, with 9,943 of
+29,293 values negative.** The CXML is signed ±180, exactly like `output/`. The
+`units` attribute is descriptive and the sign is already in the value —
+`units="deg E"` on `90.1`, `units="deg W"` on `−176.0`.
+
+**How it happened is the part worth keeping.** The first sample I read was an
+Indian Ocean disturbance at `90.1` with `units="deg E"`, and I concluded a
+convention from one positive value in the eastern hemisphere, with no western
+counter-example in front of me. That is the generalisation error §0 of this very
+document quotes §11 for — *looked in one directory, generalised to the
+filesystem* — committed inside the document that warns about it, two sections
+later. **A convention needs a value that would falsify it, not a value
+consistent with it.** There was no wrong-ocean trap; I invented one.
+
+**The archive itself.** 41 GB, 2013–2024, 6,526 XML files in the year
+directories:
+
+```
+ecmf/<year>/<YYYYMMDD>/z_tigge_c_ecmf_<YYYYMMDDHHMMSS>_ifs_glob_prod_all_glo.xml
+```
+
+Two files per date — **00Z and 12Z** — across 241–314 dates per year, so
+coverage is most but not all of the calendar. Note the product string differs by
+centre: ECMWF is `ifs … all`, NCEP is `CENS … esttr`. Not necessarily the same
+TIGGE product, and worth confirming before the two are treated as equivalent.
+
+**Each file is a complete ensemble**, which is what matters for feature 1:
+
+```xml
+<data origin="ecmf" type="analysis">
+<data origin="ecmf" type="forecast">                                  <!-- deterministic -->
+<data origin="ecmf" type="ensembleForecast" member="0"  perturb="control">
+<data origin="ecmf" type="ensembleForecast" member="11" perturb="positive">
+<data origin="ecmf" type="ensembleForecast" member="10" perturb="negative">
+```
+
+One `2024-09-01 00Z` file holds **1,215 `<disturbance>` elements, 14,671
+`<fix>`es and 159 named cyclones**, globally, every basin. A fix carries its
+lead as an attribute and its intensity alongside:
+
+```xml
+<fix hour="6" source="model">
+  <validTime>2024-09-01T06:00:00Z</validTime>
+  <latitude  units="deg N" precision="0.1">24.1</latitude>
+  <longitude units="deg W" precision="0.1">-176.0</longitude>
+  <cycloneData><minimumPressure source="model">
+    <pressure units="hPa" precision="0.1">1009.0</pressure>
+```
+
+So **the raw archive carries everything feature 1 needs** — per-member tracks
+with position, pressure, wind and speed — and `output/` is a 197 MB
+pre-processed extract of the same thing, already joined to best track. The
+archive is the fallback if the selection in `output/` turns out to be wrong for
+our purposes; it is not a second source to reconcile.
 
 ## Open questions for whoever has context
 
