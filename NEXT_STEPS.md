@@ -1453,6 +1453,46 @@ that was measured. Ingest the 0.1° native field and let this repository regrid 
   OOM-`Killed` on the login node mid-command without failing it. The env at
   `/projects/k.aggarwal/conda_envs/weave/bin/` has a working `ncdump`, `python`
   and `xarray`; call those by absolute path and skip the module system.
+### Working on Explorer at all — operational traps, from several tasks
+
+Not specific to the IMERG hunt above. Each of these cost real time on a
+*different* task and would have cost it again, because none of them presents as
+a limit of the host: every one reads as a bug in whatever you were running.
+
+- **A full ingest on the login node gets `Killed`, and the kill is the only
+  message you get.** Found 2026-10-02 running `load_cyclone_tracks.py` over all
+  1,181 cyclone CSVs: it builds the whole set of rows in memory before writing,
+  which is fine on a workstation and past the login node's cgroup limit. There
+  is no traceback and no partial output — the shell reports the job as
+  `Killed` and nothing else, which reads like a crash in the script rather than
+  a limit on the host.
+
+  **Use `--storms NAME` (or any equivalent subset flag) for a spot check**, and
+  a compute node for a real load. The same run restricted to one storm —
+  11 files — finished instantly and answered the question that the full run was
+  being used to answer. This is the same shape as the `conda` hook above being
+  OOM-killed mid-command: on a shared login node, assume memory is the binding
+  constraint and reach for a subset first.
+- **`/tmp` is per-node, and consecutive `ssh` commands do not land on the same
+  node.** `login.explorer.northeastern.edu` resolves to **two** A records
+  (129.10.0.145 and .146, hosts `explorer-01` and `explorer-02`) and alternates
+  between them — four consecutive `ssh` calls on 2026-10-02 landed 02, 01, 02,
+  02. So a `mkdir` in one invocation and a `cd` in the next can genuinely see
+  different filesystems, about half the time, which is worse than never. This presents as files vanishing between commands,
+  which invites the conclusion that the write failed — it did not, it is simply
+  somewhere else.
+
+  **Do multi-step remote work in a single `ssh` invocation**, with `mktemp -d`
+  and a trailing `rm -rf`, rather than as a sequence of calls sharing a path by
+  assumption. `scp` then `ssh` is the same trap wearing a different hat. Work in
+  `/projects` or `/home` instead when something genuinely has to outlive the
+  session.
+- **The default `python3` has no `psycopg2`.** So a loader that imports it at
+  module scope cannot even be `--dry-run` there, despite a dry run needing no
+  database at all. Either use the conda env above, or put a stub package on
+  `PYTHONPATH` whose `connect` raises — four lines, and it keeps the dry run
+  honest by making any real database call fail loudly rather than silently
+  succeeding against something unexpected.
 
 ## 12. The observation loader, and the 4-hour IMERG defect it found — 2026-09-16
 
