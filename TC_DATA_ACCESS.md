@@ -1,6 +1,13 @@
 # Finding and characterising the tropical-cyclone data on Explorer
 
-**Status: surveyed 2026-10-02. Two questions remain, both for `wang.shuoc`.**
+**Status: surveyed 2026-10-02; both provenance questions since answered from
+the files (§9). One data question remains open — `egrr_72h_GITA.csv`, the single
+file the loader refuses.**
+
+> Earlier sections below were written *during* the survey and some of their
+> open questions were later settled. §9 is the authority where they disagree;
+> the ones superseded are marked in place rather than deleted, because what was
+> guessed and what was then measured is the useful part of the record.
 
 This is step 1 of `NEXT_STEPS.md` §37, and only step 1. It is about **locating
 the data and writing down what is actually in it** — not about the track table,
@@ -558,6 +565,11 @@ narrowed and something disqualified those storms. Both readings fit the files.
 Ask `wang.shuoc` — this is the same question as "who produced `output/`" below,
 and now it has a concrete form.
 
+> **Settled by §9: deliberately narrowed, to runs with a complete +144 h
+> window.** The third reading — that the narrowing was a *property of the
+> forecasts* rather than a judgement about the storms — was not on this list and
+> is what the data says.
+
 ### `old/` — a development history, and a truth-vintage problem
 
 Checked 2026-10-02. 361 MB, and **superseded: nothing in it should be loaded.**
@@ -652,6 +664,10 @@ where April reached +72 h, so storms whose forecasts do not persist that far
 would drop out — which would thin every basin rather than one, and is consistent
 with the added storms (ETA, IAN, IDA) being long-lived major systems. Plausible,
 unconfirmed, and cheap for `wang.shuoc` to confirm or deny.
+
+> **CONFIRMED — §9, without the email.** All 1,180 loaded runs reach exactly
+> +144 h and not one falls short. The selection is on completeness, not on
+> quality: nothing was dropped for being wrong.
 
 One naming artifact for whoever writes the loader: `KYAAR_KYARR` carries an
 underscore inside the storm name, so a filename parsed on `_` will split it
