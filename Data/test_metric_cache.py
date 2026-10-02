@@ -184,7 +184,7 @@ class TestTheArgsAllowlistIsComplete:
         # (NEXT_STEPS.md §37) — they serve from the track tables with no cache
         # in the path. `test_the_uncached_endpoints_really_are_uncached` below
         # is what stops this exemption from rotting into a hole.
-        uncached = {'storm', 'centre', 'init', 'basin'}
+        uncached = {'storm', 'centre', 'init', 'basin', 'radius_km'}
         missed = read - named - uncached - set(api.SPATIAL_METRIC_CACHE_ARGS)
         assert missed == set(), (
             f'query parameters read but not in the cache key: {sorted(missed)} — '
@@ -197,7 +197,8 @@ class TestTheArgsAllowlistIsComplete:
         and the exemption would otherwise hide that — an exemption nobody
         re-checks is the shape of defect this project keeps finding.
         """
-        for name in ('list_cyclones', 'cyclone_tracks'):
+        for name in ('list_cyclones', 'cyclone_tracks',
+                     'cyclone_strike_probability'):
             body = inspect.getsource(getattr(api, name))
             assert '_cache_get' not in body and '_cache_set' not in body, (
                 f'{name} now uses the cache, so its query parameters must be '

@@ -454,9 +454,30 @@ blocked by the open provenance questions either.**
    and counted, because a latitude with no longitude is not a position.
 6. Error-against-lead and spread-against-error, reusing the existing chart
    shapes.
-7. Strike probability (§6a), with its invariant tests. It depends only on the
-   loaded positions and `nominal_members`, so it can be built in parallel with
-   steps 6–7 rather than after them.
+7. ~~Strike probability (§6a), with its invariant tests.~~ **BUILT 2026-10-02.**
+   `Data/cyclone_metrics.py` (pure, no Flask and no database),
+   `GET /api/cyclone/strike-probability`, and a toggle with an exposed radius on
+   the cyclone tab.
+
+   **The denominator is visible on screen, which was the point.** YASA from
+   MOGREPS: *"23 of 36 members tracked this storm — the other 13 forecast no
+   cyclone"*, and *"peak strike probability **64%** … of 36 members — not 23"*.
+   64% is 23/36. Every tracked member passes through the peak cell, so the peak
+   is bounded by the denominator; with the wrong one it would read **100%**,
+   claiming certainty where a third of the ensemble forecast no storm at all.
+
+   Two implementation notes worth keeping:
+
+   **It marks cells near each track point rather than testing every cell.** The
+   naive form is cells × points — about six million haversines for one storm,
+   seconds per request in Python. A point only reaches cells within the radius,
+   two or three in each direction at the default, so the work scales with track
+   length rather than with the map.
+
+   **Computed in unwrapped longitude and wrapped on the way out**, so a storm
+   across ±180 is one field rather than two with a gap. That is the third
+   independent fix for the same hazard — the source data's `mean_lon`, the
+   renderer's polylines, and now the grid. None of the three helps the others.
 
 Steps 2–4 are a loader and a comparison script, and are worth doing before any
 frontend work: if step 3 or 4 fails, the visualisation would have been built on

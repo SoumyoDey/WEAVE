@@ -49,6 +49,7 @@ CORS(app, origins=os.environ.get('CORS_ORIGIN', 'http://localhost:3000'))
 # without an id. See `observability.py` for why an inbound X-Request-ID is
 # validated rather than cleaned, and for what deliberately stays a `print`.
 import observability
+import cyclone_metrics
 
 observability.configure_logging()
 REQUEST_STATS = observability.install(app)
@@ -3141,6 +3142,99 @@ def cyclone_tracks():
             'members': [{'member_id': m, 'points': pts}
                         for m, pts in sorted(members.items())],
             'best_track': best,
+        })
+    finally:
+        cursor.close()
+        return_db_connection(conn)
+
+
+@app.route('/api/cyclone/strike-probability', methods=['GET'])
+def cyclone_strike_probability():
+    """§37 feature 2: the fraction of the ensemble passing within R of each cell.
+
+    A dimensionless field in [0, 1] on the 0.5° lattice — **the same shape as
+    every other field this app renders**, which is why this reading of feature 2
+    was chosen over fifty translucent member rasters: it goes through the
+    existing overlay unchanged.
+
+    `radius_km` is a control rather than a constant because it changes the
+    answer, the same bargain the threshold metrics strike. The lead window
+    reuses `hour_min`/`hour_max`.
+
+    **Divided by `nominal_members`, not by the tracks returned.** See
+    `cyclone_metrics` for why that is a correctness issue rather than a
+    bookkeeping one, and the response carries both counts so a reader can check.
+    """
+    storm  = request.args.get('storm')
+    centre = request.args.get('centre')
+    if not storm or not centre:
+        return jsonify({'error': 'storm and centre are required'}), 400
+    try:
+        radius_km = float(request.args.get('radius_km',
+                                           cyclone_metrics.DEFAULT_RADIUS_KM))
+        hour_min = int(request.args.get('hour_min', 0))
+        hour_max = int(request.args.get('hour_max', 10_000))
+    except ValueError:
+        return jsonify({'error': 'radius_km, hour_min and hour_max must be '
+                                 'numbers'}), 400
+    if not 1 <= radius_km <= 2000:
+        return jsonify({'error': 'radius_km must be between 1 and 2000'}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cursor.execute("""
+            SELECT init_time, nominal_members, tracked_members, system
+            FROM cyclone_run_registry
+            WHERE storm_name = %s AND centre = %s
+            ORDER BY init_time DESC LIMIT 1
+        """, (storm, centre))
+        run = cursor.fetchone()
+        if run is None:
+            return jsonify({'error': f'no run for {storm} from {centre}'}), 404
+
+        cursor.execute("""
+            SELECT member_id, latitude, longitude
+            FROM cyclone_track_member
+            WHERE storm_name=%s AND centre=%s AND init_time=%s
+              AND lead_hours BETWEEN %s AND %s
+            ORDER BY member_id, lead_hours
+        """, (storm, centre, run['init_time'], hour_min, hour_max))
+        rows = cursor.fetchall()
+        if not rows:
+            # An honest empty rather than a field of zeros: no track in the
+            # window is a different statement from "nowhere was struck".
+            return jsonify({'points': [], 'radius_km': radius_km,
+                            'nominal_members': run['nominal_members'],
+                            'tracked_members': 0,
+                            'reason': 'no track points in this lead window'})
+
+        # Unwrapped against the first point, so a storm across ±180 is one
+        # field rather than two with a gap. Wrapped again on the way out.
+        reference = rows[0]['longitude']
+        tracks = {}
+        for r in rows:
+            lon = r['longitude']
+            previous = tracks.get(r['member_id'], [(None, reference)])[-1][1]
+            while lon - previous > 180:
+                lon -= 360
+            while previous - lon > 180:
+                lon += 360
+            tracks.setdefault(r['member_id'], []).append((r['latitude'], lon))
+
+        field = cyclone_metrics.strike_probability(
+            tracks, run['nominal_members'], radius_km=radius_km)
+        peak, cells = cyclone_metrics.summarise(field)
+        return jsonify({
+            'storm': storm, 'centre': centre, 'system': run['system'],
+            'init_time': run['init_time'].isoformat(),
+            'radius_km': radius_km,
+            'hour_min': hour_min, 'hour_max': hour_max,
+            'nominal_members': run['nominal_members'],
+            'tracked_members': run['tracked_members'],
+            'peak': round(peak, 4), 'cells': cells,
+            'points': [{'lat': lat, 'lon': cyclone_metrics.wrap(lon),
+                        'value': round(v, 4)} for lat, lon, v in field],
         })
     finally:
         cursor.close()

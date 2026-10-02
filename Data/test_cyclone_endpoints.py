@@ -77,3 +77,51 @@ class TestTheTracks:
     def test_the_required_parameters_are_required(self, db_client):
         assert db_client.get('/api/cyclone/tracks?storm=X').status_code == 400
         assert db_client.get('/api/cyclone/tracks?centre=ecmf').status_code == 400
+
+
+class TestStrikeProbability:
+    """§37 feature 2. The arithmetic is pinned in `test_cyclone_metrics.py`
+    against hand-built ensembles; these pin the endpoint's half — the
+    denominator reaching the response, the parameters being honoured, and an
+    empty window answering honestly."""
+
+    URL = f'/api/cyclone/strike-probability?storm={fx.CY_STORM}&centre=ecmf'
+
+    def test_it_returns_a_field_in_range(self, db_client):
+        body = db_client.get(self.URL).get_json()
+        assert body['points']
+        assert all(0.0 < p['value'] <= 1.0 for p in body['points'])
+
+    def test_the_peak_is_the_fixture_denominator_not_the_tracks_present(self, db_client):
+        """The fixture's ECMWF run tracks 4 of 51. Every member passes through
+        the same start point, so the peak cell is struck by all four — and four
+        of fifty-one is 0.078, not 1.0. A response at 1.0 would mean the
+        denominator was the tracks supplied."""
+        body = db_client.get(self.URL).get_json()
+        assert body['nominal_members'] == 51
+        assert body['tracked_members'] == 4
+        assert body['peak'] == round(4 / 51, 4)
+
+    def test_a_larger_radius_covers_more_cells(self, db_client):
+        small = db_client.get(f'{self.URL}&radius_km=60').get_json()
+        large = db_client.get(f'{self.URL}&radius_km=400').get_json()
+        assert large['cells'] > small['cells']
+
+    def test_the_lead_window_is_honoured(self, db_client):
+        narrow = db_client.get(f'{self.URL}&hour_min=0&hour_max=0').get_json()
+        wide = db_client.get(f'{self.URL}&hour_min=0&hour_max=24').get_json()
+        assert wide['cells'] > narrow['cells']
+
+    def test_a_window_with_no_track_says_so_rather_than_returning_zeros(self, db_client):
+        body = db_client.get(f'{self.URL}&hour_min=900&hour_max=999').get_json()
+        assert body['points'] == []
+        assert 'reason' in body
+
+    def test_a_silly_radius_is_refused(self, db_client):
+        assert db_client.get(f'{self.URL}&radius_km=0').status_code == 400
+        assert db_client.get(f'{self.URL}&radius_km=99999').status_code == 400
+        assert db_client.get(f'{self.URL}&radius_km=abc').status_code == 400
+
+    def test_an_unknown_storm_is_404(self, db_client):
+        r = db_client.get('/api/cyclone/strike-probability?storm=NOPE&centre=ecmf')
+        assert r.status_code == 404

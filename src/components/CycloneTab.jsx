@@ -20,7 +20,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
 
-import { fetchCyclones, fetchCycloneTracks, unwrapTrack, referenceLongitude } from '../api/cyclone';
+import { fetchCyclones, fetchCycloneTracks, fetchStrikeProbability,
+         unwrapTrack, referenceLongitude, strikeColour } from '../api/cyclone';
 import { t } from '../theme';
 import { ESRI_CANVAS_BASE } from '../constants';
 
@@ -53,6 +54,12 @@ export function CycloneTab({ active }) {
   // Without this the two race, and whichever loses leaves an empty map with
   // a populated header — which is exactly how this first rendered.
   const [mapReady, setMapReady] = useState(false);
+  // Feature 2: the derived field. Off by default — the tracks are the primary
+  // reading and the field is the summary of them, so it is opt-in rather than
+  // something a reader has to dismiss.
+  const [showStrike, setShowStrike] = useState(false);
+  const [radiusKm, setRadiusKm]     = useState(120);
+  const [strike, setStrike]         = useState(null);
 
   // ── What is available ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -91,6 +98,16 @@ export function CycloneTab({ active }) {
       .catch((e) => { if (alive) { setError(e.message); setLoading(false); } });
     return () => { alive = false; };
   }, [storm, centre]);
+
+  // ── The strike-probability field ───────────────────────────────────────────
+  useEffect(() => {
+    if (!showStrike || !storm || !centre) { setStrike(null); return; }
+    let alive = true;
+    fetchStrikeProbability({ storm, centre, radiusKm })
+      .then((d) => { if (alive) setStrike(d); })
+      .catch((e) => { if (alive) setError(e.message); });
+    return () => { alive = false; };
+  }, [showStrike, storm, centre, radiusKm]);
 
   // ── The map ────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -133,6 +150,22 @@ export function CycloneTab({ active }) {
       if (line.length > 1) L.polyline(line, MEMBER_STYLE).addTo(layer);
       bounds.push(...line);
     }
+    // The field goes down first, so the tracks draw over it rather than under.
+    // A cell is drawn as a rectangle on the lattice it was computed on, not as
+    // a marker: the value describes the cell, and a dot would imply a point
+    // measurement that does not exist.
+    if (strike && strike.points) {
+      const half = 0.25;                       // the 0.5 degree analysis cell
+      for (const pt of strike.points) {
+        const lon = unwrapTrack([{ lat: pt.lat, lon: pt.lon }], ref)[0][1];
+        L.rectangle(
+          [[pt.lat - half, lon - half], [pt.lat + half, lon + half]],
+          { stroke: false, fillColor: strikeColour(pt.value),
+            fillOpacity: 1, interactive: false },
+        ).addTo(layer);
+      }
+    }
+
     const best = unwrapTrack(data.best_track || [], ref);
     if (best.length > 1) {
       L.polyline(best, BEST_CASING).addTo(layer);
@@ -140,7 +173,7 @@ export function CycloneTab({ active }) {
     }
     bounds.push(...best);
     if (bounds.length) map.fitBounds(L.latLngBounds(bounds).pad(0.15));
-  }, [data, mapReady]);
+  }, [data, strike, mapReady]);
 
   const missing = data ? data.nominal_members - data.tracked_members : 0;
 
@@ -173,6 +206,28 @@ export function CycloneTab({ active }) {
           </select>
         </label>
 
+        <label style={{ color: 'rgba(255,255,255,0.45)', fontSize: t.fontSize.micro,
+                        textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          Strike probability
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px',
+                        marginTop: '4px' }}>
+            <input type="checkbox" aria-label="Show strike probability"
+                   checked={showStrike}
+                   onChange={(e) => setShowStrike(e.target.checked)} />
+            {/* The radius is a control because it changes the answer, the same
+                bargain the threshold metrics strike. Stated beside the value,
+                never implied. */}
+            <select aria-label="Strike radius" value={radiusKm} disabled={!showStrike}
+                    onChange={(e) => setRadiusKm(Number(e.target.value))}
+                    style={{ ...selectStyle, marginTop: 0, minWidth: '110px',
+                             opacity: showStrike ? 1 : 0.4 }}>
+              {[60, 120, 200, 300].map((r) => (
+                <option key={r} value={r}>within {r} km</option>
+              ))}
+            </select>
+          </div>
+        </label>
+
         {data && (
           <div style={{ marginLeft: 'auto', textAlign: 'right',
                         color: 'rgba(255,255,255,0.8)', fontSize: t.fontSize.sm }}>
@@ -187,6 +242,19 @@ export function CycloneTab({ active }) {
                 : 'every member produced a track'}
               {' · '}init {String(data.init_time).replace('T', ' ')}
             </div>
+            {showStrike && strike && (
+              <div style={{ color: 'rgba(255,255,255,0.55)',
+                            fontSize: t.fontSize.micro, marginTop: '2px' }}>
+                peak strike probability{' '}
+                <strong>{(strike.peak * 100).toFixed(0)}%</strong>{' '}
+                within {strike.radius_km} km, of {strike.nominal_members} members
+                {/* Only worth saying when the two differ. Spelling out "of 51,
+                    not 51" reads as a mistake and buries the case where it is
+                    the whole point. */}
+                {strike.tracked_members < strike.nominal_members
+                  && ` — not ${strike.tracked_members}, which is how many drew a track`}
+              </div>
+            )}
           </div>
         )}
       </div>

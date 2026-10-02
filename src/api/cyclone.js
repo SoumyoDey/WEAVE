@@ -34,6 +34,40 @@ export const fetchCycloneTracks = ({ storm, centre, init }) => {
 };
 
 /**
+ * The strike-probability field: per cell, the fraction of the ensemble passing
+ * within `radiusKm`.
+ *
+ * `radiusKm` is passed explicitly rather than defaulted here, because it
+ * changes the answer and a caller that forgets it should be visible in the
+ * request rather than silently taking whatever the server prefers.
+ */
+export const fetchStrikeProbability = ({ storm, centre, radiusKm, hourMin, hourMax }) => {
+  const q = new URLSearchParams({ storm, centre });
+  if (radiusKm != null) q.set('radius_km', String(radiusKm));
+  if (hourMin != null) q.set('hour_min', String(hourMin));
+  if (hourMax != null) q.set('hour_max', String(hourMax));
+  return json(`${API_BASE}/cyclone/strike-probability?${q}`);
+};
+
+/**
+ * Colour for a probability in [0, 1].
+ *
+ * Sequential and perceptually ordered, and deliberately NOT one of the metric
+ * palettes in `constants.js`: those encode calibrated band edges for spread and
+ * error, and a probability has no such calibration — reusing one would imply
+ * thresholds nobody measured. Low values stay translucent so the tracks beneath
+ * remain legible, which is the point of drawing both.
+ */
+export const strikeColour = (value) => {
+  const v = Math.max(0, Math.min(1, value));
+  if (v < 0.1)  return 'rgba(80,140,255,0.18)';
+  if (v < 0.25) return 'rgba(90,190,235,0.28)';
+  if (v < 0.5)  return 'rgba(120,220,170,0.38)';
+  if (v < 0.75) return 'rgba(240,210,100,0.50)';
+  return 'rgba(240,120,70,0.62)';
+};
+
+/**
  * Rewrite a track's longitudes so it is continuous across the antimeridian.
  *
  * Leaflet draws a polyline through increasing longitude, so a step from +179 to
