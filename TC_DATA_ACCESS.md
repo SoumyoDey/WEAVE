@@ -388,9 +388,8 @@ side is more current than the forecast archive.
 ## 9. Not settled by this survey
 
 - ~~What `storm_2016_2024_{0,12,24}h/` holds.~~ **Answered below.**
-- Whether `output/` covers every storm in the XML archive or a chosen subset —
-  138 storms against 12 years of TIGGE suggests a subset, and the selection
-  criterion matters.
+- ~~Whether `output/` is complete or still generating.~~ **Answered below: it is
+  complete.** The selection *criterion* is still open.
 - ~~Whether `old/` is superseded.~~ **Answered below — it is, but one thing in
   it is not safely ignorable.**
 - Member counts per centre, beyond ECMWF's 51. `kwbc_0h_BERYL.csv` has 767 rows
@@ -486,6 +485,53 @@ best-track extract — `old/storm.csv` is MICHAEL (2018-10-06, Caribbean, 8
 columns); the current one is **MELISSA only**, 2025-10-21 to 2025-11-01, in the
 full IBTrACS column set. A loader that reads it as a catalogue of available
 storms will be wrong about every one of them.
+
+### `output/` is complete, not unfinished — checked 2026-10-02
+
+The earlier note left two readings open: still being generated, or deliberately
+narrowed. **It is narrowed.** Four independent checks, and the third is on its
+own conclusive:
+
+1. **One run, 59 minutes, four months ago.** Every one of the 1,181 files was
+   written on 2026-06-03 between 13:23 and 14:22, in three clean per-centre
+   batches — `kwbc` 13:23–13:25, `ecmf` 13:52–14:01, `egrr` 14:19–14:22. All
+   three centres present, each ending cleanly. Nothing has touched the directory
+   since. The last file written is `egrr_72h_YUTU.csv`: the alphabetically last
+   storm at the deepest offset, which is where a *finished* loop ends and not
+   where an interrupted one does.
+2. **No in-progress markers** anywhere in the tree — no `.tmp`, `.part`,
+   `.lock`, no editor swap files — and **no running jobs** for `wang.shuoc`.
+3. **`output/` contains storms the April set does not**: ETA, IAN, IDA,
+   KYAAR_KYARR, LAN. **A partial run cannot add storms.** This is the check that
+   settles it, and it also means neither set is a subset of the other in either
+   direction.
+4. **The 29 ecmf storms absent at 0 h are absent at all four offsets** — 0 of 29
+   appear at 24, 48 or 72 h. A storm-level exclusion, not a loop that stopped:
+   an interrupted job drops whatever follows a point in its order, it does not
+   drop the same 29 names consistently four times.
+
+**So the question is no longer "is it finished" but "what was it selecting
+for".** That is not visible from the basin mix, which rules out the obvious
+guess — the loss is broad and roughly proportional, and the Atlantic actually
+gains one:
+
+| basin | Apr staged | `output/` |
+|---|---|---|
+| Northwest Pacific | 53 | 48 |
+| Southwest Pacific | 43 | 32 |
+| Northeast Pacific | 35 | 28 |
+| North Atlantic | 20 | **21** |
+| North Indian | 4 | 2 |
+
+**A hypothesis that fits but is not verified:** the June run extends to +144 h
+where April reached +72 h, so storms whose forecasts do not persist that far
+would drop out — which would thin every basin rather than one, and is consistent
+with the added storms (ETA, IAN, IDA) being long-lived major systems. Plausible,
+unconfirmed, and cheap for `wang.shuoc` to confirm or deny.
+
+One naming artifact for whoever writes the loader: `KYAAR_KYARR` carries an
+underscore inside the storm name, so a filename parsed on `_` will split it
+wrongly.
 
 ## Open questions for whoever has context
 
