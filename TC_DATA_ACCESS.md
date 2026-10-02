@@ -387,8 +387,7 @@ side is more current than the forecast archive.
 
 ## 9. Not settled by this survey
 
-- What `storm_2016_2024_{0,12,24}h/` under each centre holds, and how it relates
-  to `output/`.
+- ~~What `storm_2016_2024_{0,12,24}h/` holds.~~ **Answered below.**
 - Whether `output/` covers every storm in the XML archive or a chosen subset —
   138 storms against 12 years of TIGGE suggests a subset, and the selection
   criterion matters.
@@ -402,6 +401,39 @@ side is more current than the forecast archive.
   instead of assuming them.
 
 ---
+
+### `storm_2016_2024_*h/` versus `output/` — two generations, not two stages
+
+Checked 2026-10-02. `<centre>/storm_2016_2024_<offset>h/<STORM>.csv` holds the
+same product as `output/`, per storm rather than per storm-and-centre, with two
+extra pandas index columns (`Unnamed: 0`, `index`). It is **not** a pre-join
+intermediate: every row already carries its best-track match, in both.
+
+They are the same pipeline run twice, and they differ in three ways at once:
+
+| | `storm_2016_2024_*h/` | `output/` |
+|---|---|---|
+| modified | 2026-04-06 | **2026-06-03** |
+| initialisation offsets | 0, 12, 24 h | **0, 24, 48, 72 h** |
+| forecast lead reaches | +72 h (13 steps) | **+144 h (25 steps)** |
+| storms (ecmf) | **155** | 131 |
+| size | 21 / 13 / 11 MB | 197 MB total |
+
+`ecmf/storm_2016_2024_0h/ALCIDE.csv` is 51 members × 13 lead times = 663 rows;
+`output/ecmf_0h_ALCIDE.csv` is 51 members × 25 lead times = 1,250 rows (not
+1,275 — **one member's track is short**, so it is not a perfect rectangle and
+nothing should assume it is).
+
+**So `output/` is newer and goes twice as far in lead time, while the older set
+covers ~20% more storms and a different offset grid.** Neither is a superset.
+Twenty-nine storms in the older ecmf set — AMPHAN, HELENE, HILARY, KENNETH,
+MOCHA, NORU and others — have no `output/` counterpart at 0 h.
+
+**That is a decision, not a detail**, and it is the wrong kind to settle by
+guessing: either `output/` is still being generated, or it was deliberately
+narrowed and something disqualified those storms. Both readings fit the files.
+Ask `wang.shuoc` — this is the same question as "who produced `output/`" below,
+and now it has a concrete form.
 
 ## Open questions for whoever has context
 
