@@ -307,6 +307,30 @@ On load, recompute and report the difference, exactly as
   value and ours disagree only for storms near 180°, that is the cause, and it
   is worth knowing which of the two is right.
 
+**Run 2026-10-02 (`Data/compare_cyclone_derived.py`), and the trap was real.**
+
+| column | verdict |
+|---|---|
+| `distance_km` | **reproduced exactly** — haversine, R = 6371.0 km, median \|diff\| 2×10⁻¹³ km |
+| `mean_lat` | reproduced exactly |
+| `mean_lon` | **arithmetic, not circular** — matches theirs to 0° everywhere, including across the antimeridian |
+| `dist_to_ens_mean_km` | follows `mean_lon`, so wrong wherever it is |
+
+So `distance_km` can be trusted and we now know precisely why. **`mean_lon` and
+`dist_to_ens_mean_km` cannot**, for storms whose members straddle ±180°: the
+arithmetic mean of +179 and −179 is 0, the wrong side of the planet. Measured
+against a circular mean on the affected rows — median **65°**, max **213°** of
+longitude, which carries `dist_to_ens_mean_km` to a maximum difference of
+**16,309 km**.
+
+**63 of 1,181 files, 15 storms**: BOLAVEN, DONNA, DORA, FENGSHEN, GITA,
+HAGIBIS, HALONG, HAROLD, HECTOR, KEVIN, NIRAN, TRAMI, ULA, WINSTON, YASA.
+
+This is why §7 exists and why the loader does not import these four columns.
+Recomputing the ensemble mean ourselves, circularly, costs nothing; adopting
+theirs would have put the mean track of fifteen Pacific storms in the wrong
+ocean, and nothing downstream would have said so.
+
 There is also a column `T` whose meaning nobody has established. **Do not load a
 column nobody can name.**
 
