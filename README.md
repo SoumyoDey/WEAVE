@@ -1,6 +1,6 @@
 # WEAVE — Weather Ensemble Analysis & Visualization Environment
 
-WEAVE is an interactive web application for exploring, verifying, and comparing probabilistic weather forecasts from multiple ensemble models. It combines a Leaflet map with three analysis panels — Visualization, Analysis, and Comparison — and a Flask/PostgreSQL backend that serves regridded forecast and observation data.
+WEAVE is an interactive web application for exploring, verifying, and comparing probabilistic weather forecasts from multiple ensemble models. It combines a Leaflet map with four analysis panels — Visualization, Analysis, Comparison, and Cyclones — and a Flask/PostgreSQL backend that serves regridded forecast and observation data.
 
 ---
 
@@ -85,6 +85,35 @@ These matter for reading any cross-model number, and are the subject of `METRICS
 - **Observations are averaged over the same window a forecast record spans**, and a partially observed window is rejected rather than averaged — so lead times past the end of the observation record return no score instead of a misleading one.
 - **FSS needs more than one cell.** With a single cell an event fraction can only be 0 or 1, so FSS degenerates into CSI; it is reported as `null` and the UI says why.
 
+### 🌀 Cyclones Tab
+
+Ensemble tropical-cyclone tracks, on their own map. A different shape from the
+rest of the app — not a field on the analysis grid but one polyline per ensemble
+member — so it has its own map, its own API client and its own tables, and shares
+no data with the other three tabs.
+
+- **Spaghetti tracks** — every member's forecast track for one storm from one
+  centre, drawn at once, with the best track over the top
+- **Strike probability** — an optional derived field: per 0.5° cell, the fraction
+  of the ensemble passing within a chosen radius (default 120 km)
+- **Track error and spread against lead time** — error is each member against the
+  best track, spread is each member against the ensemble mean position. Both are
+  recomputed from the loaded positions rather than read from the columns shipped
+  with the source
+- **Initialisation selector** — labelled by actual `init_time`, never by the
+  source filename's hour label, which is an init *cadence* and is wrong by a
+  factor of two for ECMWF
+
+**The denominator is always the ensemble size, never the number of tracks
+drawn.** A member that forecast no cyclone contributes a *no strike*, not an
+absence, so the header reads "23 of 36 members tracked this storm" and every
+probability divides by 36. Dividing by 23 would report certainty where a third
+of the ensemble forecast no storm at all.
+
+Data is loaded separately and the tab is empty without it — see `DEPLOY.md` §2c.
+`TC_DATA_ACCESS.md` documents the source archive and `TC_TAB_DESIGN.md` the
+design decisions.
+
 ---
 
 ## Spatial Verification Metrics
@@ -149,7 +178,8 @@ WEAVE_v3/
 │   │   ├── forecastApi.js        # Forecast data, point timeseries, spread-skill
 │   │   ├── spatialApi.js         # Spatial metric point fetch + Cartopy plot fetch
 │   │   ├── analysisApi.js        # Categorical metrics (point + region)
-│   │   └── comparisonApi.js      # Multi-model comparison endpoints
+│   │   ├── comparisonApi.js      # Multi-model comparison endpoints
+│   │   └── cyclone.js            # Cyclone tracks, strike probability, error-by-lead
 │   ├── layers/
 │   │   ├── idwLayer.js           # IDW interpolation renderer
 │   │   ├── windLayer.js          # Wind arrows & streamlines
@@ -162,6 +192,7 @@ WEAVE_v3/
 │   │   ├── MetricPanel.jsx       # Live spatial metric overlay + metric selector
 │   │   ├── AnalysisTab.jsx       # Point & Region analysis (cone, SSR, verification, maps)
 │   │   ├── ComparisonTab.jsx     # Multi-model time-series, skill, spatial agreement
+│   │   ├── CycloneTab.jsx        # Ensemble cyclone tracks, own Leaflet map
 │   │   ├── SelectionToolbar.jsx  # Rectangle/polygon region draw tool
 │   │   ├── OnboardingTour.jsx    # First-run coach-mark tour
 │   │   ├── AboutModal.jsx
@@ -179,6 +210,8 @@ WEAVE_v3/
 └── Data/
     ├── flask_api.py              # Flask REST API (all endpoints)
     ├── metrics.py                # The science, as pure functions — units, windows, scores
+    ├── cyclone_metrics.py        # Strike probability and track error — pure, no DB
+    ├── load_cyclone_tracks.py    # CXML tracker CSVs → the three cyclone tables
     ├── schema.sql                # PostgreSQL schema
     ├── add_indexes.sql           # Index migrations
     ├── requirements.txt          # Python dependencies
@@ -210,6 +243,14 @@ WEAVE_v3/
 | `GET` | `/api/observation-coverage` | How far the truth reaches — `?model=&variable=` → `{init_time, obs_end, record_end_lead_hours, last_verifiable_hour, window_hours}` |
 | `GET` | `/api/health` | Health check — database, pool headroom, storage headroom, export convention, and what this worker has served |
 | `GET` | `/api/ready` | Readiness probe — pooled `SELECT 1`, 200 or 503. Point a load balancer here, not at `/api/health` |
+
+### Tropical cyclones
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/cyclones` | Storms and runs available — `?basin=` optional |
+| `GET` | `/api/cyclone/tracks` | Every member's track plus the best track — `?storm=&centre=&init=` |
+| `GET` | `/api/cyclone/strike-probability` | Fraction of the ensemble within `radius_km` per cell — `?storm=&centre=&init=&radius_km=&hour_min=&hour_max=` |
+| `GET` | `/api/cyclone/error-by-lead` | Track error and ensemble spread against lead — `?storm=&centre=&init=` |
 
 ### Spatial metrics
 | Method | Endpoint | Description |

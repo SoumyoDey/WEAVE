@@ -104,6 +104,67 @@ python Data/regrid_members.py --verify-grid --hours 0   # coordinates land on th
 Both counts must be non-zero. If `regridded_observation` is empty, every metric
 panel will be correctly-but-confusingly blank.
 
+### 2c. Cyclone tracks — optional, and independent of everything above
+
+**Skip this and the app still works**; the Cyclones tab is simply empty. The
+cyclone tables share nothing with the forecast/observation tables — different
+source, different grid (none), different loader — so 2c can be run before, after
+or never, and a failure here cannot affect the other three tabs.
+
+The source is **not** the forecast archive. It is a separate set of CXML tracker
+outputs on Explorer — **1,181 files** named `<centre>_<label>h_<STORM>.csv`,
+several per storm and centre, one per initialisation cadence:
+
+```bash
+cd Data
+python load_cyclone_tracks.py --source /projects/k.aggarwal/Shuochen/output --dry-run
+python load_cyclone_tracks.py --source /projects/k.aggarwal/Shuochen/output --skip-bad
+```
+
+Run `--dry-run` first: it reads, validates and reports without writing, and the
+refusals below are worth seeing before a commit rather than after one. The
+loader creates its own three tables, so nothing needs adding to `schema.sql`.
+
+**`--skip-bad` is required for this archive and is not a shrug.** Without it a
+single self-contradicting file stops the whole load, which is the right default.
+One file of 1,181 genuinely is contradictory — `egrr_72h_GITA.csv` carries two
+initialisations in one file — and `--skip-bad` names and counts every file it
+skips at the end. Read that list; it is the only record that the load is
+incomplete.
+
+**Do not point `--source` at `storm_2016_2024_*`.** That is an older generation
+of the same product, scored against a **different IBTrACS vintage** — the two
+disagree for 24 of 138 storms, because IBTrACS revises past storms
+retrospectively. Mixing them gives a table where some storms are scored against
+one best track and some against another, and every track error is then wrong by
+whatever the revision moved. The loader refuses to load a second generation into
+a non-empty registry; if you genuinely want to switch generations, clear the
+three cyclone tables first. `TC_DATA_ACCESS.md` §9 has the evidence.
+
+Verify:
+```bash
+psql -d weave_weather -c "SELECT count(*) FROM cyclone_track_member;"
+psql -d weave_weather -c "SELECT DISTINCT source_generation FROM cyclone_run_registry;"
+```
+
+Measured on the current load: **992,730 track rows, 5,379 best-track rows and
+1,180 runs** over 138 storms and three centres (ECMWF-ENS 339 runs, GEFS 410,
+MOGREPS 431), initialisations from 2016-01-01 to 2024-12-11. **201 MB** in all —
+negligible beside the 123 GB of forecast data, so §9's storage arithmetic does
+not change. `source_generation` must come back as exactly one value, `output`.
+
+**Two counts that do not match, and the smaller one is the table.** The loader
+reports 993,255 rows prepared; the table holds 992,730. The 525-row difference
+is `ON CONFLICT DO NOTHING` — the uniqueness constraint is
+`(centre, storm_name, init_time, member_id, lead_hours)` and excludes
+`cyclone_id`, so where a member tracked two genesis variants at the same lead,
+one row was dropped. Members disagreeing about genesis is real in this data
+(MOGREPS reports up to 23 variants for one storm), so these are **not
+necessarily duplicates**, and whether they were has not been checked against the
+source. It is 0.05% of the rows and affects no number currently on screen, but
+do not quote 993,255 as the table count, and see `NEXT_STEPS.md` §37 before
+relying on per-member track continuity.
+
 ---
 
 ## 3. Backend (Flask API)
@@ -292,6 +353,34 @@ Analysis charts, and run a Comparison. Check the browser console is free of
 errors — and free of requests to any origin other than this one, which is the
 frontend half of the same check.
 
+**If 2c was run, check the Cyclones tab too** — and check it the way the one
+defect found in it was found, which was not by looking at the map:
+
+```bash
+curl -su reviewer -f "$BASE/api/cyclones" | python3 -c \
+  'import json,sys; r=json.load(sys.stdin)["runs"]; print(len(r), "runs")'
+# 1180 runs on the current load; 0 means 2c was skipped, which is allowed
+```
+
+Then open the tab, switch storm and centre a few times, and **watch the network
+panel, not the map**. There should be exactly one round of requests per change
+and no 404s. The tab shipped with a defect where every switch first requested
+the new storm against the previous storm's initialisation — a pair that cannot
+exist — and the component's own error guards meant the 404 was never displayed.
+The map looked perfect throughout. A 404 here means that regression is back.
+
+Three things on the tab are worth reading rather than glancing at, because each
+is a number that would be wrong in a plausible-looking way:
+
+- The header says *"N of M members tracked this storm"*. **M is the ensemble
+  size, not N** — a member that forecast no cyclone is a result, not a gap, and
+  dividing by N would inflate every strike probability. On a MOGREPS storm the
+  two numbers usually differ, which is the easiest place to see it is right.
+- A storm near the dateline (try YASA) must draw as **one** continuous fan, not
+  two clusters on opposite edges of a world-zoomed map.
+- The error/spread chart's caption states how far the member count falls by
+  +144 h. If it says the count is flat across all leads, something is wrong.
+
 Then check the storage headroom, which says whether another run still fits
 before anyone starts a 55 GB ingest (`DATA_EXPANSION_DESIGN.md` phase 5):
 
@@ -317,7 +406,9 @@ rebuilt: the three converters (`convert_aifs.py`, `convert_gefs.py`,
 `convert_ukmo.py`) produce the forecast JSON, `load_to_postgres.py` /
 `load_wind.py` load it, `regrid_members.py` regrids, and
 `load_observations.py` + `regrid_observations.py` build the truth field from the
-sources on Explorer (`NEXT_STEPS.md` §11 has the paths).
+sources on Explorer (`NEXT_STEPS.md` §11 has the paths). The cyclone tables are
+rebuilt separately and cheaply by `load_cyclone_tracks.py` (§2c) — minutes, not
+hours, and from a source that needs no conversion step.
 
 Budget realistically. Measured 2026-10-01: **one model's wind at one
 initialisation — two components, 155 lead times, 42M rows — took 42 minutes to
@@ -336,6 +427,11 @@ large and has to go somewhere that is not the same disk, and **this has not been
 exercised here** — an untested restore is a plan, not a backup. If it matters,
 run it once against a scratch database and record how long it took and how big
 the file was, in this section.
+
+**The cyclone data is the cheap case.** 201 MB from CSVs that need no
+conversion, so it is always faster to re-run §2c than to restore it. The one
+thing a restore would preserve and a reload would not is the record of which
+files were skipped — `--skip-bad` prints that list and nothing stores it.
 
 **What is cheap to protect and easy to overlook:** the schema, the loaders and
 the converters are all in git, so the *code* half needs no backup. What is not in

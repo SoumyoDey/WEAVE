@@ -3644,7 +3644,7 @@ may be different from ours, and the dates may be different too.*
 
 ### Status — built, and both provenance questions closed
 
-A fourth tab, five views, **993,255 track rows over 1,180 runs** from three
+A fourth tab, five views, **992,730 track rows over 1,180 runs** from three
 centres. `TC_DATA_ACCESS.md` is the survey and `TC_TAB_DESIGN.md` the design;
 both carry what the build found that the design had not.
 
@@ -3666,6 +3666,34 @@ after the instruction to skip emailing `wang.shuoc`):
   dropped were dropped for not reaching six days, not for being wrong.
 
 Only `T`'s meaning is still unknown, and nothing reads it.
+
+**525 rows were dropped by `ON CONFLICT DO NOTHING`, and nobody noticed
+until the deployment docs needed a row count.** The loader reports 993,255 rows
+prepared; `cyclone_track_member` holds **992,730**. Every document written
+during the build quotes the first number as though it were the table.
+
+The cause is the uniqueness constraint,
+`(centre, storm_name, init_time, member_id, lead_hours)` — it excludes
+`cyclone_id`. Where one member tracked two genesis variants at the same lead,
+the second row collided and was discarded. **These are not necessarily
+duplicates**: members disagreeing about genesis is a real and documented
+property of this data, and MOGREPS reports up to 23 variants for a single
+storm, so some of the 525 may be distinct positions for distinct candidate
+cyclones. Which it is has not been checked against the source CSVs.
+
+It is 0.05% of the rows and changes no number currently on screen — every view
+selects one track per member and would have to choose between variants anyway.
+But the constraint encodes a decision ("one member has one position per lead")
+that was never stated, and `ON CONFLICT DO NOTHING` made it silent. The
+honest options are to widen the constraint to include `cyclone_id` and let the
+views choose, or to keep it and have the loader *count and report* the
+collisions the way it already counts positionless rows. Either is better than
+the current state, which is a number in six documents that does not match the
+table.
+
+Worth noting how it surfaced: not from a test, not from the app, but from
+running `count(*)` because a deployment document needed a figure someone might
+verify. **The counts in a document are a test, if anyone ever runs them.**
 
 **One defect found by re-opening the tab, 2026-10-02.** Every storm or centre
 change fired a request for the new storm with the *previous* storm's

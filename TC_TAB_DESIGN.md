@@ -443,7 +443,9 @@ is ever wanted, it is one question — but nothing waits on it.
 4. Confirm track error grows with lead, per centre. That is the provenance gate.
 5. ~~The spaghetti map and the denominator.~~ **BUILT 2026-10-02.**
    `/api/cyclones` and `/api/cyclone/tracks`, `src/components/CycloneTab.jsx`,
-   a fourth tab, and 993,255 track rows over 1,180 runs loaded from `output/`.
+   a fourth tab, and 992,730 track rows over 1,180 runs loaded from `output/`
+   (the loader prepares 993,255; 525 collide on a constraint that excludes
+   `cyclone_id` — `NEXT_STEPS.md` §37).
 
    Two things the build found that no amount of design would have:
 
