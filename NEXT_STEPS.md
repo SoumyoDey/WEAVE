@@ -3745,9 +3745,18 @@ often a spread or quantile field rather than 50 overplotted ones.
    `regions_config.json`) is how §11 confirmed the ERA5 bounds instead of
    assuming them.
 2. Verify provenance with MAE-against-lead before trusting a single number.
-3. Then a design note — probably its own document, as
-   `DATA_EXPANSION_DESIGN.md` was — covering the track table, the endpoint
-   shapes, and the chosen answer to the 84,000-point question.
+3. ~~Then a design note.~~ **`TC_TAB_DESIGN.md`, written 2026-10-02.** Tables,
+   normalisation, the verification gates, and the scope boundaries — decided
+   from the files where the files decide them, and named as open decisions with
+   owners where they do not.
+
+   **It does not decide feature 2, deliberately.** "All individual model runs as
+   semi-transparent layers" has three readings — member gridded fields, member
+   tracks, or a field *derived* from the tracks — and they differ by two orders
+   of magnitude in cost. There are no gridded fields in the folder at all, so
+   the first is a fresh ingest against §27's retention threshold; the third
+   computes from 197 MB already on disk. That choice belongs to whoever asked
+   for the feature, and it is the only thing blocking design.
 4. Then the tab. That part is cheap: the tab bar is a literal array in
    `src/App.js` (`[['visualization', …], ['analysis', …], ['comparison', …]]`)
    and adding a fourth entry plus a component is the established pattern.
