@@ -4,6 +4,12 @@ const generateHours = () => {
   for (let h = 0; h <= 360; h += 6) hours.push(h);
   return hours;
 };
+// The basemap both map-bearing tabs draw on. Here rather than in `App.js`
+// because `CycloneTab` needs it too, and importing it from `App.js` — which
+// imports `CycloneTab` — would be a cycle.
+export const ESRI_CANVAS_BASE =
+  'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas';
+
 export const ALL_HOURS = generateHours();
 
 export const MODELS = {

@@ -3015,6 +3015,138 @@ def get_variables():
         return_db_connection(conn)
 
 
+# ── Tropical cyclone tracks ───────────────────────────────────────────────────
+# NEXT_STEPS.md §37, TC_TAB_DESIGN.md. A different shape from everything else
+# here: not a field on the 0.5° lattice but an ordered polyline per ensemble
+# member, so these get their own tables and their own endpoints rather than a
+# variant of the forecast ones.
+
+@app.route('/api/cyclones', methods=['GET'])
+def list_cyclones():
+    """What storms are loaded — the `/api/runs` of the cyclone tab.
+
+    One row per (storm, centre, initialisation), because that is what a user
+    picks. `?basin=NA` filters to the canonical basin; **`basin IS NULL` is not
+    a missing value**, it means the source was coarser than the vocabulary —
+    MOGREPS writes `SH` where NCEP writes `SI` or `SP` — so a basin filter
+    deliberately excludes rather than guessing (TC_DATA_ACCESS.md).
+    """
+    basin = request.args.get('basin')
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cursor.execute(f"""
+            SELECT storm_name, centre, system, init_time, basin, basin_source,
+                   nominal_members, tracked_members, genesis_variants,
+                   lead_min, lead_max
+            FROM cyclone_run_registry
+            {'WHERE basin = %s' if basin else ''}
+            ORDER BY init_time DESC, storm_name, centre
+        """, (basin,) if basin else ())
+        rows = [{**r, 'init_time': r['init_time'].isoformat()}
+                for r in cursor.fetchall()]
+        storms = []
+        for r in rows:
+            if r['storm_name'] not in storms:
+                storms.append(r['storm_name'])
+        return jsonify({'storms': storms, 'runs': rows})
+    finally:
+        cursor.close()
+        return_db_connection(conn)
+
+
+@app.route('/api/cyclone/tracks', methods=['GET'])
+def cyclone_tracks():
+    """Every member's track for one storm, from one centre, at one init.
+
+    The spaghetti map. Returns the members as separate polylines rather than a
+    flat point list, because the client draws one line per member and
+    regrouping 1,275 points by member in the browser is work the database has
+    already done by sorting.
+
+    **`nominal_members` is returned and is not decoration.** A member that
+    forecast no cyclone has no track, so `len(members)` is the number that
+    *developed* a storm, not the number that ran — ECMWF files carry anywhere
+    from 28 to 51. Showing 28 tracks and letting a reader take that for the
+    ensemble understates the spread in the direction that matters most, which
+    is whether the storm happens at all. The UI is expected to print both.
+    """
+    storm  = request.args.get('storm')
+    centre = request.args.get('centre')
+    init   = request.args.get('init')
+    if not storm or not centre:
+        return jsonify({'error': 'storm and centre are required'}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cursor.execute("""
+            SELECT storm_name, centre, system, init_time, basin, basin_source,
+                   nominal_members, tracked_members, genesis_variants
+            FROM cyclone_run_registry
+            WHERE storm_name = %s AND centre = %s
+              AND (%s::timestamp IS NULL OR init_time = %s::timestamp)
+            ORDER BY init_time DESC LIMIT 1
+        """, (storm, centre, init, init))
+        run = cursor.fetchone()
+        if run is None:
+            return jsonify({'error': f'no run for {storm} from {centre}'}), 404
+
+        cursor.execute("""
+            SELECT member_id, lead_hours, valid_time, latitude, longitude,
+                   pressure_hpa, wind_ms
+            FROM cyclone_track_member
+            WHERE storm_name = %s AND centre = %s AND init_time = %s
+            ORDER BY member_id, lead_hours
+        """, (storm, centre, run['init_time']))
+        members = {}
+        for r in cursor.fetchall():
+            members.setdefault(r['member_id'], []).append({
+                'lead': r['lead_hours'],
+                'valid_time': r['valid_time'].isoformat(),
+                'lat': r['latitude'], 'lon': r['longitude'],
+                'pressure_hpa': r['pressure_hpa'], 'wind_ms': r['wind_ms'],
+            })
+
+        # The observed track over the same window, so the map can show what
+        # actually happened beside what was forecast.
+        cursor.execute("""
+            SELECT valid_time, latitude, longitude, wmo_wind, wmo_pressure, nature
+            FROM cyclone_best_track
+            WHERE storm_name = %s
+              AND valid_time BETWEEN
+                  (SELECT min(valid_time) FROM cyclone_track_member
+                    WHERE storm_name=%s AND centre=%s AND init_time=%s)
+              AND (SELECT max(valid_time) FROM cyclone_track_member
+                    WHERE storm_name=%s AND centre=%s AND init_time=%s)
+            ORDER BY valid_time
+        """, (storm, storm, centre, run['init_time'],
+              storm, centre, run['init_time']))
+        best = [{'valid_time': r['valid_time'].isoformat(),
+                 'lat': r['latitude'], 'lon': r['longitude'],
+                 'wind_ms': r['wmo_wind'], 'pressure_hpa': r['wmo_pressure'],
+                 'nature': r['nature']} for r in cursor.fetchall()]
+
+        return jsonify({
+            'storm':   run['storm_name'],
+            'centre':  run['centre'],
+            'system':  run['system'],
+            'init_time': run['init_time'].isoformat(),
+            'basin':   run['basin'],
+            'basin_source': run['basin_source'],
+            # Both counts, always. See the docstring.
+            'nominal_members': run['nominal_members'],
+            'tracked_members': run['tracked_members'],
+            'genesis_variants': run['genesis_variants'],
+            'members': [{'member_id': m, 'points': pts}
+                        for m, pts in sorted(members.items())],
+            'best_track': best,
+        })
+    finally:
+        cursor.close()
+        return_db_connection(conn)
+
+
 @app.route('/api/runs', methods=['GET'])
 def get_runs():
     """What forecast data is actually loaded, per model, variable and run.

@@ -330,11 +330,18 @@ def read_file(path):
                           f'SYSTEM_OF_CENTRE rather than guessing its system')
     system = SYSTEM_OF_CENTRE[centre]
 
-    tracks, best = [], {}
+    tracks, best, positionless = [], {}, 0
     with open(path, newline='') as fh:
         for row in csv.DictReader(fh):
             valid = datetime.strptime(row['time'].strip(), '%Y-%m-%d %H:%M:%S')
             lead = int(float(row['lead_time']))
+            # A point with only one coordinate is not a position. Six rows in
+            # 994,161 are like this, both files EMERAUDE — dropped rather than
+            # stored as a NULL that every consumer would then have to guard, and
+            # counted so the drop is reported rather than silent.
+            if _f(row['lat']) is None or _f(row['lon']) is None:
+                positionless += 1
+                continue
             tracks.append({
                 'member_id':    int(float(row['member_id'])),
                 'cyclone_id':   row['cyclone_id'].strip(),
@@ -391,11 +398,12 @@ def read_file(path):
         'source_label_hours': int(match.group('label')),
         'source_cycles': cycles.pop() if len(cycles) == 1 else None,
         'source_generation': 'output',
+        'positionless_rows': positionless,
     }
     return registry, tracks, best
 
 
-def load(conn, source, storms=None, dry_run=False):
+def load(conn, source, storms=None, dry_run=False, skip_bad=False):
     paths = sorted(
         os.path.join(source, f) for f in os.listdir(source)
         if f.endswith('.csv') and FILENAME.match(f)
@@ -405,9 +413,19 @@ def load(conn, source, storms=None, dry_run=False):
                           f'<centre>_<label>h_<STORM>.csv')
 
     all_tracks, all_registry, best_by_storm = [], [], defaultdict(dict)
-    short, conflicts = [], []
+    short, conflicts, skipped = [], [], []
     for path in paths:
-        registry, tracks, best = read_file(path)
+        try:
+            registry, tracks, best = read_file(path)
+        except SourceError as e:
+            # Without --skip-bad a single contradiction stops the load, which is
+            # the right default: a partial ingest nobody was told about is how
+            # §24's "fixed" runs stayed broken. With it, every skip is named and
+            # counted at the end — loudly, never silently.
+            if not skip_bad:
+                raise
+            skipped.append((os.path.basename(path), str(e)))
+            continue
         all_registry.append(registry)
         for t in tracks:
             all_tracks.append((
@@ -449,6 +467,19 @@ def load(conn, source, storms=None, dry_run=False):
               f"{worst['tracked_members']}/{worst['nominal_members']} members — "
               f"the other {worst['nominal_members'] - worst['tracked_members']} "
               f"forecast no cyclone, which is a result, not a gap")
+
+    dropped = sum(r['positionless_rows'] for r in all_registry)
+    if dropped:
+        where = sorted({r['storm_name'] for r in all_registry
+                        if r['positionless_rows']})
+        print(f'  dropped {dropped} row(s) with only one coordinate, in: '
+              f'{", ".join(where)}')
+
+    if skipped:
+        print(f'\n  SKIPPED {len(skipped)} file(s) — loaded data is incomplete '
+              f'and these are why:')
+        for name, why in skipped:
+            print(f'    {name}: {why}')
 
     if dry_run:
         print('\n  --dry-run: nothing written')
@@ -498,6 +529,9 @@ def main():
     ap.add_argument('--storms', help='comma-separated storm names, for a subset')
     ap.add_argument('--dry-run', action='store_true',
                     help='read, validate and report; write nothing')
+    ap.add_argument('--skip-bad', action='store_true',
+                    help='skip files that contradict themselves, naming each; '
+                         'without this one contradiction stops the whole load')
     args = ap.parse_args()
 
     if not os.path.isdir(args.source):
@@ -506,7 +540,8 @@ def main():
 
     conn = None if args.dry_run else psycopg2.connect(**DB_CONFIG)
     try:
-        load(conn, args.source, storms=storms, dry_run=args.dry_run)
+        load(conn, args.source, storms=storms, dry_run=args.dry_run,
+             skip_bad=args.skip_bad)
     except SourceError as e:
         # Refused, not crashed: the message names the file and the contradiction
         # so it can be checked against the source rather than guessed at.

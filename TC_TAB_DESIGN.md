@@ -427,7 +427,31 @@ blocked by the open provenance questions either.**
 3. Recompute the derived columns and report the difference (§7). **Do not
    proceed past a disagreement that has no explanation.**
 4. Confirm track error grows with lead, per centre. That is the provenance gate.
-5. The spaghetti map and the denominator. This is the whole of feature 1.
+5. ~~The spaghetti map and the denominator.~~ **BUILT 2026-10-02.**
+   `/api/cyclones` and `/api/cyclone/tracks`, `src/components/CycloneTab.jsx`,
+   a fourth tab, and 993,255 track rows over 1,180 runs loaded from `output/`.
+
+   Two things the build found that no amount of design would have:
+
+   **The antimeridian bites the renderer too, and differently.** Leaflet draws a
+   polyline through increasing longitude, so a step from +179 to −179 is drawn
+   as a 358° line back across the map. The first fix split the track into
+   segments, which removed the streak and left two further problems — looking at
+   GITA showed it as **two clusters on opposite edges of a world-zoomed map**,
+   because `fitBounds` still received points at both −180 and +180. Unwrapping
+   the longitudes past ±180 instead, every member against one shared reference,
+   fixes all three at once. Independent of the `mean_lon` defect in the source
+   data: same hazard, different layer, and neither fix helps the other.
+
+   **One file of 1,181 carries two initialisations.** `egrr_72h_GITA.csv` holds
+   18 members from 06Z and 18 from 12Z — MOGREPS's time-lagged structure — while
+   `valid_time - lead_time` reports a single init, meaning the lagged members'
+   leads were rebased. Which statement is right changes their effective lead by
+   six hours, so the loader refuses the file rather than guessing, and
+   `--skip-bad` names it. One for `wang.shuoc`.
+
+   Also: 6 rows of 994,161 carry only one coordinate, all in EMERAUDE. Dropped
+   and counted, because a latitude with no longitude is not a position.
 6. Error-against-lead and spread-against-error, reusing the existing chart
    shapes.
 7. Strike probability (§6a), with its invariant tests. It depends only on the

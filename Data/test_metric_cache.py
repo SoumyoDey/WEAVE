@@ -178,10 +178,30 @@ class TestTheArgsAllowlistIsComplete:
         # allowlist, so they are covered either way.
         named = {'metric', 'model', 'variable', 'min_lat', 'max_lat',
                  'min_lon', 'max_lon', 'init_time'}
-        missed = read - named - set(api.SPATIAL_METRIC_CACHE_ARGS)
+        # Read by endpoints that are not cached at all, so there is no key for
+        # them to be absent from. This scan is module-wide, which was a fair
+        # proxy for "the dispatchers" until the cyclone endpoints were added
+        # (NEXT_STEPS.md §37) — they serve from the track tables with no cache
+        # in the path. `test_the_uncached_endpoints_really_are_uncached` below
+        # is what stops this exemption from rotting into a hole.
+        uncached = {'storm', 'centre', 'init', 'basin'}
+        missed = read - named - uncached - set(api.SPATIAL_METRIC_CACHE_ARGS)
         assert missed == set(), (
             f'query parameters read but not in the cache key: {sorted(missed)} — '
             f'two different values would share one cached answer')
+
+    def test_the_uncached_endpoints_really_are_uncached(self):
+        """The exemption above is only safe while it is true.
+
+        If one of these ever starts caching, its parameters must join the key,
+        and the exemption would otherwise hide that — an exemption nobody
+        re-checks is the shape of defect this project keeps finding.
+        """
+        for name in ('list_cyclones', 'cyclone_tracks'):
+            body = inspect.getsource(getattr(api, name))
+            assert '_cache_get' not in body and '_cache_set' not in body, (
+                f'{name} now uses the cache, so its query parameters must be '
+                f'in the cache key and removed from the `uncached` exemption')
 
     def test_the_allowlist_is_not_vacuous(self):
         assert len(api.SPATIAL_METRIC_CACHE_ARGS) >= 5

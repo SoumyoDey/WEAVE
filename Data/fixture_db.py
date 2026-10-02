@@ -515,6 +515,11 @@ def _schema_sql():
     ddl.append(_extract('migrate_init_time.py', 'REGISTRY_DDL'))
     # The convention column, added additively by the registry module itself.
     ddl.append(run_registry.SCHEMA_ADDITIONS)
+    # The cyclone tables, from the loader that owns them — same bargain as the
+    # three above: if a column is added there and an endpoint starts reading it,
+    # the fixture picks it up without anyone remembering to.
+    import load_cyclone_tracks
+    ddl.append(load_cyclone_tracks.SCHEMA)
     return '\n'.join(ddl)
 
 
@@ -607,9 +612,75 @@ def seed(conn):
         """, list(_rows_point_obs()))
 
         _seed_native(cur)
+        _seed_cyclone(cur)
 
     conn.commit()
     return {'regridded_forecast_ens': ens, 'regridded_forecast_member': mem}
+
+
+# ── A cyclone scene ───────────────────────────────────────────────────────────
+# Two centres, one storm, one initialisation, and a deliberate asymmetry: the
+# ECMWF run has FEWER tracked members than it nominally ran, because the
+# denominator is the thing most likely to be got wrong (TC_TAB_DESIGN.md §5) and
+# a fixture where every member tracked the storm cannot catch it.
+#
+# The tracks are straight lines with a fixed per-member bearing offset, so the
+# spread grows with lead by construction and a test can state what it should be
+# rather than measuring the fixture with the code under test.
+
+CY_STORM      = 'FIXTURA'
+CY_INIT       = datetime(2025, 9, 8, 0, 0, 0)
+CY_LEADS      = [0, 6, 12, 18, 24]
+CY_START      = (25.0, -70.0)          # inside the fixture's own domain
+# (centre, system, nominal, tracked) — ecmf tracks 4 of 51, which is the case
+# the UI must report honestly rather than showing 4 as if it were the ensemble.
+CY_RUNS = [('ecmf', 'ECMWF-ENS', 51, 4), ('kwbc', 'GEFS', 31, 6)]
+CY_SPREAD_DEG_PER_LEAD = 0.01          # per member index, per lead hour
+
+
+def _seed_cyclone(cur):
+    """One storm, two centres, straight-line members and a known best track."""
+    tracks, registry = [], []
+    for centre, system, nominal, tracked in CY_RUNS:
+        for member in range(tracked):
+            for lead in CY_LEADS:
+                # Due west at 0.1 deg/h, fanned by member index so the spread is
+                # exactly (member - mid) * CY_SPREAD_DEG_PER_LEAD * lead.
+                lat = CY_START[0] + (member - (tracked - 1) / 2) * CY_SPREAD_DEG_PER_LEAD * lead
+                lon = CY_START[1] - 0.1 * lead
+                tracks.append((centre, system, CY_STORM,
+                               f'{CY_INIT:%Y%m%d%H}_250N_700W', CY_INIT, member,
+                               lead, CY_INIT + timedelta(hours=lead),
+                               round(lat, 4), round(lon, 4),
+                               1000.0 - lead, 20.0 + lead / 4, 'NA', 'AL'))
+        registry.append((centre, system, CY_STORM, CY_INIT, 'NA', 'AL', 1,
+                         nominal, tracked, min(CY_LEADS), max(CY_LEADS),
+                         0, 0, 'fixture'))
+
+    execute_values(cur, """
+        INSERT INTO cyclone_track_member
+            (centre, system, storm_name, cyclone_id, init_time, member_id,
+             lead_hours, valid_time, latitude, longitude, pressure_hpa,
+             wind_ms, basin, basin_source) VALUES %s
+    """, tracks)
+
+    # The best track runs straight down the middle, so a correct ensemble mean
+    # sits on it and every member's error is its own fan offset.
+    execute_values(cur, """
+        INSERT INTO cyclone_best_track
+            (storm_name, valid_time, latitude, longitude, nature,
+             wmo_pressure, wmo_wind) VALUES %s
+    """, [(CY_STORM, CY_INIT + timedelta(hours=h), CY_START[0],
+           round(CY_START[1] - 0.1 * h, 4), 'TS', 1000.0 - h, 20.0 + h / 4)
+          for h in CY_LEADS])
+
+    execute_values(cur, """
+        INSERT INTO cyclone_run_registry
+            (centre, system, storm_name, init_time, basin, basin_source,
+             genesis_variants, nominal_members, tracked_members, lead_min,
+             lead_max, source_label_hours, source_cycles, source_generation)
+        VALUES %s
+    """, registry)
 
 
 def _seed_native(cur):
