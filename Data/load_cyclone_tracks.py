@@ -239,18 +239,33 @@ def _normalise_longitude(lon):
     """Signed ±180.
 
     `output/` is already signed — measured, BERYL runs −94.0 to −42.9 in the
-    North Atlantic. This is a guard rather than a conversion: a 0–360 value
-    reaching here would mean the upstream processing changed, and silently
-    plotting it 180° out is the failure this prevents. The raw CXML archives
-    each use a *different* convention (TC_DATA_ACCESS.md), so the possibility is
-    real rather than theoretical.
+    North Atlantic. The raw CXML archives each use a *different* convention
+    (`TC_DATA_ACCESS.md`), so a 0–360 value arriving here is a real possibility
+    rather than a theoretical one, and it would mean the upstream processing
+    changed.
+
+    **This converts, and the conversion is unconditionally correct**, which an
+    earlier version of this docstring denied by calling it "a guard rather than
+    a conversion". It is worth being exact about why it is safe, because the
+    reasoning is less obvious than it looks: the two conventions *agree* on
+    [0, 180] — 50 means 50°E in both — and differ only above 180, where
+    subtracting 360 is exactly right. So there is no input for which guessing
+    wrong is possible.
+
+    The cost of that is the thing the old docstring wanted: a convention change
+    is **invisible** here. Eastern-hemisphere storms would pass through
+    identical, western ones would be silently corrected, and nothing would say
+    the upstream had moved. Hence `converted` — the count is reported at load
+    time, so a sudden non-zero is a signal rather than a shrug. Only a value
+    outside both conventions is refused, because that is the only value this
+    function cannot interpret.
     """
     if lon is None:
-        return None
+        return None, False
     if -180.0 <= lon <= 180.0:
-        return lon
+        return lon, False
     if 180.0 < lon <= 360.0:
-        return lon - 360.0
+        return lon - 360.0, True
     raise SourceError(f'longitude {lon} is outside any convention this '
                       f'loader recognises')
 
@@ -315,7 +330,53 @@ def _init_time_of(rows, path):
     return init, len({r['cyclone_id'] for r in rows})
 
 
-def read_file(path):
+def generation_of(source):
+    """Which generation of the product a directory holds.
+
+    Recorded rather than assumed, because **the generations are scored against
+    different best tracks** and mixing them is silent. `output/` was verified
+    against the 2026-04-27 IBTrACS download and the April `storm_2016_2024_*`
+    set against the 2025-09-17 one; the two disagree for 24 of 138 storms,
+    because IBTrACS revises past storms retrospectively (`TC_DATA_ACCESS.md`
+    §9). A run from one generation and an observation from the other produce a
+    track error that is wrong by whatever the revision moved, with nothing
+    downstream able to tell.
+
+    This used to be the literal string `'output'` on every row, which was true
+    only for as long as nobody pointed `--source` anywhere else.
+    """
+    return os.path.basename(os.path.normpath(source)) or 'unknown'
+
+
+def refuse_mixed_generation(conn, generation):
+    """Stop a load that would put two IBTrACS vintages in one table.
+
+    The in-load best-track check catches two files that disagree *in the same
+    invocation*. It cannot catch loading `output/` today and the April set
+    tomorrow: each is internally consistent, the upserts do not collide, and
+    the result is a table where some storms are scored against one vintage and
+    some against another. That is `NEXT_STEPS.md` §24's defect exactly — a
+    database quietly holding something other than what it claims — so it is
+    refused here rather than documented and hoped about.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('cyclone_run_registry')")
+        if cur.fetchone()[0] is None:
+            return
+        cur.execute('SELECT DISTINCT source_generation FROM cyclone_run_registry '
+                    'WHERE source_generation IS NOT NULL')
+        present = {row[0] for row in cur.fetchall()}
+    other = present - {generation}
+    if other:
+        raise SourceError(
+            f'the registry already holds generation(s) {sorted(other)} and this '
+            f'load is {generation!r}. These generations are scored against '
+            f'different IBTrACS vintages (24 of 138 storms differ), so track '
+            f'error computed across them would be wrong by the revision. Load '
+            f'one generation, or clear the cyclone tables first.')
+
+
+def read_file(path, generation=None):
     """One CSV -> (registry row, track rows, best-track rows). Refuses on doubt."""
     name = os.path.basename(path)
     match = FILENAME.match(name)
@@ -330,7 +391,7 @@ def read_file(path):
                           f'SYSTEM_OF_CENTRE rather than guessing its system')
     system = SYSTEM_OF_CENTRE[centre]
 
-    tracks, best, positionless = [], {}, 0
+    tracks, best, positionless, converted = [], {}, 0, 0
     with open(path, newline='') as fh:
         for row in csv.DictReader(fh):
             valid = datetime.strptime(row['time'].strip(), '%Y-%m-%d %H:%M:%S')
@@ -342,6 +403,9 @@ def read_file(path):
             if _f(row['lat']) is None or _f(row['lon']) is None:
                 positionless += 1
                 continue
+            lon, lon_converted = _normalise_longitude(_f(row['lon']))
+            obs_lon, obs_converted = _normalise_longitude(_f(row['LON']))
+            converted += int(lon_converted) + int(obs_converted)
             tracks.append({
                 'member_id':    int(float(row['member_id'])),
                 'cyclone_id':   row['cyclone_id'].strip(),
@@ -350,7 +414,7 @@ def read_file(path):
                 'valid_time':   valid,
                 'lead_hours':   lead,
                 'latitude':     _check_latitude(_f(row['lat'])),
-                'longitude':    _normalise_longitude(_f(row['lon'])),
+                'longitude':    lon,
                 'pressure_hpa': _f(row['pressure_hPa']),
                 'wind_ms':      _f(row['wind_mps']),
                 'cycles':       int(float(row['T'])) if row.get('T') else None,
@@ -361,7 +425,7 @@ def read_file(path):
             # last-write-wins: two products built against different IBTrACS
             # vintages would show up exactly here (TC_DATA_ACCESS.md §9).
             obs = (
-                _f(row['LAT']), _normalise_longitude(_f(row['LON'])),
+                _f(row['LAT']), obs_lon,
                 row['NATURE'].strip() or None, _f(row['WMO_PRES']),
                 _f(row['WMO_WIND']), _f(row['DIST2LAND']), _f(row['LANDFALL']),
                 _f(row['STORM_SPEED']), _f(row['STORM_DIR']),
@@ -397,8 +461,9 @@ def read_file(path):
         'lead_max': max(t['lead_hours'] for t in tracks),
         'source_label_hours': int(match.group('label')),
         'source_cycles': cycles.pop() if len(cycles) == 1 else None,
-        'source_generation': 'output',
+        'source_generation': generation or generation_of(os.path.dirname(path)),
         'positionless_rows': positionless,
+        'converted_longitudes': converted,
     }
     return registry, tracks, best
 
@@ -412,11 +477,17 @@ def load(conn, source, storms=None, dry_run=False, skip_bad=False):
         raise SourceError(f'{source}: no files matching '
                           f'<centre>_<label>h_<STORM>.csv')
 
+    generation = generation_of(source)
+    # Checked before any reading, so a load that cannot be committed does not
+    # first spend four minutes parsing a thousand files.
+    if conn is not None and not dry_run:
+        refuse_mixed_generation(conn, generation)
+
     all_tracks, all_registry, best_by_storm = [], [], defaultdict(dict)
     short, conflicts, skipped = [], [], []
     for path in paths:
         try:
-            registry, tracks, best = read_file(path)
+            registry, tracks, best = read_file(path, generation=generation)
         except SourceError as e:
             # Without --skip-bad a single contradiction stops the load, which is
             # the right default: a partial ingest nobody was told about is how
@@ -448,13 +519,15 @@ def load(conn, source, storms=None, dry_run=False, skip_bad=False):
         raise SourceError(
             f'{len(conflicts)} best-track disagreements across files, first '
             f'{conflicts[:3]}. Different products scored against different '
-            f'IBTrACS vintages is the likely cause and it is not reconcilable '
-            f'here — settle which vintage is wanted first.')
+            f'IBTrACS vintages is the cause — confirmed 2026-10-02, the two '
+            f'generations differ for 24 of 138 storms — and it is not '
+            f'reconcilable here. Load one generation.')
 
     best_rows = [(storm, valid, *obs)
                  for storm, store in best_by_storm.items()
                  for valid, obs in sorted(store.items())]
 
+    print(f'  generation       {generation}')
     print(f'  files            {len(paths):,}')
     print(f'  track rows       {len(all_tracks):,}')
     print(f'  best-track rows  {len(best_rows):,}')
@@ -474,6 +547,17 @@ def load(conn, source, storms=None, dry_run=False, skip_bad=False):
                         if r['positionless_rows']})
         print(f'  dropped {dropped} row(s) with only one coordinate, in: '
               f'{", ".join(where)}')
+
+    # Expected to be zero for `output/`, which is signed throughout. A non-zero
+    # here is the only sign that the upstream processing changed convention —
+    # the conversion itself is correct either way, so nothing else would show
+    # it. See `_normalise_longitude`.
+    converted = sum(r['converted_longitudes'] for r in all_registry)
+    if converted:
+        print(f'  NOTE {converted:,} longitude(s) arrived in 0-360 form and '
+              f'were converted. `output/` is signed throughout, so this means '
+              f'the upstream processing changed — the values are right, but '
+              f'check what else moved with the convention.')
 
     if skipped:
         print(f'\n  SKIPPED {len(skipped)} file(s) — loaded data is incomplete '
