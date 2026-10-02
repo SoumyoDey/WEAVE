@@ -3414,14 +3414,46 @@ compares pixels.** A GEOS or PROJ version change could not have failed them by
 shifting a coastline; only a crash would, and the libraries that could crash are
 vendored in the wheels and travel with them rather than with the image.
 
-### Deliberately not done here
+### The apt step is gone too — 2026-10-02
 
-**Whether the apt step is needed at all.** The evidence says the render path does
-not use it, but something else might — a source build on a wheel-less platform, a
-`proj` binary, a transitive dependency — and removing it belongs in its own
-commit where a red run has one possible cause. Two changes where one invalidates
-the other's rationale make a failure ambiguous, which is the whole argument for
-pinning in the first place.
+Held back from the runner bump on purpose, so a red run would have had one
+possible cause, then done in its own commit. `apt-get install libgeos-dev
+libproj-dev proj-data proj-bin` is removed, and nothing in the repository shells
+out to `projinfo` or `cs2cs` either.
+
+**A green run would only have shown the suite did not crash**, which is weaker
+than it looks and is the same non-result a skipped test gives. So the
+verification step measures instead: it forces a real projection and a real
+`buffer()` — a lazily-loaded `.so` is not mapped until something needs it, so a
+bare import proves less than it appears to — then reads `/proc/self/maps` and
+prints every `libgeos`/`libproj` actually mapped, labelled by origin. It asserts
+at least one was mapped, so the force-load cannot silently stop working, and
+that none came from outside `site-packages`.
+
+What CI reported:
+
+```
+GEOS/PROJ libraries actually mapped into this process:
+  VENDORED in a wheel  .../site-packages/pyproj.libs/libproj-bde9a34c.so.25.9.8.1
+  VENDORED in a wheel  .../site-packages/shapely.libs/libgeos-3ef06f11.so.3.13.1
+  VENDORED in a wheel  .../site-packages/shapely.libs/libgeos_c-abcdd5fa.so.1.19.2
+```
+
+The hash-mangled filenames are auditwheel's, which is itself the proof these are
+vendored copies rather than system ones. The step stays as a canary: if a future
+install really does need the system libraries, they are absent now and it fails
+there, before pytest.
+
+### The two notes that told a human to install them
+
+`DEPLOY.md` §1 and `Data/requirements.txt` both stated flatly that cartopy needs
+system GEOS and PROJ. **Softened rather than deleted, 2026-10-02**, because the
+claim is not wrong everywhere — it is wrong by default. cartopy, shapely and
+pyproj all publish wheels for Linux (x86_64 and aarch64), macOS and Windows, and
+all three also publish an sdist; the system libraries are needed only when pip
+has no wheel and falls back to building — an unusual architecture, a very new
+Python, or `--no-binary`. Both notes now say that, and point at the measurement
+rather than repeating the assertion.
 
 ## Standing decisions — do not undo these by accident
 

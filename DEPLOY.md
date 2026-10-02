@@ -23,7 +23,9 @@ plan.)
 - Python 3.11+ and a virtualenv/conda env for the API
 - Node 18+ / npm for building the frontend
 - PostgreSQL 14+ reachable from the API host
-- System libs for cartopy: **GEOS** and **PROJ** (`apt-get install libgeos-dev libproj-dev proj-data proj-bin`, or install cartopy via `conda -c conda-forge`)
+- System libs for cartopy: **usually nothing to do.** This line used to say GEOS and PROJ were required; they generally are not. cartopy, shapely and pyproj publish wheels for Linux (x86_64 and aarch64), macOS and Windows, and those wheels carry their own copies — shapely bundles `libgeos`, pyproj bundles `libproj`, and cartopy links neither. Verified on CI, which installs from `Data/requirements.txt` and loads only the vendored copies out of `site-packages` (NEXT_STEPS.md §34).
+
+  You need them only where pip has no wheel for your platform and builds from the sdist — an unusual architecture, a very new Python, or `--no-binary`. In that case `apt-get install libgeos-dev libproj-dev proj-data proj-bin`, or avoid the build with `conda install -c conda-forge cartopy`.
 
 ---
 
