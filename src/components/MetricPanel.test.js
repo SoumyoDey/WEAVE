@@ -304,3 +304,54 @@ describe('the minimized panel', () => {
     expect(isDraggingPanelRef.current).toBe(false);
   });
 });
+
+
+describe('the selector renders what the backend serves (S4)', () => {
+  // The panel used to map over METRIC_CONFIG directly, so a metric the backend
+  // served was invisible until someone also edited constants.js — the two-place
+  // change SYSTEM_DESIGN_PLAN.md S4 exists to remove. It now renders whatever
+  // list it is given, which `useMetricConfig` builds from /api/config.
+  const SERVED = [
+    { key: 'mae', label: 'Mean Absolute Error', description: 'MAE here',
+      requiresHour: false, requiresThreshold: false },
+    { key: 'brand_new', label: 'brand_new', description: '',
+      requiresHour: true, requiresThreshold: false },
+  ];
+
+  const options = () =>
+    screen.getAllByRole('option').map((o) => o.textContent);
+
+  it('offers a metric the local constants have never heard of', () => {
+    setup({ metricConfig: SERVED, metricType: 'mae' });
+    expect(options()).toContain('brand_new');
+  });
+
+  it('does not offer a metric the backend stopped serving', () => {
+    // crps is in METRIC_CONFIG and absent from SERVED. Offering it would send
+    // the user to an error instead of a map.
+    expect(METRIC_CONFIG.some((m) => m.key === 'crps')).toBe(true);
+    setup({ metricConfig: SERVED, metricType: 'mae' });
+    expect(options()).not.toContain(
+      METRIC_CONFIG.find((m) => m.key === 'crps').label,
+    );
+  });
+
+  it('shows the lead-time control for a metric the server says needs one', () => {
+    // requires_hour travels from the backend through the merge to this control.
+    // A local copy that disagreed would hide the picker and send no hour, and
+    // the request would come back refused.
+    setup({ metricConfig: SERVED, metricType: 'brand_new' });
+    expect(screen.getByText('Forecast Hour')).toBeInTheDocument();
+  });
+
+  it('hides it again for a metric that does not', () => {
+    setup({ metricConfig: SERVED, metricType: 'mae' });
+    expect(screen.queryByText('Forecast Hour')).not.toBeInTheDocument();
+  });
+
+  it('still renders the full local list when given no override', () => {
+    // The default keeps the component usable standalone rather than blank.
+    setup({ metricType: 'mae' });
+    expect(options()).toEqual(METRIC_CONFIG.map((m) => m.label));
+  });
+});

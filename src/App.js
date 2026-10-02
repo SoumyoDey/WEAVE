@@ -5,6 +5,7 @@ import { ChevronLeft, Info, Menu, CloudRain, Map as MapIcon, BarChart3, Scale } 
 
 // ── Constants & utilities ─────────────────────────────────────────────────────
 import { MODELS, COLORMAPS, METRIC_CONFIG, buildColorMatrix } from './constants';
+import { useMetricConfig } from './state/useMetricConfig';
 import { getLegendGradient }  from './utils/colorUtils';
 import { pointInPolygon }     from './utils/geoUtils';
 
@@ -231,6 +232,11 @@ function App() {
   // Without this mirror that redraw would fall back to the precipitation scale
   // and recolour a wind map on the first drag.
   const selectedVariableRef   = useRef('precipitation');
+  // Which metrics the backend actually serves, and what each requires (S4).
+  // Starts as the local constants and upgrades when /api/config answers, so
+  // nothing waits on the network and an unreachable backend changes nothing.
+  const metricConfig          = useMetricConfig();
+  const metricConfigRef       = useRef(METRIC_CONFIG);
   const isDraggingPanelRef    = useRef(false);
   const dragStartRef          = useRef({ mouseX: 0, mouseY: 0, panelX: 0, panelY: 0 });
   const uncertaintyModeRef      = useRef(null);
@@ -253,6 +259,9 @@ function App() {
   useEffect(() => { spatialDataRef.current   = spatialData;   }, [spatialData]);
   useEffect(() => { metricTypeRef.current    = metricType;    }, [metricType]);
   useEffect(() => { selectedVariableRef.current = selectedVariable; }, [selectedVariable]);
+  // The map redraw below runs from a listener registered once, so it reads
+  // the list through a ref rather than closing over a stale one.
+  useEffect(() => { metricConfigRef.current = metricConfig;      }, [metricConfig]);
   useEffect(() => { showWindLinesRef.current = showWindLines; }, [showWindLines]);
   useEffect(() => {
     uncertaintyModeRef.current = uncertaintyMode;
@@ -568,7 +577,7 @@ function App() {
     if (!selectedRegion) return;
     setSpatialLoading(true);
     try {
-      const metricCfg = METRIC_CONFIG.find(m => m.key === metricType);
+      const metricCfg = metricConfig.find(m => m.key === metricType);
       let data = await fetchSpatialMetric({
         metric:    metricType,
         modelName: currentModel.name,
@@ -582,7 +591,7 @@ function App() {
         pts = pts.filter(p => pointInPolygon(p.lat, p.lon, selectedRegion.polygon));
       data = { ...data, points: pts };
       setSpatialData(data);
-      renderMetricCanvas(mapInstanceRef.current, pts, metricType, METRIC_CONFIG, selectedVariable);
+      renderMetricCanvas(mapInstanceRef.current, pts, metricType, metricConfig, selectedVariable);
     } catch (err) {
       console.error('Spatial metric error:', err);
     }
@@ -729,7 +738,7 @@ function App() {
     const redraw = () => {
       if (spatialDataRef.current?.points)
         renderMetricCanvas(map, spatialDataRef.current.points, metricTypeRef.current,
-                           METRIC_CONFIG, selectedVariableRef.current);
+                           metricConfigRef.current, selectedVariableRef.current);
     };
     map.on('moveend', redraw); map.on('zoomend', redraw);
     return () => { map.off('moveend', redraw); map.off('zoomend', redraw); };
@@ -937,6 +946,7 @@ function App() {
             clearSelection={clearSelection}
             isDraggingPanelRef={isDraggingPanelRef}
             dragStartRef={dragStartRef}
+            metricConfig={metricConfig}
           />
         )}
 

@@ -3254,14 +3254,15 @@ maps in `mm/h`, and the UI's `wind` not being a stored variable at all. Neither
 side was internally inconsistent; they disagreed with each other, and only a
 test that spans the boundary can see that.
 
-### What is still two edits
+### What was still two edits — CLOSED 2026-10-02, see §35
 
-The frontend *consumes* the endpoint (`src/api/config.js`, a soft dependency
-that falls back to the local constants and never blocks rendering) but still
-*renders* from `METRIC_CONFIG`. So adding a metric is still two places — the
-difference is that the second is now a failing test rather than a defect found
-in production. Rendering the selector from server config is the remaining step,
-and it is a UI change rather than an architectural one.
+This section said the frontend "*consumes* the endpoint (`src/api/config.js`, a
+soft dependency that falls back to the local constants and never blocks
+rendering) but still *renders* from `METRIC_CONFIG`".
+
+**The first half was not true.** `src/api/config.js` was imported by nothing but
+its own test — a client with no caller. The selector did not fall back to the
+local constants, it only ever used them. §35 wired it in.
 
 ## 33. `/api/runs` had no test — FIXED 2026-10-01
 
@@ -3454,6 +3455,87 @@ all three also publish an sdist; the system libraries are needed only when pip
 has no wheel and falls back to building — an unusual architecture, a very new
 Python, or `--no-binary`. Both notes now say that, and point at the measurement
 rather than repeating the assertion.
+
+## 35. The metric selector renders from `/api/config` — S4 CLOSED 2026-10-02
+
+`SYSTEM_DESIGN_PLAN.md` S4's exit criterion is that **adding a metric is a
+single-place change**. §32 built `/api/config` and the cross-boundary tests, and
+left this as "a UI change rather than an architectural one". It was slightly
+more than that, because of what the wiring turned out to be.
+
+### The client had no caller
+
+§32 recorded that the frontend *consumes* the endpoint through
+`src/api/config.js`, "a soft dependency that falls back to the local constants
+and never blocks rendering". **`src/api/config.js` was imported by nothing but
+`src/api/config.test.js`.** `fetchConfig` was never called by the application;
+`metricKeysFrom` and `unitFrom` had no readers. The selector did not fall back
+to the local constants — it only ever used them, and `/api/config` was served,
+tested on both sides, and never requested by the running app.
+
+That is the same shape as §28 and §33 from a third direction: a well-tested
+component wired to nothing. The tests passed because they tested the client, and
+the client worked. Nothing tested that anyone used it.
+
+### What now renders from the server
+
+`useMetricConfig` (`src/state/useMetricConfig.js`) fetches once and merges;
+`metricsFrom` in `src/api/config.js` holds the rules. The split is deliberate
+and §32 already argued for it: **the server owns the facts, the frontend owns
+the presentation.**
+
+| decided by | what |
+|---|---|
+| `/api/config` | which metrics exist; `requires_hour`; `requires_threshold` |
+| `constants.js` | label, description, colour scale, legend, **and order** |
+
+Three rules worth stating:
+
+1. **A metric the server does not serve is dropped**, even if `constants.js`
+   still describes it. Offering one the backend will refuse sends the user to an
+   error where they expected a map.
+2. **The server's `requires_*` win.** They decide which controls appear and which
+   parameters the request carries, so a local copy that disagreed would build a
+   request the backend rejects. `test_config_endpoint.py` pins that the two agree
+   today; this decides which one renders if they ever stop.
+3. **Local ordering is kept and unknown metrics go last.** This is not a style
+   preference: `jsonify` sorts keys, so the endpoint's order is alphabetical —
+   an artifact of serialisation, not a UI decision. Verified in the browser: the
+   server returns `bias, brier, correlation, …` and the selector shows
+   `ssr, ssr_agg, correlation, …`, the curated order, with the same eleven keys.
+
+A metric the frontend has never heard of is offered, labelled by its key, with
+no colour scale. `metricColorFn` was hardened to return `() => null` rather than
+`undefined`, because `metricLayer` calls that result per point — an uncoloured
+map rather than a TypeError per cell. It looks unfinished until someone gives it
+a label and a scale, which is accurate.
+
+### It starts local and upgrades
+
+The first render uses `METRIC_CONFIG`, so the panel is never blank and never
+waits on the network; the merged list replaces it when the config arrives. If
+the call fails `fetchConfig` resolves to `null`, nothing is replaced, and
+behaviour is exactly what it was. That null is the trap in this hook — a
+careless `setMetrics(metricsFrom(cfg, local))` without the check would replace a
+working list with whatever the merge made of nothing, and `useMetricConfig.test.js`
+pins both failure modes (rejected fetch, and a non-ok status).
+
+### Verified in the running app, not only in jest
+
+The jest tests cover the merge. The wiring is what jest cannot see, so it was
+checked against a real backend:
+
+- `GET /api/config → 200` now appears in the network log. **It never had before.**
+- The selector's eleven options are exactly the eleven keys the server serves.
+- `requires_hour` and `requires_threshold` drive the real controls: `ssr` shows
+  the Forecast Hour picker, `mae` shows neither, `csi` shows Threshold — each
+  agreeing with the endpoint's own answer for that metric.
+
+One wrinkle worth recording because it nearly produced a false bug report: the
+first probe said `ssr` did *not* show the hour picker. The labels are uppercased
+in CSS, so `innerText` returns `FORECAST HOUR` and a case-sensitive `/Forecast
+Hour/` misses it. The screenshot showed the control plainly. **The measurement
+was wrong, not the app** — which is method lesson 11 again, one day later.
 
 ## Standing decisions — do not undo these by accident
 

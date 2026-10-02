@@ -36,6 +36,12 @@ export function MetricPanel({
   spatialLoading, spatialData,
   computeSpatialMetric, clearSelection,
   isDraggingPanelRef, dragStartRef,
+  // Which metrics to offer, and what each needs. Comes from `/api/config` by
+  // way of `useMetricConfig` (S4), so adding a metric to the backend registry
+  // puts it in this selector without a frontend change. Defaulted to the local
+  // constants so the component still renders standalone — in a test, or if a
+  // caller forgets — rather than showing an empty dropdown.
+  metricConfig = METRIC_CONFIG,
 }) {
   // Lead times the SSR map can be scored at. Precipitation is verified over a
   // common 6 h window, so only a lead time such a window ends at is scorable —
@@ -51,7 +57,7 @@ export function MetricPanel({
 
   if (!selectedRegion) return null;
 
-  const metricCfg = METRIC_CONFIG.find(m => m.key === metricType);
+  const metricCfg = metricConfig.find(m => m.key === metricType);
   // Thresholds are variable-specific, and the API sends them under different
   // parameter names (threshold_ms vs threshold_mm_6h) — the label has to agree.
   const isWind = selectedVariable === 'wind';
@@ -127,7 +133,7 @@ export function MetricPanel({
               value={metricType}
               onChange={e => setMetricType(e.target.value)}
               style={{ width: '100%', padding: '6px 8px', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '6px', color: 'rgba(255,255,255,0.85)', cursor: 'pointer', outline: 'none' }}>
-              {METRIC_CONFIG.map(m => (
+              {metricConfig.map(m => (
                 <option key={m.key} value={m.key} style={{ background: '#1a2535', color: 'white' }}>{m.label}</option>
               ))}
             </select>
@@ -194,7 +200,7 @@ export function MetricPanel({
                 {spatialData.metric === 'correlation' && spatialData.n_hours != null && ` · ${spatialData.n_hours} lead times`}
               </div>
               {(() => {
-                const cfg = METRIC_CONFIG.find(m => m.key === spatialData.metric);
+                const cfg = metricConfig.find(m => m.key === spatialData.metric);
                 if (!cfg) return null;
                 // Unit-sensitive metrics carry a separate wind scale; the
                 // dimensionless ones (CSI, POD, FAR, SSR, correlation) fall back

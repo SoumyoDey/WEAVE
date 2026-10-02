@@ -481,7 +481,14 @@ export const METRIC_CONFIG = [
 
 export const metricColorFn = (cfg, variable) => {
   if (!cfg) return () => null;
-  return (variable === 'wind' && cfg.windColorFn) ? cfg.windColorFn : cfg.colorFn;
+  // `?? (() => null)` rather than returning `cfg.colorFn` directly: since the
+  // selector renders from `/api/config` (S4), a metric the backend serves but
+  // `METRIC_CONFIG` has never heard of is selectable and carries no scale.
+  // `metricLayer` calls this result for every point, so an undefined here would
+  // be a TypeError per cell instead of an uncoloured map. No colour is the
+  // honest rendering of "nobody has chosen one yet".
+  const chosen = (variable === 'wind' && cfg.windColorFn) ? cfg.windColorFn : cfg.colorFn;
+  return chosen ?? (() => null);
 };
 
 export const metricLegend = (cfg, variable) => {

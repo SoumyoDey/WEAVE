@@ -232,7 +232,7 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
 > | **S1** Data lifecycle | **mostly DONE** — 2 items left |
 > | **S2** Ops & delivery | **CI only** — 4 of 5 items untouched |
 > | **S3** Scale | **partly** — caps and caching done, Redis/async/load-test not |
-> | **S4** Extensibility | **NOT STARTED** — its exit criterion is still unmet |
+> | **S4** Extensibility | **DONE 2026-10-02** — exit criterion met; see the section below |
 > | **S5** Frontend | **1 decision, 2 items untouched** |
 > | **S6** Security | **beta-adequate**, gated on "only if public" |
 > | Science track | **DONE** |
@@ -311,7 +311,7 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
   computes what *would* fit; nothing has driven load at it.
 - **Exit:** not reached.
 
-### S4 — Extensibility & maintainability — **CONFIG ENDPOINT DONE 2026-10-01**
+### S4 — Extensibility & maintainability — **DONE 2026-10-02**
 - ~~Single registry exposed to the frontend via a config endpoint~~ **DONE.**
   `GET /api/config` (`NEXT_STEPS.md` §32) serves the facts that were duplicated:
   which metrics exist, which need a single lead time rather than a range, which
@@ -335,10 +335,19 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
   False)}`, and a backend-only metric is named. The JS parser asserts it found
   at least 8 metrics before comparing, so it cannot pass vacuously on a file it
   failed to parse.
-- **Still open:** the frontend consumes the endpoint through `src/api/config.js`
-  but still *renders* from `METRIC_CONFIG`, so adding a metric is two edits —
-  the difference is that the second is now enforced by a failing test rather
-  than discovered in production. Also still open: config-driving the hardcoded
+- ~~**Still open:** the frontend consumes the endpoint but still renders from
+  `METRIC_CONFIG`~~ **DONE 2026-10-02 — the exit criterion is met.** The metric
+  selector renders from `/api/config` (`NEXT_STEPS.md` §35): the server decides
+  which metrics exist and what each requires, `constants.js` keeps labels,
+  colours and order. Adding a metric to `SPATIAL_METRIC_REGISTRY` now puts it in
+  the UI with no frontend change.
+
+  The line above also said the frontend *consumed* the endpoint. It did not —
+  `src/api/config.js` was imported by nothing but its own test, so the client
+  existed, passed its tests, and was never called. That is recorded in §35
+  rather than quietly corrected, because a well-tested component wired to
+  nothing is a failure mode this project has now hit three times.
+- **Still open:** config-driving the hardcoded
   extent / candidate hours / obs sources / base date, and the deferred refactors
   (`@with_db_cursor`, `_render_map()`, shared chart primitives, decomposing the
   two large tab components — `AnalysisTab.jsx` is still 1,264 lines).
