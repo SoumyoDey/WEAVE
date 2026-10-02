@@ -3717,8 +3717,15 @@ The rule is now **causal rather than constant** — a member may come from an
 earlier cycle, never a later one — which keeps the §18/§20 guard (two
 independent statements of the init, the defect where AIFS wind stored at
 2025-09-08 was the 2025-09-16 run) while admitting the file. The registry
-records `lagged_members`, 18 of 36 here and 0 everywhere else, because those
-members are six hours older at the same valid time.
+held a `lagged_members` column for a few hours — 18 of 36 here — and it was
+removed the same day. Only 1 of the 432 MOGREPS files discloses a lag, while
+360 other 36-member files stamp every member with the nominal cycle and are
+very likely lagged without saying so, so a `0` meant "this file did not say"
+rather than "not lagged". A field that reads as a measurement but is really a
+disclosure quirk invites a false inference, and the obvious use for it — a
+caption — would have fired on one run and implied the other 360 were
+same-cycle ensembles. The count lives in `TC_TAB_DESIGN.md` instead, where it
+can be stated with its caveat.
 
 **The archive is now fully loaded: 1,181 runs, 993,630 track rows.**
 

@@ -512,6 +512,13 @@ class TestTimeLaggedMembers:
 
     The rule now is **causal**: a member may come from an earlier cycle, never
     a later one.
+
+    The loader does **not** count the lagged members. It did briefly, and the
+    count was removed: only 1 of the 432 MOGREPS files discloses a lag, so a
+    zero meant "this file did not say" rather than "not lagged", and a field
+    that reads as a measurement but is really a disclosure quirk is worse than
+    no field. What matters is that the file loads and that a stamp from the
+    future still refuses.
     """
 
     def _lagged_file(self, tmp_path, lag_stamp='2024063018', init_stamp='2024070100'):
@@ -529,15 +536,6 @@ class TestTimeLaggedMembers:
         assert len(tracks) == 4
         # The init is what the rows say, not what either stamp says.
         assert registry['init_time'] == datetime(2024, 7, 1, 0, 0)
-
-    def test_the_lagged_members_are_counted(self, tmp_path):
-        """Not bookkeeping: those members are older at the same valid time."""
-        registry, _t, _b = loader.read_file(self._lagged_file(tmp_path))
-        assert registry['lagged_members'] == 1
-
-    def test_a_file_with_no_lag_reports_zero(self, tmp_path):
-        registry, _t, _b = loader.read_file(a_good_file(tmp_path))
-        assert registry['lagged_members'] == 0
 
     def test_a_member_from_a_LATER_cycle_still_refuses(self, tmp_path):
         """The check that matters, and the reason this is not just a relaxation.

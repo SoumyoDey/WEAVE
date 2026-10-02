@@ -3116,8 +3116,7 @@ def cyclone_tracks():
     try:
         cursor.execute("""
             SELECT storm_name, centre, system, init_time, basin, basin_source,
-                   nominal_members, tracked_members, genesis_variants,
-                   COALESCE(lagged_members, 0) AS lagged_members
+                   nominal_members, tracked_members, genesis_variants
             FROM cyclone_run_registry
             WHERE storm_name = %s AND centre = %s
               AND (%s::timestamp IS NULL OR init_time = %s::timestamp)
@@ -3189,13 +3188,6 @@ def cyclone_tracks():
             # Members for which a second candidate cyclone was dropped so that
             # one member draws one line. 0 everywhere in this archive.
             'variant_members': variant_members,
-            # Members carried forward from an EARLIER cycle. MOGREPS is a
-            # time-lagged ensemble, so "36 of 36 tracked this storm" can be
-            # true while half of those 36 are a six-hour-old forecast at the
-            # same valid time. Reporting it is the same argument as reporting
-            # `nominal_members`: a number is only honest if what it counts is
-            # stated.
-            'lagged_members': run['lagged_members'],
             'members': [{'member_id': m, 'points': pts}
                         for m, pts in sorted(members.items())],
             'best_track': best,

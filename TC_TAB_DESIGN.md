@@ -491,30 +491,35 @@ is ever wanted, it is one question — but nothing waits on it.
    from an earlier cycle, never a later one. A stamp after the init still
    refuses, because that is the two statements genuinely disagreeing.
 
-   `cyclone_run_registry.lagged_members` records the count — 18 of 36 here,
-   0 everywhere else — because those members are six hours older at the same
-   valid time, and a skill comparison treating all 36 as equally fresh is
-   comparing two things.
+   **The lag is recorded here and nowhere else, deliberately.** For this run
+   it is **18 of 36** members carried forward from 06Z. A
+   `lagged_members` column briefly existed and was removed on 2026-10-02, for
+   a reason worth keeping:
 
-   **It is deliberately not shown on the tab, and the reason is the more
-   useful finding.** Only **1 of the 432** MOGREPS files discloses the lag:
-   GITA's 12Z run stamps 18 members with the earlier cycle, while **360** other
-   36-member files stamp every member with the nominal cycle. If MOGREPS always
-   builds 36 from two cycles, those 360 are lagged in exactly the same way and
-   simply do not say so.
+   Only **1 of the 432** MOGREPS files discloses a lag at all. GITA's 12Z run
+   stamps 18 members with the earlier cycle; **360** other 36-member files
+   stamp every member with the nominal cycle. If MOGREPS always builds 36 from
+   two cycles — which is how it is documented to work — those 360 are lagged in
+   exactly the same way and simply do not say so.
 
-   So `lagged_members = 0` means *no evidence of lag in this file*, not *not
-   lagged*. Captioning the one run that disclosed it would tell a reader the
-   other 360 are same-cycle ensembles, which is very likely false — a warning
-   that fires on 1 of 361 equivalent runs is worse than no warning. The column
-   stays because it is an accurate statement about the file; the UI stays
-   silent because the column cannot support the claim a caption would make.
+   So the column read as a measurement while actually being a disclosure
+   quirk: `0` meant *this file did not say*, not *not lagged*. Anything built
+   on it, a caption most of all, would have fired on one run and implied the
+   other 360 were same-cycle ensembles. A field that invites a false inference
+   is worse than no field, so the loader no longer counts it and the API no
+   longer returns it.
 
-   The honest version of this caption would be a property of **MOGREPS**, not
-   of a run — "this ensemble is time-lagged; half its members are six hours
-   older" — on all 432. That is not written because it has not been confirmed
-   for the 360, only inferred from how MOGREPS is known to work, and inferring
-   is what produced the three longitude retractions in `TC_DATA_ACCESS.md`.
+   What survives is the part that matters: the file **loads**, and a
+   `cyclone_id` stamped *after* the init still refuses, because that is the
+   two statements of the initialisation genuinely disagreeing (§18/§20).
+
+   The honest version of this would be a statement about **MOGREPS** on all
+   432 runs — *this ensemble is time-lagged; half its members are six hours
+   older* — not a per-run number. It is not written because it has not been
+   confirmed for those 360 files, only inferred from how MOGREPS is known to
+   work, and inferring from how something is known to work is what produced
+   the three longitude retractions in `TC_DATA_ACCESS.md`. One question to
+   `wang.shuoc`, or one look at the tracker configuration, would settle it.
 
    Also: 6 rows of 994,161 carry only one coordinate, all in EMERAUDE. Dropped
    and counted, because a latitude with no longitude is not a position.

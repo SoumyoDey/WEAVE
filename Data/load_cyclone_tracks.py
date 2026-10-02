@@ -221,19 +221,6 @@ CREATE TABLE IF NOT EXISTS cyclone_run_registry (
     -- Distinct genesis positions the members identified. ECMWF reports one for
     -- ALCIDE; MOGREPS reports eighteen. That disagreement is a result.
     genesis_variants    INTEGER,
-    -- Members whose `cyclone_id` names an EARLIER cycle than the run's init.
-    -- MOGREPS is time-lagged: its 36-member 12Z ensemble is 18 members from 12Z
-    -- plus 18 from 06Z, and those 18 are six hours older at the same valid
-    -- time, so a skill comparison treating all 36 as equally fresh is comparing
-    -- two things.
-    --
-    -- **Read this as "what the file disclosed", not "whether the ensemble is
-    -- lagged".** Exactly 1 of the 432 MOGREPS files records it: GITA's 12Z run
-    -- stamps 18 members with the earlier cycle, while 360 other 36-member files
-    -- stamp every member with the nominal cycle. Those 360 are very likely
-    -- lagged in the same way and simply do not say so. A zero here is absence
-    -- of evidence.
-    lagged_members      INTEGER   DEFAULT 0,
     -- What ran, and what produced a track. The gap is the point: see §5.
     nominal_members     INTEGER   NOT NULL,
     tracked_members     INTEGER   NOT NULL,
@@ -367,7 +354,6 @@ def _init_time_of(rows, path):
     # initialisation genuinely disagreeing — the §18/§20 defect, where the AIFS
     # wind stored at 2025-09-08 was the 2025-09-16 run and every file said so
     # with nobody reading it. That still refuses.
-    lagged = 0
     for stamp in {r['cyclone_id'].split('_', 1)[0] for r in rows}:
         if not (len(stamp) == 10 and stamp.isdigit()):
             continue
@@ -378,13 +364,10 @@ def _init_time_of(rows, path):
                 f'from {from_id}, after the initialisation the rows imply '
                 f'({init}). A time-lagged member comes from an EARLIER cycle; '
                 f'a later one means the two statements disagree.')
-        if from_id < init:
-            lagged += sum(1 for r in rows
-                          if r['cyclone_id'].startswith(stamp + '_'))
 
     # How many distinct genesis positions the members found. Not bookkeeping:
     # it is a spread measure in its own right, and one the ensemble mean hides.
-    return init, len({r['cyclone_id'] for r in rows}), lagged
+    return init, len({r['cyclone_id'] for r in rows})
 
 
 def generation_of(source):
@@ -466,25 +449,6 @@ def widen_track_constraint(conn):
                     'cyclone_id)')
     conn.commit()
     return 'widened'
-
-
-def ensure_registry_columns(conn):
-    """Add registry columns a pre-existing database does not have yet.
-
-    Same gap as `widen_track_constraint` and the same reason: the DDL above
-    describes a fresh table, and a database built from an earlier version of it
-    never sees the change. `ADD COLUMN IF NOT EXISTS` is idempotent and cheap \u2014
-    a nullable column with a default is a catalogue change in PostgreSQL 11+,
-    not a table rewrite, so this stays fast at any size.
-    """
-    with conn.cursor() as cur:
-        cur.execute("SELECT to_regclass('cyclone_run_registry')")
-        if cur.fetchone()[0] is None:
-            return 'no table yet'
-        cur.execute('ALTER TABLE cyclone_run_registry '
-                    'ADD COLUMN IF NOT EXISTS lagged_members INTEGER DEFAULT 0')
-    conn.commit()
-    return 'registry columns present'
 
 
 def read_file(path, generation=None):
@@ -579,7 +543,7 @@ def read_file(path, generation=None):
     if not tracks:
         raise SourceError(f'{name}: no rows')
 
-    init, genesis_variants, lagged_rows = _init_time_of(tracks, path)
+    init, genesis_variants = _init_time_of(tracks, path)
     members = {t['member_id'] for t in tracks}
     declared = nominal_members(system, init)
     if max(members) >= declared:
@@ -605,15 +569,6 @@ def read_file(path, generation=None):
         'converted_longitudes': converted,
         'converted_obs_longitudes': converted_obs,
         'duplicate_rows': duplicates,
-        # Rows belonging to members carried forward from an earlier cycle.
-        # Non-zero only for MOGREPS GITA in this archive, and worth carrying
-        # because those members are genuinely older at the same valid time.
-        'lagged_rows': lagged_rows,
-        'lagged_members': len({t['member_id'] for t in tracks
-                               if datetime.strptime(
-                                   t['cyclone_id'].split('_', 1)[0],
-                                   '%Y%m%d%H') < init})
-                          if lagged_rows else 0,
     }
     return registry, tracks, best
 
@@ -633,7 +588,6 @@ def load(conn, source, storms=None, dry_run=False, skip_bad=False):
     if conn is not None and not dry_run:
         refuse_mixed_generation(conn, generation)
         print(f'  constraint       {widen_track_constraint(conn)}')
-        print(f'  registry         {ensure_registry_columns(conn)}')
 
     all_tracks, all_registry, best_by_storm = [], [], defaultdict(dict)
     short, conflicts, skipped = [], [], []
@@ -716,17 +670,6 @@ def load(conn, source, storms=None, dry_run=False, skip_bad=False):
         print('    these carry no information and were never stored; a run '
               'with many is a sign the generating script emitted it twice')
 
-    # Time-lagged members, which are genuinely older at the same valid time.
-    lagged = [r for r in all_registry if r['lagged_members']]
-    if lagged:
-        print(f'  {len(lagged)} run(s) include time-lagged members carried '
-              f'forward from an earlier cycle:')
-        for r in lagged:
-            print(f"    {r['centre']} {r['storm_name']} {r['init_time']}: "
-                  f"{r['lagged_members']} of {r['tracked_members']} members")
-        print('    these are older forecasts at the same valid time, which is '
-              'what a time-lagged ensemble is, not a defect')
-
     # **The two longitude columns do not share a convention**, which is worth
     # being exact about because the first version of this message was not.
     #
@@ -786,8 +729,7 @@ def load(conn, source, storms=None, dry_run=False, skip_bad=False):
             INSERT INTO cyclone_run_registry
                 (centre, system, storm_name, init_time, basin, basin_source,
                  genesis_variants, nominal_members, tracked_members, lead_min, lead_max,
-                 source_label_hours, source_cycles, source_generation,
-                 lagged_members) VALUES %s
+                 source_label_hours, source_cycles, source_generation) VALUES %s
             ON CONFLICT ON CONSTRAINT uq_cyclone_run_registry DO UPDATE SET
                 tracked_members = EXCLUDED.tracked_members,
                 lead_min = EXCLUDED.lead_min, lead_max = EXCLUDED.lead_max,
@@ -796,7 +738,7 @@ def load(conn, source, storms=None, dry_run=False, skip_bad=False):
                 'centre', 'system', 'storm_name', 'init_time',
                 'basin', 'basin_source', 'genesis_variants', 'nominal_members', 'tracked_members', 'lead_min',
                 'lead_max', 'source_label_hours', 'source_cycles',
-                'source_generation', 'lagged_members')) for r in all_registry])
+                'source_generation')) for r in all_registry])
     conn.commit()
     print('\n  committed')
     return len(all_tracks)
