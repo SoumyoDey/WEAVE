@@ -3705,6 +3705,35 @@ after the instruction to skip emailing `wang.shuoc`):
   1,180 loaded runs reach exactly +144 h and none falls short. The storms it
   dropped were dropped for not reaching six days, not for being wrong.
 
+**The one refused file is loaded.** `egrr_72h_GITA.csv` was the only file of
+1,181 the loader ever rejected, for carrying two `cyclone_id` cycle stamps. It
+turned out to be MOGREPS's **time-lagged ensemble**: the 36-member 12Z ensemble
+is 18 members from 12Z plus 18 carried forward from 06Z, and all 36 agree that
+`valid - lead` is 12Z. The stamp says where a member came from; it is not a
+second initialisation. 431 of the 432 MOGREPS files carry one stamp, so the
+check was right to fire and wrong to refuse.
+
+The rule is now **causal rather than constant** — a member may come from an
+earlier cycle, never a later one — which keeps the §18/§20 guard (two
+independent statements of the init, the defect where AIFS wind stored at
+2025-09-08 was the 2025-09-16 run) while admitting the file. The registry
+records `lagged_members`, 18 of 36 here and 0 everywhere else, because those
+members are six hours older at the same valid time.
+
+**The archive is now fully loaded: 1,181 runs, 993,630 track rows.**
+
+Fixing it surfaced a wrong claim of my own. The loader warned that 3,612
+longitudes had arrived in 0-360 form and that this meant the upstream
+processing had changed. It had not: the *forecast* column is signed ±180 in
+every one of the 1,181 files, but the *observed* IBTrACS `LON` is not — it
+reaches **253.6**, with 41,159 values above 180 across 85 files, every one a
+dateline storm. Both columns pass through the same normaliser, so one counter
+conflated them and the message would have fired on all 85, sending someone to
+hunt a change that never happened. The claim came from measuring BERYL, in the
+Atlantic, which cannot reach the dateline. **That is the third time a longitude
+claim here has come from one case** (see `TC_DATA_ACCESS.md`); the counters are
+now separate, and only a forecast conversion warns.
+
 Only `T`'s meaning is still unknown, and nothing reads it.
 
 **525 rows dropped by `ON CONFLICT DO NOTHING` — found by a deployment

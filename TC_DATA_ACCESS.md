@@ -1,8 +1,8 @@
 # Finding and characterising the tropical-cyclone data on Explorer
 
 **Status: surveyed 2026-10-02; both provenance questions since answered from
-the files (§9). One data question remains open — `egrr_72h_GITA.csv`, the single
-file the loader refuses.**
+the files (§9), and the one file the loader refused — `egrr_72h_GITA.csv` —
+resolved and loaded on 2026-10-02. All 1,181 files are in the database.**
 
 > Earlier sections below were written *during* the survey and some of their
 > open questions were later settled. §9 is the authority where they disagree;
@@ -509,7 +509,7 @@ document records twice about longitude.
 ### 2. What the June re-selection was selecting for
 
 **A complete +144 h forecast window.** `output/` extends to +144 h where the
-April set stopped at +72 h, and **every one of the 1,180 loaded runs reaches
+April set stopped at +72 h, and **every one of the 1,181 loaded runs reaches
 exactly +144 h — not one is shorter.** A storm whose forecast ran out earlier
 would appear with a smaller `lead_max`; none does.
 

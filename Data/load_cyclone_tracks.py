@@ -221,6 +221,11 @@ CREATE TABLE IF NOT EXISTS cyclone_run_registry (
     -- Distinct genesis positions the members identified. ECMWF reports one for
     -- ALCIDE; MOGREPS reports eighteen. That disagreement is a result.
     genesis_variants    INTEGER,
+    -- Members carried forward from an earlier cycle. MOGREPS is time-lagged:
+    -- its 36-member 12Z ensemble is 18 members from 12Z plus 18 from 06Z. Those
+    -- 18 are six hours older at the same valid time, so a skill comparison that
+    -- treats all 36 as equally fresh is comparing two things.
+    lagged_members      INTEGER   DEFAULT 0,
     -- What ran, and what produced a track. The gap is the point: see §5.
     nominal_members     INTEGER   NOT NULL,
     tracked_members     INTEGER   NOT NULL,
@@ -255,8 +260,16 @@ def _f(value):
 def _normalise_longitude(lon):
     """Signed ±180.
 
-    `output/` is already signed — measured, BERYL runs −94.0 to −42.9 in the
-    North Atlantic. The raw CXML archives each use a *different* convention
+    The *forecast* column is signed — measured across the whole archive, which
+    runs -180.000 to 180.000 exactly, not sampled. (An earlier version of this
+    docstring cited BERYL alone, at −94.0 to −42.9 in the North Atlantic, which
+    cannot reach the dateline and so could not have shown otherwise.)
+
+    **The observed `LON` column is a different matter and is not signed.** It
+    reaches 253.6, with 41,159 values above 180 across 85 files — every one a
+    storm near the dateline. Both columns pass through here, so the caller
+    counts them separately: a conversion on the forecast is a warning, one on
+    the observation is a Tuesday. The raw CXML archives each use a *different* convention
     (`TC_DATA_ACCESS.md`), so a 0–360 value arriving here is a real possibility
     rather than a theoretical one, and it would mean the upstream processing
     changed.
@@ -323,28 +336,47 @@ def _init_time_of(rows, path):
                           f'not constant; got {sorted(from_rows)[:3]}')
     init = from_rows.pop()
 
-    # `cyclone_id` is `<init><genesis lat><genesis lon>`, and only the init part
-    # is a property of the file. **The genesis part varies by member**, because
-    # members disagree about where the storm formed: ALCIDE at 0 h has one id
-    # from ECMWF, five from GEFS and eighteen from MOGREPS. An earlier version
-    # of this function required a single id per file and refused every MOGREPS
-    # file — correctly, in that the assumption was wrong, which is the whole
-    # argument for checking rather than assuming.
-    stamps = {r['cyclone_id'].split('_', 1)[0] for r in rows}
-    if len(stamps) != 1:
-        raise SourceError(f'{os.path.basename(path)}: cyclone_id carries more '
-                          f'than one initialisation: {sorted(stamps)}')
-    stamp = stamps.pop()
-    if len(stamp) == 10 and stamp.isdigit():
+    # `cyclone_id` is `<cycle><genesis lat><genesis lon>`. **The genesis part
+    # varies by member**, because members disagree about where the storm formed:
+    # ALCIDE at 0 h has one id from ECMWF, five from GEFS and eighteen from
+    # MOGREPS. An earlier version required a single id per file and refused
+    # every MOGREPS file.
+    #
+    # The *cycle* part normally varies too — but not always, and the exception
+    # is real rather than corrupt. `egrr_72h_GITA.csv` carries 18 members
+    # stamped 2018021206 and 18 stamped 2018021212, because **MOGREPS is a
+    # time-lagged ensemble**: its 36-member 12Z ensemble is 18 members from the
+    # 12Z cycle plus 18 carried forward from 06Z. The stamp records where a
+    # member *came from*; it is not a second initialisation.
+    #
+    # Requiring the stamp to be constant refused that file — 1 of 1,181, and
+    # the only one of 432 MOGREPS files with two stamps. The check was right to
+    # fire (the assumption behind it was wrong) and wrong to refuse, which is
+    # why it is now the weaker but meaningful condition below.
+    #
+    # **A member may come from an earlier cycle, never a later one.** A stamp
+    # after the init is not lagging, it is the two statements of the
+    # initialisation genuinely disagreeing — the §18/§20 defect, where the AIFS
+    # wind stored at 2025-09-08 was the 2025-09-16 run and every file said so
+    # with nobody reading it. That still refuses.
+    lagged = 0
+    for stamp in {r['cyclone_id'].split('_', 1)[0] for r in rows}:
+        if not (len(stamp) == 10 and stamp.isdigit()):
+            continue
         from_id = datetime.strptime(stamp, '%Y%m%d%H')
-        if from_id != init:
+        if from_id > init:
             raise SourceError(
-                f'{os.path.basename(path)}: the two statements of the '
-                f'initialisation disagree — rows say {init}, cyclone_id '
-                f'says {from_id}')
+                f'{os.path.basename(path)}: cyclone_id says this member comes '
+                f'from {from_id}, after the initialisation the rows imply '
+                f'({init}). A time-lagged member comes from an EARLIER cycle; '
+                f'a later one means the two statements disagree.')
+        if from_id < init:
+            lagged += sum(1 for r in rows
+                          if r['cyclone_id'].startswith(stamp + '_'))
+
     # How many distinct genesis positions the members found. Not bookkeeping:
     # it is a spread measure in its own right, and one the ensemble mean hides.
-    return init, len({r['cyclone_id'] for r in rows})
+    return init, len({r['cyclone_id'] for r in rows}), lagged
 
 
 def generation_of(source):
@@ -428,6 +460,25 @@ def widen_track_constraint(conn):
     return 'widened'
 
 
+def ensure_registry_columns(conn):
+    """Add registry columns a pre-existing database does not have yet.
+
+    Same gap as `widen_track_constraint` and the same reason: the DDL above
+    describes a fresh table, and a database built from an earlier version of it
+    never sees the change. `ADD COLUMN IF NOT EXISTS` is idempotent and cheap \u2014
+    a nullable column with a default is a catalogue change in PostgreSQL 11+,
+    not a table rewrite, so this stays fast at any size.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('cyclone_run_registry')")
+        if cur.fetchone()[0] is None:
+            return 'no table yet'
+        cur.execute('ALTER TABLE cyclone_run_registry '
+                    'ADD COLUMN IF NOT EXISTS lagged_members INTEGER DEFAULT 0')
+    conn.commit()
+    return 'registry columns present'
+
+
 def read_file(path, generation=None):
     """One CSV -> (registry row, track rows, best-track rows). Refuses on doubt."""
     name = os.path.basename(path)
@@ -447,6 +498,7 @@ def read_file(path, generation=None):
     # (member, lead, cyclone_id) -> the row already seen for it, so an
     # exact repeat can be told apart from a genuine second candidate.
     first_seen, duplicates, contradictions = {}, 0, []
+    converted_obs = 0
     with open(path, newline='') as fh:
         for row in csv.DictReader(fh):
             valid = datetime.strptime(row['time'].strip(), '%Y-%m-%d %H:%M:%S')
@@ -460,7 +512,8 @@ def read_file(path, generation=None):
                 continue
             lon, lon_converted = _normalise_longitude(_f(row['lon']))
             obs_lon, obs_converted = _normalise_longitude(_f(row['LON']))
-            converted += int(lon_converted) + int(obs_converted)
+            converted += int(lon_converted)         # forecast: never seen
+            converted_obs += int(obs_converted)      # observed: 85 files, normal
             key = (int(float(row['member_id'])), lead, row['cyclone_id'].strip())
             position = (_f(row['lat']), lon)
             if key in first_seen:
@@ -518,7 +571,7 @@ def read_file(path, generation=None):
     if not tracks:
         raise SourceError(f'{name}: no rows')
 
-    init, genesis_variants = _init_time_of(tracks, path)
+    init, genesis_variants, lagged_rows = _init_time_of(tracks, path)
     members = {t['member_id'] for t in tracks}
     declared = nominal_members(system, init)
     if max(members) >= declared:
@@ -542,7 +595,17 @@ def read_file(path, generation=None):
         'source_generation': generation or generation_of(os.path.dirname(path)),
         'positionless_rows': positionless,
         'converted_longitudes': converted,
+        'converted_obs_longitudes': converted_obs,
         'duplicate_rows': duplicates,
+        # Rows belonging to members carried forward from an earlier cycle.
+        # Non-zero only for MOGREPS GITA in this archive, and worth carrying
+        # because those members are genuinely older at the same valid time.
+        'lagged_rows': lagged_rows,
+        'lagged_members': len({t['member_id'] for t in tracks
+                               if datetime.strptime(
+                                   t['cyclone_id'].split('_', 1)[0],
+                                   '%Y%m%d%H') < init})
+                          if lagged_rows else 0,
     }
     return registry, tracks, best
 
@@ -562,6 +625,7 @@ def load(conn, source, storms=None, dry_run=False, skip_bad=False):
     if conn is not None and not dry_run:
         refuse_mixed_generation(conn, generation)
         print(f'  constraint       {widen_track_constraint(conn)}')
+        print(f'  registry         {ensure_registry_columns(conn)}')
 
     all_tracks, all_registry, best_by_storm = [], [], defaultdict(dict)
     short, conflicts, skipped = [], [], []
@@ -628,10 +692,6 @@ def load(conn, source, storms=None, dry_run=False, skip_bad=False):
         print(f'  dropped {dropped} row(s) with only one coordinate, in: '
               f'{", ".join(where)}')
 
-    # Expected to be zero for `output/`, which is signed throughout. A non-zero
-    # here is the only sign that the upstream processing changed convention —
-    # the conversion itself is correct either way, so nothing else would show
-    # it. See `_normalise_longitude`.
     # Exact repeats. Reported rather than shrugged off: these used to vanish
     # into ON CONFLICT DO NOTHING, and the only trace was that count(*) came
     # back 525 lower than the load said. A doubled source file should name
@@ -648,12 +708,45 @@ def load(conn, source, storms=None, dry_run=False, skip_bad=False):
         print('    these carry no information and were never stored; a run '
               'with many is a sign the generating script emitted it twice')
 
+    # Time-lagged members, which are genuinely older at the same valid time.
+    lagged = [r for r in all_registry if r['lagged_members']]
+    if lagged:
+        print(f'  {len(lagged)} run(s) include time-lagged members carried '
+              f'forward from an earlier cycle:')
+        for r in lagged:
+            print(f"    {r['centre']} {r['storm_name']} {r['init_time']}: "
+                  f"{r['lagged_members']} of {r['tracked_members']} members")
+        print('    these are older forecasts at the same valid time, which is '
+              'what a time-lagged ensemble is, not a defect')
+
+    # **The two longitude columns do not share a convention**, which is worth
+    # being exact about because the first version of this message was not.
+    #
+    # The *forecast* `lon` is signed ±180 in every one of the 1,181 files —
+    # measured across the whole archive, which runs -180.000 to 180.000 exactly.
+    # So a conversion there means the upstream processing changed, and that
+    # deserves a warning.
+    #
+    # The *observed* `LON`, which is IBTrACS, does not share it: it reaches
+    # **253.6**, with 41,159 values above 180 across 85 files, every one a storm
+    # near or across the dateline. Normal, and always has been.
+    #
+    # The first version said `output/` was "signed throughout" and would have
+    # fired on all 85, sending someone to hunt a change that never happened.
+    # That claim came from measuring BERYL — in the Atlantic, which cannot reach
+    # the dateline. The same one-case generalisation as the two longitude
+    # retractions in `TC_DATA_ACCESS.md`, for the third time.
     converted = sum(r['converted_longitudes'] for r in all_registry)
     if converted:
-        print(f'  NOTE {converted:,} longitude(s) arrived in 0-360 form and '
-              f'were converted. `output/` is signed throughout, so this means '
-              f'the upstream processing changed — the values are right, but '
-              f'check what else moved with the convention.')
+        print(f'  WARNING {converted:,} *forecast* longitude(s) arrived in '
+              f'0-360 form and were converted. That column is signed ±180 in '
+              f'every file of this archive, so the upstream processing has '
+              f'changed — the values are right, but check what else moved '
+              f'with the convention.')
+    converted_obs = sum(r['converted_obs_longitudes'] for r in all_registry)
+    if converted_obs:
+        print(f'  {converted_obs:,} observed (IBTrACS) longitude(s) converted '
+              f'from 0-360 — expected near the dateline, not a problem')
 
     if skipped:
         print(f'\n  SKIPPED {len(skipped)} file(s) — loaded data is incomplete '
@@ -685,7 +778,8 @@ def load(conn, source, storms=None, dry_run=False, skip_bad=False):
             INSERT INTO cyclone_run_registry
                 (centre, system, storm_name, init_time, basin, basin_source,
                  genesis_variants, nominal_members, tracked_members, lead_min, lead_max,
-                 source_label_hours, source_cycles, source_generation) VALUES %s
+                 source_label_hours, source_cycles, source_generation,
+                 lagged_members) VALUES %s
             ON CONFLICT ON CONSTRAINT uq_cyclone_run_registry DO UPDATE SET
                 tracked_members = EXCLUDED.tracked_members,
                 lead_min = EXCLUDED.lead_min, lead_max = EXCLUDED.lead_max,
@@ -694,7 +788,7 @@ def load(conn, source, storms=None, dry_run=False, skip_bad=False):
                 'centre', 'system', 'storm_name', 'init_time',
                 'basin', 'basin_source', 'genesis_variants', 'nominal_members', 'tracked_members', 'lead_min',
                 'lead_max', 'source_label_hours', 'source_cycles',
-                'source_generation')) for r in all_registry])
+                'source_generation', 'lagged_members')) for r in all_registry])
     conn.commit()
     print('\n  committed')
     return len(all_tracks)

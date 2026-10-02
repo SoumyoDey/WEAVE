@@ -118,19 +118,26 @@ several per storm and centre, one per initialisation cadence:
 ```bash
 cd Data
 python load_cyclone_tracks.py --source /projects/k.aggarwal/Shuochen/output --dry-run
-python load_cyclone_tracks.py --source /projects/k.aggarwal/Shuochen/output --skip-bad
+python load_cyclone_tracks.py --source /projects/k.aggarwal/Shuochen/output
 ```
 
 Run `--dry-run` first: it reads, validates and reports without writing, and the
 refusals below are worth seeing before a commit rather than after one. The
 loader creates its own three tables, so nothing needs adding to `schema.sql`.
 
-**`--skip-bad` is required for this archive and is not a shrug.** Without it a
-single self-contradicting file stops the whole load, which is the right default.
-One file of 1,181 genuinely is contradictory — `egrr_72h_GITA.csv` carries two
-initialisations in one file — and `--skip-bad` names and counts every file it
-skips at the end. Read that list; it is the only record that the load is
-incomplete.
+**`--skip-bad` is no longer needed on this archive — all 1,181 files load.**
+It used to be required for exactly one of them, `egrr_72h_GITA.csv`, which
+carries two `cyclone_id` cycle stamps because MOGREPS is a **time-lagged
+ensemble**: its 36-member 12Z ensemble is 18 members from 12Z plus 18 carried
+forward from 06Z. The loader demanded a constant stamp and refused the file;
+all 36 members in fact agree that `valid - lead` is 12Z, so the stamp was
+provenance, not a second initialisation. The rule is now causal — a member may
+come from an earlier cycle, never a later one — and the file loads.
+
+Keep the flag available for a *future* archive. Without it one contradictory
+file stops the whole load, which remains the right default, and with it every
+skip is named at the end. If it ever prints a skip, read that list: it is the
+only record that the load is incomplete.
 
 **Do not point `--source` at `storm_2016_2024_*`.** That is an older generation
 of the same product, scored against a **different IBTrACS vintage** — the two
@@ -147,14 +154,14 @@ psql -d weave_weather -c "SELECT count(*) FROM cyclone_track_member;"
 psql -d weave_weather -c "SELECT DISTINCT source_generation FROM cyclone_run_registry;"
 ```
 
-Measured on the current load: **992,730 track rows, 5,379 best-track rows and
-1,180 runs** over 138 storms and three centres (ECMWF-ENS 339 runs, GEFS 410,
-MOGREPS 431), initialisations from 2016-01-01 to 2024-12-11. **201 MB** in all —
+Measured on the current load: **993,630 track rows, 5,379 best-track rows and
+1,181 runs** over 138 storms and three centres (ECMWF-ENS 339 runs, GEFS 410,
+MOGREPS 432), initialisations from 2016-01-01 to 2024-12-11. **201 MB** in all —
 negligible beside the 123 GB of forecast data, so §9's storage arithmetic does
 not change. `source_generation` must come back as exactly one value, `output`.
 
 **Two counts that do not match, and the smaller one is the table.** The loader
-reports 993,255 rows read; the table holds **992,730**. The 525-row difference
+reports 994,155 rows read; the table holds **993,630**. The 525-row difference
 is one source file, `kwbc_0h_MATTHEW.csv`, which holds 1,050 rows that are 525
 records each written twice — identical in every field. They carry no
 information and are not stored.

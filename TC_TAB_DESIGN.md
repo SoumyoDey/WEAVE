@@ -419,7 +419,7 @@ provenance questions, and provenance turned out to be recoverable:
   `storm_2016_2024_*` set against the 2025-09-17 one. The two vintages disagree
   for **24 of 138 storms**, so the two generations carry different truth and
   **must not be mixed**.
-- **3.** A complete **+144 h** window. All **1,180** loaded runs reach exactly
+- **3.** A complete **+144 h** window. All **1,181** loaded runs reach exactly
   +144 h and none falls short, so the storms dropped between generations were
   excluded for not supplying a full six-day forecast — a selection on
   completeness, not on quality. Nothing was dropped for being wrong.
@@ -443,8 +443,8 @@ is ever wanted, it is one question — but nothing waits on it.
 4. Confirm track error grows with lead, per centre. That is the provenance gate.
 5. ~~The spaghetti map and the denominator.~~ **BUILT 2026-10-02.**
    `/api/cyclones` and `/api/cyclone/tracks`, `src/components/CycloneTab.jsx`,
-   a fourth tab, and 992,730 track rows over 1,180 runs loaded from `output/`
-   (the loader reads 993,255; 525 are byte-identical repeats in one file,
+   a fourth tab, and 993,630 track rows over 1,181 runs loaded from `output/`
+   (the loader reads 994,155; 525 are byte-identical repeats in one file,
    `kwbc_0h_MATTHEW.csv`, now counted and named at load time — `NEXT_STEPS.md`
    §37).
 
@@ -471,12 +471,30 @@ is ever wanted, it is one question — but nothing waits on it.
    fixes all three at once. Independent of the `mean_lon` defect in the source
    data: same hazard, different layer, and neither fix helps the other.
 
-   **One file of 1,181 carries two initialisations.** `egrr_72h_GITA.csv` holds
-   18 members from 06Z and 18 from 12Z — MOGREPS's time-lagged structure — while
-   `valid_time - lead_time` reports a single init, meaning the lagged members'
-   leads were rebased. Which statement is right changes their effective lead by
-   six hours, so the loader refuses the file rather than guessing, and
-   `--skip-bad` names it. One for `wang.shuoc`.
+   **One file of 1,181 carries two cyclone_id cycle stamps.**
+   `egrr_72h_GITA.csv` holds 18 members stamped 06Z and 18 stamped 12Z —
+   MOGREPS's time-lagged structure — while `valid_time - lead_time` reports a
+   single init. The loader refused it rather than guess, and it was the only
+   file of 1,181 it ever refused.
+
+   **RESOLVED 2026-10-02, from the data, without the email.** All 36 members
+   agree that `valid - lead` is 2018-02-12 12:00, and 431 of the 432 MOGREPS
+   files carry exactly one stamp. So the file is internally coherent on a 12Z
+   basis: the lagged members' leads *were* rebased, and the stamp records which
+   cycle a member came from rather than asserting a second initialisation. 36
+   members is also MOGREPS's full declared size, which only works if the two
+   cycles are being combined.
+
+   The old rule — "the stamp must be constant" — was the wrong *form* of a
+   check that should exist. Two independent statements of the initialisation
+   guard the §18/§20 defect, so the rule is now **causal**: a member may come
+   from an earlier cycle, never a later one. A stamp after the init still
+   refuses, because that is the two statements genuinely disagreeing.
+
+   `cyclone_run_registry.lagged_members` records the count — 18 of 36 here,
+   0 everywhere else — because those members are six hours older at the same
+   valid time, and a skill comparison treating all 36 as equally fresh is
+   comparing two things.
 
    Also: 6 rows of 994,161 carry only one coordinate, all in EMERAUDE. Dropped
    and counted, because a latitude with no longitude is not a position.

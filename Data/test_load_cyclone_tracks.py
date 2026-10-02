@@ -296,11 +296,28 @@ class TestLongitudeConversionIsCorrectAndCounted:
         _registry, tracks, _b = loader.read_file(path)
         assert tracks[0]['longitude'] == -50.0     # 310°E is 50°W
 
-    def test_the_conversion_is_counted_so_it_is_not_silent(self, tmp_path):
+    def test_forecast_and_observed_conversions_are_counted_apart(self, tmp_path):
+        """They do not share a convention, so one count would hide the signal.
+
+        The forecast column is signed +-180 in all 1,181 files; the observed
+        IBTrACS column reaches 253.6 in 85 of them. Counted together, the 85
+        dateline storms would drown a forecast conversion, which is the only
+        one that means anything has gone wrong.
+        """
         rows = [_row(0, 0, '2024-07-01 00:00:00', lon=310.0, obs_lon=309.0)]
         path = write(tmp_path, 'kwbc_120h_BERYL.csv', rows)
         registry, _t, _b = loader.read_file(path)
-        assert registry['converted_longitudes'] == 2   # forecast and observed
+        assert registry['converted_longitudes'] == 1       # forecast
+        assert registry['converted_obs_longitudes'] == 1   # observed
+
+    def test_an_observed_conversion_alone_does_not_flag_the_forecast(self, tmp_path):
+        # The normal dateline case: 85 real files look like this.
+        rows = [_row(0, 0, '2024-07-01 00:00:00', lon=179.0, obs_lon=185.0)]
+        path = write(tmp_path, 'kwbc_120h_GITA.csv', rows)
+        registry, tracks, _b = loader.read_file(path)
+        assert registry['converted_longitudes'] == 0
+        assert registry['converted_obs_longitudes'] == 1
+        assert tracks[0]['longitude'] == 179.0
 
     def test_signed_input_is_not_counted(self, tmp_path):
         registry, tracks, _b = loader.read_file(a_good_file(tmp_path))
@@ -472,3 +489,73 @@ class TestTheConstraintMigration:
     def test_no_table_yet_is_not_an_error(self):
         conn = self._Conn(self._Cursor(None, None))
         assert loader.widen_track_constraint(conn) == 'no table yet'
+
+
+class TestTimeLaggedMembers:
+    """`egrr_72h_GITA.csv` — the one file of 1,181 the loader used to refuse.
+
+    MOGREPS is a **time-lagged ensemble**: its 36-member 12Z ensemble is 18
+    members from the 12Z cycle plus 18 carried forward from 06Z. The tracker
+    stamps each member's `cyclone_id` with the cycle it came from, so that file
+    carries two stamps where every other file carries one.
+
+    The old rule — "the cyclone_id stamp must be constant" — refused it. The
+    rule was not arbitrary: two independent statements of the initialisation
+    guard the §18/§20 defect, where AIFS wind stored at 2025-09-08 was the
+    2025-09-16 run and every file said so with nobody reading it. But constancy
+    was the wrong form of the check, and it cost a whole file.
+
+    Measured before changing it: all 36 members agree that `valid - lead` is
+    2018-02-12 12:00, and 431 of the 432 MOGREPS files carry a single stamp.
+    So the file is internally coherent on a 12Z basis and the stamp is
+    provenance, not a second initialisation.
+
+    The rule now is **causal**: a member may come from an earlier cycle, never
+    a later one.
+    """
+
+    def _lagged_file(self, tmp_path, lag_stamp='2024063018', init_stamp='2024070100'):
+        rows = []
+        for member, stamp in ((0, init_stamp), (1, lag_stamp)):
+            for lead, valid in ((0, '2024-07-01 00:00:00'),
+                                (6, '2024-07-01 06:00:00')):
+                rows.append(_row(member, lead, valid,
+                                 cyclone_id=f'{stamp}_150N_0500W'))
+        return write(tmp_path, 'egrr_72h_GITA.csv', rows)
+
+    def test_a_member_from_an_earlier_cycle_is_accepted(self, tmp_path):
+        from datetime import datetime
+        registry, tracks, _b = loader.read_file(self._lagged_file(tmp_path))
+        assert len(tracks) == 4
+        # The init is what the rows say, not what either stamp says.
+        assert registry['init_time'] == datetime(2024, 7, 1, 0, 0)
+
+    def test_the_lagged_members_are_counted(self, tmp_path):
+        """Not bookkeeping: those members are older at the same valid time."""
+        registry, _t, _b = loader.read_file(self._lagged_file(tmp_path))
+        assert registry['lagged_members'] == 1
+
+    def test_a_file_with_no_lag_reports_zero(self, tmp_path):
+        registry, _t, _b = loader.read_file(a_good_file(tmp_path))
+        assert registry['lagged_members'] == 0
+
+    def test_a_member_from_a_LATER_cycle_still_refuses(self, tmp_path):
+        """The check that matters, and the reason this is not just a relaxation.
+
+        A stamp after the init is not lagging — it is the two statements of the
+        initialisation genuinely disagreeing, which is the defect the original
+        rule existed to catch. Keeping that while admitting GITA is the whole
+        point of the change.
+        """
+        path = self._lagged_file(tmp_path, lag_stamp='2024070112')
+        with pytest.raises(SourceError, match='after the initialisation'):
+            loader.read_file(path)
+
+    def test_the_rows_still_have_to_agree_with_themselves(self, tmp_path):
+        # Relaxing the stamp rule must not relax this one: valid - lead is the
+        # statement the init is actually taken from.
+        rows = [_row(0, 0, '2024-07-01 00:00:00'),
+                _row(0, 6, '2024-07-01 18:00:00')]       # implies a later init
+        path = write(tmp_path, 'egrr_72h_GITA.csv', rows)
+        with pytest.raises(SourceError, match='not constant'):
+            loader.read_file(path)
