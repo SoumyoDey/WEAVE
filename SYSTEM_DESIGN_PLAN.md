@@ -230,7 +230,7 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
 > | phase | state |
 > |---|---|
 > | **S1** Data lifecycle | **mostly DONE** — 2 items left |
-> | **S2** Ops & delivery | **CI only** — 4 of 5 items untouched |
+> | **S2** Ops & delivery | **CI + observability** — containerisation and an exercised restore left |
 > | **S3** Scale | **partly** — caps and caching done, Redis/async/load-test not |
 > | **S4** Extensibility | **DONE 2026-10-02** — exit criterion met; see the section below |
 > | **S5** Frontend | **1 decision, 2 items untouched** |
@@ -274,7 +274,7 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
   55.30 GB per three-model run it is what would make eviction cheap.
 - **Exit:** reached except for the runbook and the freshness signal.
 
-### S2 — Ops & delivery baseline *(de-risks the rest)* — **CI ONLY**
+### S2 — Ops & delivery baseline *(de-risks the rest)* — **CI + OBSERVABILITY**
 - **NOT DONE — containerize.** No `Dockerfile`, no `docker-compose.yml`.
 - ~~CI: backend pytest + frontend build/test on push; block on red~~ **DONE
   2026-08-24.** `.github/workflows/tests.yml`, four jobs on every PR and push to
@@ -284,17 +284,40 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
   asserts the database answers *before* running pytest, and `WEAVE_REQUIRE_DB_TESTS`
   (2026-10-01) turns an unreachable fixture from a skip into a failure — added
   after a class of test was found to have never run in CI at all.
-- **NOT DONE — observability.** `flask_api.py` still has **86 `print()` calls**
-  and imports neither `logging`, `structlog` nor `sentry`. No request IDs, no
-  latency/count metrics. `/api/health` is deeper than it was (see S1) but is not
-  a readiness endpoint.
-- **NOT DONE — backup/restore runbook.** `DEPLOY.md` has eight sections and
-  **none of them mentions `pg_dump`, backup or restore.** The database is 123.52
-  GB and one variable of one run takes ~42 minutes to load, so "rebuild from
-  source" is a real recovery path but a slow one, and it is not written down as
-  such. No secrets manager.
-- **Exit:** not reached. The CI gate is green; the local stack and observable
-  prod are absent.
+- ~~**NOT DONE — observability.**~~ **DONE 2026-10-02** (`NEXT_STEPS.md` §36).
+  `Data/observability.py`: structured logging to stderr (`LOG_LEVEL`,
+  `LOG_FORMAT=text|json`), a validated and propagated `X-Request-ID` on every
+  request and response, one access line per request with status and duration,
+  in-process counts and latency percentiles on `/api/health`, and
+  `GET /api/ready` as the readiness probe this bullet said was missing.
+
+  **The 43 endpoint `print()` calls are gone**; the 43 in the `__main__` startup
+  banner stay, because a banner the dev server prints is not service output and
+  `gunicorn` never runs it. The bullet's real finding was not the missing
+  timestamps: every endpoint ended `except Exception as e: print(str(e))`, so
+  **the traceback was discarded**. Those are `log.exception` now, and a test
+  asserts `exc_info` is present rather than trusting the call.
+
+  *Still open, and worth stating because the boundary above hides it:* the
+  pool-headroom and storage-headroom warnings also live in the `__main__`
+  block, so in production nobody is told. Moving them to application start is a
+  behaviour change to someone else's work and belongs in its own commit.
+- **PARTLY — backup/restore runbook.** This bullet used to read "`DEPLOY.md` has
+  eight sections and **none of them mentions `pg_dump`, backup or restore**".
+  That stopped being true on 2026-10-01: `DEPLOY.md` now has nine sections and
+  §9 is *Backup and recovery*, written during the planning-document
+  reconciliation (`NEXT_STEPS.md` §29).
+
+  What remains is not the writing. §9 states the real position rather than
+  inventing a procedure — there is no automated backup, rebuild-from-source is
+  the supported path at a measured ~42 minutes for one model's wind at one
+  initialisation, and **`pg_dump` has never been run at 123.52 GB.** An untested
+  restore is a plan, not a backup, so the open item is *exercising* it and
+  recording what it cost. **No secrets manager** either: `Data/.env` is the
+  whole of it.
+- **Exit:** not reached, but the gap is narrower and named. The CI gate is
+  green and the service is observable; what is absent is the local stack (no
+  `Dockerfile`, no `docker-compose.yml`) and a restore anyone has actually run.
 
 ### S3 — Scale the compute/render path — **PARTLY**
 - **NOT DONE — Redis.** The metric cache is in-process, so it dies with each
@@ -391,7 +414,7 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
   because its value belongs to a field rather than a cell.
 
 ### Quick wins (pull forward, <½ day each)
-- React error boundary (S5) · deepen `/api/health` into readiness+freshness (S1/S2)
+- React error boundary (S5) · ~~deepen `/api/health` into readiness+freshness~~ **readiness done 2026-10-02 as `/api/ready` (§36); freshness still open** (S1/S2)
   · Redis cache default (S3) · stale-data banner (S1).
 
 ### Testing / reliability

@@ -202,6 +202,9 @@ cannot protect — see §4.
 | `FLASK_PORT` | API port | `5000` |
 | `FLASK_DEBUG` | **must be false/unset in beta** | *(leave unset)* |
 | `MAX_CONTENT_LENGTH` | max request body (bytes) | `16777216` |
+| `LOG_LEVEL` | `DEBUG`/`INFO`/`WARNING`… | `INFO` |
+| `LOG_FORMAT` | `text` to read, `json` to ship | `text` locally, `json` behind a collector |
+| `LOG_QUIET_PATHS` | paths logged at DEBUG, so probes do not drown the log | `/api/health,/api/ready` |
 
 Frontend build vars (not in `.env`): `GENERATE_SOURCEMAP=false`, and
 `REACT_APP_API_URL` **only** if the API is deliberately on another host (§4).
@@ -220,6 +223,33 @@ Frontend build vars (not in `.env`): `GENERATE_SOURCEMAP=false`, and
 - [ ] `CORS_ORIGIN` locked to the frontend origin, *if* the two are on separate hosts (§5).
 - [ ] **Rotate the GitHub PAT** that was previously embedded in the git remote; remotes are now tokenless + use a credential helper.
 - [ ] `.env` never committed (already git-ignored).
+
+---
+
+## 7a. Readiness and logs
+
+`GET /api/ready` is the probe for a load balancer or a container runtime: it
+takes a pooled connection and runs `SELECT 1`, nothing more. **200** means this
+worker can serve; **503** means it cannot and the balancer should route around
+it. Point liveness/readiness checks here, *not* at `/api/health` — health runs
+database-size, pool, storage and export-convention checks, which is what you
+read once after a deploy, not several times a minute.
+
+Logs go to **stderr**, one line per request:
+
+```
+2026-10-02T10:15:01-0400 INFO [trace-abc] weave.access: GET /api/models 200 3.4ms from 127.0.0.1
+```
+
+The bracketed value is the request id. It is taken from an inbound
+`X-Request-ID` when the caller sends a sane one — so a trace spans your proxy
+and the app — and generated otherwise; either way it comes back on the response,
+so a tester reporting a problem has something to quote. Set `LOG_FORMAT=json`
+to get the same fields as JSON objects for a collector.
+
+`GET /api/health` also reports what this worker has served since it started:
+request counts by status class and recent latency percentiles. It is per-worker
+and resets on restart — with `-w 4` you are seeing one of four.
 
 ---
 

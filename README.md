@@ -208,7 +208,8 @@ WEAVE_v3/
 | `GET` | `/api/models` | List available models |
 | `GET` | `/api/variables` | List available variables |
 | `GET` | `/api/observation-coverage` | How far the truth reaches — `?model=&variable=` → `{init_time, obs_end, record_end_lead_hours, last_verifiable_hour, window_hours}` |
-| `GET` | `/api/health` | Health check |
+| `GET` | `/api/health` | Health check — database, pool headroom, storage headroom, export convention, and what this worker has served |
+| `GET` | `/api/ready` | Readiness probe — pooled `SELECT 1`, 200 or 503. Point a load balancer here, not at `/api/health` |
 
 ### Spatial metrics
 | Method | Endpoint | Description |

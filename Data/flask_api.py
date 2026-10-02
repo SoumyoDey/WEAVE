@@ -8,6 +8,7 @@ import base64
 import os
 import json
 import hashlib
+import logging
 import time
 from datetime import datetime, timedelta
 import scipy.stats
@@ -37,6 +38,21 @@ app = Flask(__name__)
 # Cap request bodies so a malformed/oversized POST can't exhaust memory.
 app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_CONTENT_LENGTH', 16 * 1024 * 1024))
 CORS(app, origins=os.environ.get('CORS_ORIGIN', 'http://localhost:3000'))
+
+# ── Observability ─────────────────────────────────────────────────────────────
+# S2 asks for an observable service; what was here was 86 `print()` calls and no
+# `logging` import, which meant no timestamps, no levels, nothing correlating
+# two concurrent requests, and — worst of the three — every endpoint's
+# `except Exception` discarding the traceback and printing only `str(e)`.
+#
+# Installed before any route is registered, so a request cannot be served
+# without an id. See `observability.py` for why an inbound X-Request-ID is
+# validated rather than cleaned, and for what deliberately stays a `print`.
+import observability
+
+observability.configure_logging()
+REQUEST_STATS = observability.install(app)
+log = logging.getLogger('weave.api')
 
 
 # ── Metric computations ───────────────────────────────────────────────────────
@@ -96,7 +112,7 @@ try:
         storage_uri=os.environ.get('RATE_LIMIT_STORAGE', 'memory://'),
     )
 except Exception as _e:  # pragma: no cover
-    print(f"⚠️  Rate limiting disabled: {_e}")
+    log.warning(f"⚠️  Rate limiting disabled: {_e}")
 
 
 # ── Plot caching ───────────────────────────────────────────────────────────────
@@ -118,7 +134,7 @@ try:
         'CACHE_REDIS_URL':  os.environ.get('CACHE_REDIS_URL', ''),
     })
 except Exception as _e:  # pragma: no cover
-    print(f"⚠️  Plot caching disabled: {_e}")
+    log.warning(f"⚠️  Plot caching disabled: {_e}")
 
 def _cache_get(key):
     if cache is None:
@@ -126,7 +142,7 @@ def _cache_get(key):
     try:
         return cache.get(key)
     except Exception as _e:
-        print(f"⚠️  Cache read failed: {_e}")
+        log.warning(f"⚠️  Cache read failed: {_e}")
         return None
 
 def _data_version(cursor):
@@ -204,7 +220,7 @@ def _data_version_uncached(cursor):
     except Exception as _e:                                   # pragma: no cover
         # A cache key is not worth failing a request over. An unstable version
         # only costs cache misses.
-        print(f"⚠️  data version unavailable, caching by TTL alone: {_e}")
+        log.warning(f"⚠️  data version unavailable, caching by TTL alone: {_e}")
         return 'nover'
 
 
@@ -292,12 +308,18 @@ def _point_list_response(result, truncated, what=''):
     if truncated:
         resp.headers['X-Truncated'] = 'true'
         # Loud on the server too: a truncated map that nobody noticed is exactly
-        # the outcome the cell-wise trim above is meant to avoid. flush=True
-        # because stdout is block-buffered when the server's output is
+        # the outcome the cell-wise trim above is meant to avoid.
+        #
+        # This used to be a `print(..., flush=True)`, and the flush was load
+        # bearing: stdout is block-buffered when the server's output is
         # redirected to a file, which hid this line the first time it fired.
-        print(f"⚠️  point list truncated{what}: returned {len(result)} cells, "
-              f"the limit (POINT_LIST_MAX_CELLS={POINT_LIST_MAX_CELLS}); "
-              f"there are more", flush=True)
+        # `logging` flushes on emit and writes to stderr, so the reason is gone
+        # with the print — recorded here so nobody re-adds it as a kwarg
+        # `Logger.warning` does not take, which is exactly how this line broke
+        # seven tests during the conversion.
+        log.warning("point list truncated%s: returned %d cells, the limit "
+                    "(POINT_LIST_MAX_CELLS=%d); there are more",
+                    what, len(result), POINT_LIST_MAX_CELLS)
     return resp
 
 
@@ -338,7 +360,7 @@ def _cache_set(key, value, timeout):
     try:
         cache.set(key, value, timeout=timeout)
     except Exception as _e:
-        print(f"⚠️  Cache write failed: {_e}")
+        log.warning(f"⚠️  Cache write failed: {_e}")
 
 
 # ── Lightweight input allowlist ───────────────────────────────────────────────
@@ -689,7 +711,7 @@ def _ensemble_size(cursor, model_name):
         # errorhandler answer instead of reporting 500.
         raise
     except Exception as e:
-        print(f"⚠️  ensemble size lookup failed for {model_name}: {e}")
+        log.warning(f"⚠️  ensemble size lookup failed for {model_name}: {e}")
     n = n if (n and n > 1) else None
     _ENSEMBLE_SIZE_CACHE[model_name] = n
     return n
@@ -1276,7 +1298,7 @@ def _member_cases_by_cell(cursor, model_name, variable, init_time,
             out[cell] = cases
 
     if candidates and not matched:
-        print(f"⚠️  member↔obs join matched 0 of {candidates} records for "
+        log.warning(f"⚠️  member↔obs join matched 0 of {candidates} records for "
               f"{model_name}/{variable} — grid misalignment, or no fully observed "
               f"window ({len(obs_by_cell)} obs cells, keys at 2 dp).")
     return out
@@ -1509,7 +1531,7 @@ def _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
     # grid or a lead time past the end of the observation record yields zero
     # pairs — indistinguishable from "no data" downstream.
     if matched_rows == 0:
-        print(f"⚠️  fcst↔obs join matched 0 of {candidate_rows} forecast records "
+        log.warning(f"⚠️  fcst↔obs join matched 0 of {candidate_rows} forecast records "
               f"for {model_name}/{variable} — grid misalignment, or no fully "
               f"observed window ({len(obs_by_cell)} obs cells, keys at 2 dp).")
     return dict(result)
@@ -2009,7 +2031,7 @@ def get_forecast_data():
                     continue
                 result.append({'lat': lat, 'lon': lon, 'value': rec[0]})
 
-        print(f"✅ Returned {len(result)} precipitation points (mm/h) for "
+        log.info(f"✅ Returned {len(result)} precipitation points (mm/h) for "
               f"{model_name} +{forecast_hour}h")
         return _point_list_response(
             result, truncated, f" ({model_name} precipitation +{forecast_hour}h)")
@@ -2019,7 +2041,7 @@ def get_forecast_data():
         # errorhandler answer instead of reporting 500.
         raise
     except Exception as e:
-        print(f"❌ Error in forecast-data: {str(e)}")
+        log.exception(f"❌ Error in forecast-data: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
     finally:
         cursor.close()
@@ -2131,7 +2153,7 @@ def get_wind_data():
                 'direction': round(direction_deg, 1)
             })
 
-        print(f"✅ Returned {len(result)} wind points for {model_name} +{forecast_hour}h ({member})")
+        log.info(f"✅ Returned {len(result)} wind points for {model_name} +{forecast_hour}h ({member})")
         return _point_list_response(
             result, truncated, f" ({model_name} wind +{forecast_hour}h {member})")
 
@@ -2140,7 +2162,7 @@ def get_wind_data():
         # errorhandler answer instead of reporting 500.
         raise
     except Exception as e:
-        print(f"❌ Error in wind-data: {str(e)}")
+        log.exception(f"❌ Error in wind-data: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
     finally:
         cursor.close()
@@ -2258,7 +2280,7 @@ def point_timeseries():
                     'cell': [cell[0], cell[1]],
                 })
 
-        print(f"✅ Timeseries: {len(result)} hours for {model_name} at ({lat}, {lon}) "
+        log.info(f"✅ Timeseries: {len(result)} hours for {model_name} at ({lat}, {lon}) "
               f"[{variable}]")
         return jsonify(result)
 
@@ -2267,7 +2289,7 @@ def point_timeseries():
         # errorhandler answer instead of reporting 500.
         raise
     except Exception as e:
-        print(f"❌ Error in point-timeseries: {str(e)}")
+        log.exception(f"❌ Error in point-timeseries: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
     finally:
         cursor.close()
@@ -2347,7 +2369,7 @@ def get_spread_skill():
         results = [_point_case_record(case) for _hour, case in sorted(by_hour.items())]
         summary = _point_summary(results)
 
-        print(f"\u2705 Spread-skill: {len(results)} hours matched, "
+        log.info(f"\u2705 Spread-skill: {len(results)} hours matched, "
               f"corr={summary['correlation']} for ({lat},{lon}) at 0.5deg cell {cell}")
         result = {'hours': results,
                         # `correlation` stays at the top level for the callers that
@@ -2369,7 +2391,7 @@ def get_spread_skill():
         # errorhandler answer instead of reporting 500.
         raise
     except Exception as e:
-        print(f"❌ Error in spread-skill: {str(e)}")
+        log.exception(f"❌ Error in spread-skill: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
     finally:
         cursor.close()
@@ -2484,7 +2506,7 @@ def get_spatial_metric():
             cursor, run_id, variable_id, init_time, request.args,
             min_lat, max_lat, min_lon, max_lon, obs_col,
         )
-        print(f"✅ Spatial {metric}: {len(points)} pts — {model_name} "
+        log.info(f"✅ Spatial {metric}: {len(points)} pts — {model_name} "
               f"bbox [{min_lat},{max_lat}]×[{min_lon},{max_lon}]")
         result = {'metric': metric, 'points': points, **extra}
         # Only successes are cached; the error paths above return before this.
@@ -2496,7 +2518,7 @@ def get_spatial_metric():
         # errorhandler answer instead of reporting 500.
         raise
     except Exception as e:
-        print(f"❌ Error in spatial-metric: {e}")
+        log.exception(f"❌ Error in spatial-metric: {e}")
         return jsonify({'error': 'Internal server error'}), 500
     finally:
         cursor.close()
@@ -2891,7 +2913,7 @@ def spatial_metric_plot():
             cbar_fontsize=style['cbar_fontsize'],
         )
 
-        print(f"✅ Plot: {metric} · {model} · {var_label} · {len(points)} pts")
+        log.info(f"✅ Plot: {metric} · {model} · {var_label} · {len(points)} pts")
         result = {'image': img_b64}
         _cache_set(_cache_key, result, timeout=int(os.environ.get('PLOT_CACHE_TTL', 24 * 3600)))
         return jsonify(result)
@@ -3115,7 +3137,7 @@ def observation_coverage():
         # errorhandler answer instead of reporting 500.
         raise
     except Exception as e:
-        print(f"❌ Error in observation-coverage: {e}")
+        log.exception(f"❌ Error in observation-coverage: {e}")
         return jsonify({'error': 'Internal server error'}), 500
     finally:
         cursor.close()
@@ -3166,7 +3188,7 @@ def _check_export_convention(cursor, model_name='GEFS', init_time=None):
         # errorhandler answer instead of reporting 500.
         raise
     except Exception as e:                      # a missing table is not fatal here
-        print(f"⚠️  export-convention check could not run: {e}")
+        log.warning(f"⚠️  export-convention check could not run: {e}")
         return dict(result, status='unknown', reason='query failed')
 
     inferred = _infer_scaled_export_divisor(ratios)
@@ -3184,7 +3206,7 @@ def _check_export_convention(cursor, model_name='GEFS', init_time=None):
             f'{declared} h. If {model_name} was re-exported, set '
             f'SCALED_EXPORT_DIVISOR_HOURS[{model_name!r}] to {inferred}; until then '
             f'its precipitation is off by a factor of {declared / inferred:g}.')
-        print(f"❌ export-convention MISMATCH for {model_name}: {result['detail']}")
+        log.exception(f"❌ export-convention MISMATCH for {model_name}: {result['detail']}")
     return result
 
 
@@ -3228,7 +3250,7 @@ def _export_divisor(model_name, init_time, variable='precipitation'):
             value = run_registry.resolve_divisor(cur, model_name, variable, init_time)
     except Exception as exc:
         value = SCALED_EXPORT_DIVISOR_HOURS.get(model_name)
-        print(f"⚠️  export convention for {model_name}/{variable} at {init_time} "
+        log.warning(f"⚠️  export convention for {model_name}/{variable} at {init_time} "
               f"unavailable ({type(exc).__name__}: {exc}); falling back to the "
               f"constant ({value}). Run `python run_registry.py --backfill`.")
     finally:
@@ -3237,6 +3259,39 @@ def _export_divisor(model_name, init_time, variable='precipitation'):
 
     _DIVISOR_CACHE[key] = value
     return value
+
+
+@app.route('/api/ready', methods=['GET'])
+def readiness():
+    """Can this worker serve a request right now? 200 or 503.
+
+    Deliberately *not* `/api/health`, which S2 noted is deep but is not a
+    readiness probe: health reports database size, pool headroom, storage
+    headroom and the export convention, which is what an operator reads once.
+    A load balancer asks a different and much narrower question, several times a
+    minute, and must not be the reason those queries run.
+
+    So this takes a connection from the pool and runs `SELECT 1`. That covers
+    the two ways this worker can be unable to serve — the pool is exhausted, or
+    the database is unreachable — and nothing else. A failure is **503, not
+    500**: the process is fine and is telling the truth about itself, and the
+    distinction is what lets a balancer take it out of rotation rather than a
+    pager treat it as a crash.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute('SELECT 1')
+            cur.fetchone()
+        return jsonify({'ready': True}), 200
+    except Exception as e:
+        # Not `log.exception`: an unready worker during a rolling restart is
+        # expected, and a stack trace per probe would bury the one that matters.
+        log.warning('readiness probe failed: %s: %s', type(e).__name__, e)
+        return jsonify({'ready': False, 'reason': type(e).__name__}), 503
+    finally:
+        return_db_connection(conn)
 
 
 @app.route('/api/health', methods=['GET'])
@@ -3296,6 +3351,12 @@ def health_check():
             # is wrong — see DB_SIZE_REVISIT_GB and DATA_EXPANSION_DESIGN.md
             # phase 5.
             "storage": _check_storage_headroom(cursor),
+            # What this worker has served since it started: counts by status
+            # class and recent latency percentiles. In-process and reset by a
+            # restart, which the payload says of itself rather than leaving a
+            # reader to assume it is cluster-wide (S2; a real metrics backend is
+            # S3's business).
+            "requests": REQUEST_STATS.snapshot(),
         })
     except RunSelectionError:
         # A 400 about the request, not a server fault: let the
@@ -3304,7 +3365,7 @@ def health_check():
     except Exception as e:
         # Log the detail server-side but don't leak the raw exception string
         # (DB internals / connection strings) to the client.
-        print(f"❌ Health check failed: {e}")
+        log.exception(f"❌ Health check failed: {e}")
         return jsonify({"status": "unhealthy", "database": "unavailable"}), 500
     finally:
         if cursor is not None:
@@ -3433,7 +3494,7 @@ def compare_timeseries():
                 if hour_min <= hour <= hour_max
             ]
 
-        print(f"✅ compare/timeseries: {sum(len(v) for v in result.values())} pts "
+        log.info(f"✅ compare/timeseries: {sum(len(v) for v in result.values())} pts "
               f"for models {models} at ({lat},{lon})")
         _cache_set(_key, result, timeout=METRIC_CACHE_TTL)
         return jsonify(result)
@@ -3443,7 +3504,7 @@ def compare_timeseries():
         # errorhandler answer instead of reporting 500.
         raise
     except Exception as e:
-        print(f"❌ Error in compare/timeseries: {e}")
+        log.exception(f"❌ Error in compare/timeseries: {e}")
         return jsonify({'error': 'Internal server error'}), 500
     finally:
         cursor.close()
@@ -3608,7 +3669,7 @@ def compare_skill():
             # (test_last_guards.py) and will fail if it ever breaks.
             obs_warning = 'No observations found for this location/variable.'
 
-        print(f"✅ compare/skill: {len(result_models)} models, "
+        log.info(f"✅ compare/skill: {len(result_models)} models, "
               f"{len(obs_hours_sorted)} obs hours at ({lat},{lon}), "
               f"cells={ {m: cell_of.get(m) for m in result_models} }")
         result = {
@@ -3633,7 +3694,7 @@ def compare_skill():
     except Exception as e:
         import traceback
         traceback.print_exc()
-        print(f"❌ Error in compare/skill: {e}")
+        log.exception(f"❌ Error in compare/skill: {e}")
         return jsonify({'error': 'Internal server error'}), 500
     finally:
         cursor.close()
@@ -3899,7 +3960,7 @@ def compare_spatial_agreement():
         img_b64 = base64.b64encode(buf.read()).decode('utf-8')
         # No plt.close() — OO Figure, no pyplot global state to release.
 
-        print(f"✅ compare/spatial-agreement: {n_points} pts, "
+        log.info(f"✅ compare/spatial-agreement: {n_points} pts, "
               f"{n_models} models, +{hour}h, {variable}")
         result = {
             'image':    img_b64,
@@ -3917,7 +3978,7 @@ def compare_spatial_agreement():
     except Exception as e:
         import traceback
         traceback.print_exc()
-        print(f"❌ Error in compare/spatial-agreement: {e}")
+        log.exception(f"❌ Error in compare/spatial-agreement: {e}")
         return jsonify({'error': 'Internal server error'}), 500
     finally:
         cursor.close()
@@ -4220,7 +4281,7 @@ def categorical_metrics_endpoint():
         ) if obs_hours_list else 'No observations found.'
 
         thr_display = f"{threshold_rate} m/s" if is_wind else f"{round(threshold_rate * 6, 2)} mm/6h"
-        print(f"✅ categorical-metrics: {model_name} {variable} ({lat},{lon}) "
+        log.info(f"✅ categorical-metrics: {model_name} {variable} ({lat},{lon}) "
               f"thr={thr_display}  "
               f"H={hits} M={misses} FA={false_alarms} CN={correct_neg}  "
               f"CSI={csi} POD={pod} FAR={far} FBI={fbi} BS={bs} CC={composite}")
@@ -4269,7 +4330,7 @@ def categorical_metrics_endpoint():
         raise
     except Exception as e:
         import traceback; traceback.print_exc()
-        print(f"❌ Error in categorical-metrics: {e}")
+        log.exception(f"❌ Error in categorical-metrics: {e}")
         return jsonify({'error': 'Internal server error'}), 500
     finally:
         cursor.close()
@@ -4528,7 +4589,7 @@ def region_categorical_metrics_endpoint():
             f"({obs_hours_list[0]}h–{obs_hours_list[-1]}h) across ~{n_grid_pts} grid points."
         ) if obs_hours_list else 'No observations matched.'
 
-        print(f"✅ region-categorical-metrics: {model_name} {variable} "
+        log.info(f"✅ region-categorical-metrics: {model_name} {variable} "
               f"bbox=[{min_lat},{max_lat},{min_lon},{max_lon}] "
               f"thr={threshold_rate} ({body.get('threshold_ms') or body.get('threshold_mm_6h')} raw)  "
               f"H={total_hits} M={total_misses} FA={total_fa} CN={total_cn}  "
@@ -4566,7 +4627,7 @@ def region_categorical_metrics_endpoint():
         raise
     except Exception as e:
         import traceback; traceback.print_exc()
-        print(f"❌ Error in region-categorical-metrics: {e}")
+        log.exception(f"❌ Error in region-categorical-metrics: {e}")
         return jsonify({'error': 'Internal server error'}), 500
     finally:
         cursor.close()
@@ -4789,7 +4850,7 @@ def compare_categorical():
         threshold_info['threshold_rate'] = round(threshold_rate, 4)
 
         total = sum(len(v) for v in per_model.values())
-        print(f"✅ compare/categorical: {len(models)} models, "
+        log.info(f"✅ compare/categorical: {len(models)} models, "
               f"{total} model-hours, ({lat},{lon}) window={fss_window} "
               f"thr={threshold_info.get('unit')}")
 
@@ -4808,7 +4869,7 @@ def compare_categorical():
         raise
     except Exception as e:
         import traceback; traceback.print_exc()
-        print(f"❌ Error in compare/categorical: {e}")
+        log.exception(f"❌ Error in compare/categorical: {e}")
         return jsonify({'error': 'Internal server error'}), 500
     finally:
         cursor.close()
@@ -5109,7 +5170,7 @@ def compare_region_metrics():
                                 'unit': 'mm/6h'})
         threshold_info['threshold_rate'] = round(threshold_rate, 4)
 
-        print(f"✅ compare/region-metrics: {len(models)} models × {len(metrics)} metrics, "
+        log.info(f"✅ compare/region-metrics: {len(models)} models × {len(metrics)} metrics, "
               f"bbox [{min_lat},{max_lat}]×[{min_lon},{max_lon}] "
               f"{hour_min}-{hour_max}h, cells={n_cells}")
 
@@ -5136,7 +5197,7 @@ def compare_region_metrics():
         raise
     except Exception as e:
         import traceback; traceback.print_exc()
-        print(f"❌ Error in compare/region-metrics: {e}")
+        log.exception(f"❌ Error in compare/region-metrics: {e}")
         return jsonify({'error': 'Internal server error'}), 500
     finally:
         cursor.close()
@@ -5213,7 +5274,7 @@ def compare_spatial_diff():
         raise
     except Exception as e:
         import traceback; traceback.print_exc()
-        print(f"❌ Error in compare/spatial-diff: {e}")
+        log.exception(f"❌ Error in compare/spatial-diff: {e}")
         return jsonify({'error': 'Internal server error'}), 500
     finally:
         # Release before rendering: Cartopy work is CPU-bound and would
@@ -5224,7 +5285,7 @@ def compare_spatial_diff():
     diff_points, n_a, n_b = _spatial_diff_points(pts_a, pts_b)
 
     if not diff_points:
-        print(f"⚠️  compare/spatial-diff: no shared cells for {model_a} vs {model_b} "
+        log.warning(f"⚠️  compare/spatial-diff: no shared cells for {model_a} vs {model_b} "
               f"({n_a} vs {n_b} cells)")
         return jsonify({
             'error': (f'{model_a} and {model_b} share no grid cells for this metric, '
@@ -5271,10 +5332,10 @@ def compare_spatial_diff():
         raise
     except Exception as e:
         import traceback; traceback.print_exc()
-        print(f"❌ Error rendering compare/spatial-diff: {e}")
+        log.exception(f"❌ Error rendering compare/spatial-diff: {e}")
         return jsonify({'error': 'Internal server error'}), 500
 
-    print(f"✅ compare/spatial-diff: {metric} {model_a}−{model_b}, "
+    log.info(f"✅ compare/spatial-diff: {metric} {model_a}−{model_b}, "
           f"{len(diff_points)} shared cells (of {n_a}/{n_b}), "
           f"mean {mean_diff:+.4f}")
     return jsonify({

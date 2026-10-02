@@ -3537,6 +3537,88 @@ in CSS, so `innerText` returns `FORECAST HOUR` and a case-sensitive `/Forecast
 Hour/` misses it. The screenshot showed the control plainly. **The measurement
 was wrong, not the app** — which is method lesson 11 again, one day later.
 
+## 36. The service is observable — S2's observability item, 2026-10-02
+
+S2's bullet read: *"`flask_api.py` still has 86 `print()` calls and imports
+neither `logging`, `structlog` nor `sentry`. No request IDs, no latency/count
+metrics. `/api/health` is deeper than it was but is not a readiness endpoint."*
+All four are addressed. `Data/observability.py` holds it; `flask_api.py` wires
+it in before any route is registered.
+
+### The item that mattered was not the timestamps
+
+Every endpoint ended:
+
+```python
+except Exception as e:
+    print(f"❌ Error in forecast-data: {str(e)}")
+    return jsonify({'error': 'Internal server error'}), 500
+```
+
+**That prints the message and throws the traceback away.** The one line a reader
+most needs — where it failed — was never written down, in a 5,000-line module.
+Seventeen of those are now `log.exception`, which keeps the stack, and
+`TestErrorsKeepTheirTraceback` asserts `exc_info` is actually present rather
+than trusting that the call was changed.
+
+The other two consequences were real but smaller: nothing correlated two
+concurrent requests, and there were no timestamps or levels, so a log could not
+be filtered and "when did this start" had no answer.
+
+### What is there now
+
+- **Structured logging to stderr**, `LOG_LEVEL` and `LOG_FORMAT=text|json`. JSON
+  carries `extra=` fields as fields, so `status` and `duration_ms` are queryable
+  rather than substrings to parse back out of a sentence.
+- **`X-Request-ID`, validated then propagated.** Accepted from the caller when
+  it matches `[A-Za-z0-9._-]{1,64}`, generated otherwise, echoed on the
+  response. **Replaced wholesale rather than cleaned**, because a half-sanitised
+  id is a bug waiting to be found: an unvalidated header in a log line is how a
+  newline in that header forges a log entry. Worth recording that werkzeug's
+  test client *refuses to send* a newline header, so that case cannot be driven
+  through a client at all — the validator is unit-tested for it directly, since
+  a request need not arrive through werkzeug's client in production.
+- **One access line per request**, with status, duration and client. Werkzeug's
+  dev-server line is quieted to WARNING: it duplicated every request, carried no
+  id and no duration, and logged after the context closed so it read `[-]`.
+  Quieting it removed the only place the client appeared, so `remote_addr` moved
+  onto our line — the peer socket, which behind a proxy is the proxy, stated
+  rather than implied.
+- **Counts and latency on `/api/health`**, bounded to a 1,000-sample reservoir,
+  labelled `"scope": "this worker, since it started"` so nobody reads a
+  per-worker number as cluster-wide.
+- **`GET /api/ready`**: take a pooled connection, `SELECT 1`, 200 or **503**.
+  503 rather than 500 on purpose — the process is fine and is telling the truth
+  about itself, which is what lets a balancer route around it instead of paging
+  someone. Health stays what it is: database size, pool, storage and export
+  convention, read once after a deploy, not several times a minute.
+
+### What deliberately stays a `print`
+
+The 43 calls in the `__main__` startup banner. That is a CLI courtesy from the
+dev server, not service output, and `gunicorn` never runs it.
+
+**That boundary hides a real gap, so it is named rather than left implicit:**
+the pool-headroom and storage-headroom warnings live in the same block, so in
+production *nobody is told*. §27 added the storage warning "announced where it
+can be acted on" — and in production it is not announced at all. Fixing that
+means moving those checks to application start, a behaviour change to someone
+else's work, and it belongs in its own commit.
+
+### One self-inflicted lesson
+
+The conversion was mechanical, and one `print(..., flush=True)` became
+`log.warning(..., flush=True)`. `Logger.warning` takes no such kwarg, so it
+raised `TypeError` inside an `except` block and **seven tests went red**. The
+flush was load-bearing for a print — stdout is block-buffered when redirected to
+a file, which had hidden that line once before — and is simply unnecessary now,
+since `logging` flushes on emit. The comment explaining the original reason is
+kept next to the line, with the reason it no longer applies, because the next
+person to read it will otherwise wonder where the flush went.
+
+A mechanical edit across 43 call sites needs the suite run before it is
+believed. It was, and that is the only reason this is a footnote.
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in
