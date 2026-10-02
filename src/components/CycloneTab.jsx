@@ -323,6 +323,20 @@ export function CycloneTab({ active }) {
                 : 'every member produced a track'}
               {' · '}init {String(data.init_time).replace('T', ' ')}
             </div>
+            {/*
+              **No time-lagged caption here, deliberately.** MOGREPS builds its
+              36 members from two cycles, so half of them are a six-hour-old
+              forecast valid at the same time — which would be worth saying.
+              But only 1 of the 432 MOGREPS files records it: `egrr_72h_GITA`
+              stamps 18 members with the earlier cycle, and the other 360
+              36-member files stamp every member with the nominal cycle.
+
+              So `lagged_members` is "what this file disclosed", not "whether
+              this ensemble is lagged". Captioning the one run that disclosed
+              it would tell a reader the other 360 are same-cycle ensembles,
+              which is very likely false. A warning that appears on 1 of 361
+              equivalent runs is worse than no warning.
+            */}
             {showStrike && strike && (
               <div style={{ color: 'rgba(255,255,255,0.55)',
                             fontSize: t.fontSize.micro, marginTop: '2px' }}>

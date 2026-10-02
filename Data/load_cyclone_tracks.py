@@ -221,10 +221,18 @@ CREATE TABLE IF NOT EXISTS cyclone_run_registry (
     -- Distinct genesis positions the members identified. ECMWF reports one for
     -- ALCIDE; MOGREPS reports eighteen. That disagreement is a result.
     genesis_variants    INTEGER,
-    -- Members carried forward from an earlier cycle. MOGREPS is time-lagged:
-    -- its 36-member 12Z ensemble is 18 members from 12Z plus 18 from 06Z. Those
-    -- 18 are six hours older at the same valid time, so a skill comparison that
-    -- treats all 36 as equally fresh is comparing two things.
+    -- Members whose `cyclone_id` names an EARLIER cycle than the run's init.
+    -- MOGREPS is time-lagged: its 36-member 12Z ensemble is 18 members from 12Z
+    -- plus 18 from 06Z, and those 18 are six hours older at the same valid
+    -- time, so a skill comparison treating all 36 as equally fresh is comparing
+    -- two things.
+    --
+    -- **Read this as "what the file disclosed", not "whether the ensemble is
+    -- lagged".** Exactly 1 of the 432 MOGREPS files records it: GITA's 12Z run
+    -- stamps 18 members with the earlier cycle, while 360 other 36-member files
+    -- stamp every member with the nominal cycle. Those 360 are very likely
+    -- lagged in the same way and simply do not say so. A zero here is absence
+    -- of evidence.
     lagged_members      INTEGER   DEFAULT 0,
     -- What ran, and what produced a track. The gap is the point: see §5.
     nominal_members     INTEGER   NOT NULL,

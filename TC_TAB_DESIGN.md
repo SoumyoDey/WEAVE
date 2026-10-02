@@ -496,6 +496,26 @@ is ever wanted, it is one question — but nothing waits on it.
    valid time, and a skill comparison treating all 36 as equally fresh is
    comparing two things.
 
+   **It is deliberately not shown on the tab, and the reason is the more
+   useful finding.** Only **1 of the 432** MOGREPS files discloses the lag:
+   GITA's 12Z run stamps 18 members with the earlier cycle, while **360** other
+   36-member files stamp every member with the nominal cycle. If MOGREPS always
+   builds 36 from two cycles, those 360 are lagged in exactly the same way and
+   simply do not say so.
+
+   So `lagged_members = 0` means *no evidence of lag in this file*, not *not
+   lagged*. Captioning the one run that disclosed it would tell a reader the
+   other 360 are same-cycle ensembles, which is very likely false — a warning
+   that fires on 1 of 361 equivalent runs is worse than no warning. The column
+   stays because it is an accurate statement about the file; the UI stays
+   silent because the column cannot support the claim a caption would make.
+
+   The honest version of this caption would be a property of **MOGREPS**, not
+   of a run — "this ensemble is time-lagged; half its members are six hours
+   older" — on all 432. That is not written because it has not been confirmed
+   for the 360, only inferred from how MOGREPS is known to work, and inferring
+   is what produced the three longitude retractions in `TC_DATA_ACCESS.md`.
+
    Also: 6 rows of 994,161 carry only one coordinate, all in EMERAUDE. Dropped
    and counted, because a latitude with no longitude is not a position.
 6. ~~Error-against-lead and spread-against-error.~~ **BUILT 2026-10-02** as one

@@ -301,3 +301,49 @@ class TestAMemberWithTwoCandidateCyclones:
         # cell near it can be marked unless the decoy was included.
         assert body['points'], 'the field should not be empty'
         assert max(p['lat'] for p in body['points']) < fx.CY_DECOY_LAT - 1.0
+
+
+class TestTimeLaggedMembersAreReported:
+    """`lagged_members` reaches the client, and means less than it looks like.
+
+    MOGREPS builds 36 members from two cycles: 18 from the stated
+    initialisation and 18 carried forward six hours. Those 18 are an older
+    forecast valid at the same time, so they carry more error, and a comparison
+    treating all 36 as equally fresh is comparing two things.
+
+    **But only 1 of the 432 MOGREPS files discloses it.** GITA's 12Z run stamps
+    18 members with the earlier cycle; 360 other 36-member files stamp every
+    member with the nominal cycle and are very likely lagged in exactly the
+    same way without saying so. So a zero here is absence of evidence, and the
+    tab deliberately does **not** caption it — a warning appearing on 1 of 361
+    equivalent runs would tell a reader the other 360 are same-cycle
+    ensembles.
+
+    The field is carried anyway because it is an accurate statement about the
+    file, which is worth keeping; these tests pin that it arrives and that it
+    is never null, not that anything renders from it.
+    """
+
+    def test_the_tracks_response_carries_the_count(self, db_client):
+        body = db_client.get(
+            f'/api/cyclone/tracks?storm={fx.CY_STORM}&centre=ecmf').get_json()
+        assert 'lagged_members' in body
+
+    def test_a_run_with_no_lag_reports_zero_rather_than_nothing(self, db_client):
+        # Absent and zero must not be the same thing to a client: `undefined`
+        # would render as no caption AND as no bug, which is how this kind of
+        # omission survives.
+        body = db_client.get(
+            f'/api/cyclone/tracks?storm={fx.CY_STORM}&centre=ecmf').get_json()
+        assert body['lagged_members'] == 0
+
+    def test_it_survives_a_registry_that_predates_the_column(self, db_client):
+        """COALESCE, because an un-migrated database has NULL, not 0.
+
+        `ensure_registry_columns` adds the column with a default, but rows
+        written before it exists hold NULL, and NULL > 0 is NULL — so the
+        caption would silently never render rather than render wrongly.
+        """
+        body = db_client.get(
+            f'/api/cyclone/tracks?storm={fx.CY_STORM}&centre=kwbc').get_json()
+        assert body['lagged_members'] is not None
