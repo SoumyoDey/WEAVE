@@ -324,15 +324,31 @@ export function CycloneTab({ active }) {
               {' · '}init {String(data.init_time).replace('T', ' ')}
             </div>
             {/*
-              **No time-lagged caption here, and that is a decision.** MOGREPS
-              builds its 36 members from two cycles, so half are a six-hour-old
-              forecast valid at the same time. Only 1 of its 432 files records
-              that, so a per-run caption would appear on one run and imply the
-              other 360 are same-cycle ensembles — very likely false. The
-              honest version is a statement about MOGREPS, on every MOGREPS
-              run, and nobody has confirmed it for those 360.
-              See TC_TAB_DESIGN.md.
+              Stated for MOGREPS as a whole, not per run, and that distinction
+              is the finding. MOGREPS-G is a 36-member **time-lagged** ensemble:
+              18 members from the stated cycle pooled with 18 from six hours
+              earlier, aligned by valid time. So half of any 36 are a staler
+              forecast at the same moment.
+
+              Only 1 of the 432 MOGREPS files here lets you tell which half.
+              Where you can (GITA's 12Z run, whose cyclone_ids name the cycle),
+              the lagged members are measurably worse at every lead — +15 km at
+              T+0 rising to +54 km at T+144, pooled +26 km. Everywhere else the
+              member ids do not preserve the grouping, so the two id blocks are
+              each a 50/50 mix and the effect washes out to -2 km archive-wide.
+
+              That null is not evidence of no lag; it is evidence the ids do not
+              encode it. Hence a statement about the system, which is documented
+              and always true, rather than a per-run number that would be
+              unknowable for 431 of 432 runs. See TC_TAB_DESIGN.md.
             */}
+            {data.system === 'MOGREPS' && (
+              <div style={{ color: 'rgba(255,255,255,0.45)',
+                            fontSize: t.fontSize.micro, marginTop: '2px' }}>
+                time-lagged ensemble — 18 members from this cycle, 18 from six
+                hours earlier, so half are staler at the same valid time
+              </div>
+            )}
             {showStrike && strike && (
               <div style={{ color: 'rgba(255,255,255,0.55)',
                             fontSize: t.fontSize.micro, marginTop: '2px' }}>

@@ -3718,14 +3718,32 @@ earlier cycle, never a later one — which keeps the §18/§20 guard (two
 independent statements of the init, the defect where AIFS wind stored at
 2025-09-08 was the 2025-09-16 run) while admitting the file. The registry
 held a `lagged_members` column for a few hours — 18 of 36 here — and it was
-removed the same day. Only 1 of the 432 MOGREPS files discloses a lag, while
-360 other 36-member files stamp every member with the nominal cycle and are
-very likely lagged without saying so, so a `0` meant "this file did not say"
-rather than "not lagged". A field that reads as a measurement but is really a
-disclosure quirk invites a false inference, and the obvious use for it — a
-caption — would have fired on one run and implied the other 360 were
-same-cycle ensembles. The count lives in `TC_TAB_DESIGN.md` instead, where it
-can be stated with its caveat.
+removed the same day, then superseded by something better.
+
+**Met Office documentation (supplied 2026-10-02) confirms what GITA implied:**
+MOGREPS-G is a 36-member time-lagged ensemble, 18 from the stated cycle plus 18
+from six hours earlier, **aligned by valid time**. That is a property of the
+system, true of all 432 MOGREPS runs here, not of the one file that happened to
+disclose it — so the tab now states it on every MOGREPS run, which is the
+"honest version" this file called for and said was blocked on confirmation.
+
+**Two measurements settled how far it can be taken.** GITA's 12Z member ids
+split cleanly — 0–17 the 12Z cycle, 18–35 the lagged 06Z — and the lagged half
+is worse at every lead: +15 km at T+0, +26 at T+72, **+54 at T+144**, pooled
++25.8 km, exactly the shape a six-hour handicap predicts. The same comparison
+across the whole archive gives **−2.1 km over 335,821 matched points**: nothing.
+
+**The null is the interesting half.** It does not mean the other runs are
+unlagged — documentation says they are. It means the member ids stop encoding
+which half a member came from, so both id blocks are a 50/50 mix and the
+penalty cancels. **Absence of a signal from a split that no longer corresponds
+to anything is not absence of the thing**, and reading it the other way would
+have been the same mistake as treating `n_live_tup = 0` as a row count.
+
+The consequence is left uncorrected and stated: every MOGREPS error curve here
+is pessimistic by roughly the pooled +26 km, and nothing identifies which
+members to correct. Correcting would need member provenance the archive does
+not carry.
 
 **The archive is now fully loaded: 1,181 runs, 993,630 track rows.**
 

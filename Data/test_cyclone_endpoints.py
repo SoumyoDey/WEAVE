@@ -301,3 +301,34 @@ class TestAMemberWithTwoCandidateCyclones:
         # cell near it can be marked unless the decoy was included.
         assert body['points'], 'the field should not be empty'
         assert max(p['lat'] for p in body['points']) < fx.CY_DECOY_LAT - 1.0
+
+
+class TestTheTimeLaggedNoteIsSystemWideNotPerRun:
+    """MOGREPS-G is a 36-member time-lagged ensemble: 18 from the stated cycle
+    pooled with 18 from six hours earlier, aligned by valid time. That is a
+    property of the system and is documented, so the tab states it on every
+    MOGREPS run rather than on the one run whose `cyclone_id`s happen to name
+    the originating cycle.
+
+    The endpoint's part of that contract is simply `system` — the client
+    switches on it — so this pins that `system` is the Met Office's name and
+    not the WMO centre code, which is the thing a refactor would quietly swap.
+    """
+
+    def test_mogreps_runs_name_the_system_not_the_centre(self, db_client):
+        body = db_client.get(
+            f'/api/cyclone/tracks?storm={fx.CY_STORM}&centre=ecmf').get_json()
+        assert body['system'] == 'ECMWF-ENS'
+        assert body['centre'] == 'ecmf'
+
+    def test_the_denominator_is_unaffected_by_lagging(self, db_client):
+        """36 is the ensemble size whether or not half of it is stale.
+
+        Worth pinning because the tempting "fix" for lagging is to count only
+        the fresh half, which would halve every MOGREPS strike probability.
+        Lagged members are forecasts, not absences.
+        """
+        body = db_client.get(
+            f'/api/cyclone/tracks?storm={fx.CY_STORM}&centre=kwbc').get_json()
+        assert body['nominal_members'] == dict(
+            (c, n) for c, _s, n, _t in fx.CY_RUNS)['kwbc']

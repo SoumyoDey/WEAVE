@@ -491,35 +491,54 @@ is ever wanted, it is one question — but nothing waits on it.
    from an earlier cycle, never a later one. A stamp after the init still
    refuses, because that is the two statements genuinely disagreeing.
 
-   **The lag is recorded here and nowhere else, deliberately.** For this run
-   it is **18 of 36** members carried forward from 06Z. A
-   `lagged_members` column briefly existed and was removed on 2026-10-02, for
-   a reason worth keeping:
+   **MOGREPS-G is a 36-member time-lagged ensemble** — 18 members from the
+   stated cycle pooled with 18 from six hours earlier, **aligned by valid
+   time**, which is why every member in this file reports its lead relative to
+   12Z. Confirmed from Met Office documentation on 2026-10-02, after being
+   inferred from GITA alone; it is a property of the system, true of all 432
+   MOGREPS runs here.
 
-   Only **1 of the 432** MOGREPS files discloses a lag at all. GITA's 12Z run
-   stamps 18 members with the earlier cycle; **360** other 36-member files
-   stamp every member with the nominal cycle. If MOGREPS always builds 36 from
-   two cycles — which is how it is documented to work — those 360 are lagged in
-   exactly the same way and simply do not say so.
+   **Measured, on the one run where the halves are identifiable.** GITA's 12Z
+   `cyclone_id`s name the originating cycle and the member ids split cleanly:
+   **0–17 are the 12Z cycle, 18–35 the lagged 06Z**, contiguous, 18 each. The
+   lagged half is worse at every lead, by exactly the shape a six-hour handicap
+   predicts:
 
-   So the column read as a measurement while actually being a disclosure
-   quirk: `0` meant *this file did not say*, not *not lagged*. Anything built
-   on it, a caption most of all, would have fired on one run and implied the
-   other 360 were same-cycle ensembles. A field that invites a false inference
-   is worse than no field, so the loader no longer counts it and the API no
-   longer returns it.
+   | lead | ids 0–17 | ids 18–35 | penalty |
+   |---|---|---|---|
+   | T+0 | 38.7 km | 53.8 km | +15.2 |
+   | T+72 | 139.0 km | 165.0 km | +26.0 |
+   | T+108 | 182.6 km | 224.4 km | +41.9 |
+   | T+144 | 340.8 km | 394.5 km | **+53.7** |
 
-   What survives is the part that matters: the file **loads**, and a
-   `cyclone_id` stamped *after* the init still refuses, because that is the
-   two statements of the initialisation genuinely disagreeing (§18/§20).
+   Pooled, +25.8 km. Error grows roughly 40 km per six hours at that range, so
+   the magnitude fits.
 
-   The honest version of this would be a statement about **MOGREPS** on all
-   432 runs — *this ensemble is time-lagged; half its members are six hours
-   older* — not a per-run number. It is not written because it has not been
-   confirmed for those 360 files, only inferred from how MOGREPS is known to
-   work, and inferring from how something is known to work is what produced
-   the three longitude retractions in `TC_DATA_ACCESS.md`. One question to
-   `wang.shuoc`, or one look at the tracker configuration, would settle it.
+   **But the id convention does not survive into the other 431 files.** The
+   same 0–17 / 18–35 comparison gives −11.8 km on GITA's other runs and
+   **−2.1 km across all 335,821 matched MOGREPS points** — noise, and slightly
+   the wrong way.
+
+   **That null is not evidence of no lag.** Those runs are lagged too; the
+   member ids simply stop encoding which half a member came from, so both id
+   blocks are a 50/50 mix and the penalty cancels — which is exactly what
+   −2 km looks like. Absence of a signal from a split that no longer
+   corresponds to anything is not absence of the thing.
+
+   So: the tab states the lag **as a property of MOGREPS, on every MOGREPS
+   run**, which is documented and always true. It does not state which members
+   are stale, because that is unknowable for 431 of 432 runs. A
+   `lagged_members` column that tried to was added and removed the same day
+   (`NEXT_STEPS.md` §37) — it read as a measurement while being a disclosure
+   quirk.
+
+   **What this costs, left uncorrected.** Every MOGREPS error curve on this tab
+   is pessimistic by something like the pooled +26 km, because half the
+   ensemble is six hours older than the label implies, and nothing identifies
+   which half to correct. A reader comparing MOGREPS against ECMWF's
+   same-cycle 51 is comparing a lagged ensemble with an unlagged one. Stated
+   rather than silently corrected, because correcting would need the member
+   provenance the archive does not carry.
 
    Also: 6 rows of 994,161 carry only one coordinate, all in EMERAUDE. Dropped
    and counted, because a latitude with no longitude is not a position.
