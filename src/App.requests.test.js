@@ -151,14 +151,34 @@ const renderApp = () => render(<RunProvider><App /></RunProvider>);
 beforeEach(() => { resetRun(); installFetch(); });
 afterEach(() => { resetRun(); jest.restoreAllMocks(); });
 
-/** Wait until the app has stopped issuing requests. */
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Wait until the app has stopped issuing requests.
+ *
+ * **Quiescence, not a fixed number of ticks.** The first version of this looped
+ * eight times at 30 ms and stopped, which was enough when this file ran alone
+ * and not enough under the full suite, where jest runs workers in parallel and
+ * everything is slower. The result was a test that passed five times in
+ * isolation and failed in `npm test` — the worst kind, because it teaches
+ * people that a red run means nothing.
+ *
+ * This waits for `QUIET_MS` with no new request, twice over, up to `BUDGET_MS`.
+ * Requiring two consecutive quiet windows matters: one is satisfied by the gap
+ * between a response landing and the effect it triggers firing.
+ */
+const QUIET_MS = 80;
+const BUDGET_MS = 4000;
 const settle = async () => {
   await waitFor(() => expect(to('/api/runs').length).toBeGreaterThan(0));
-  let last = -1;
+  const deadline = Date.now() + BUDGET_MS;
+  let quiet = 0;
+  let last = calls.length;
   /* eslint-disable no-await-in-loop */
-  for (let i = 0; i < 8 && last !== calls.length; i += 1) {
+  while (Date.now() < deadline && quiet < 2) {
+    await pause(QUIET_MS);
+    quiet = calls.length === last ? quiet + 1 : 0;
     last = calls.length;
-    await new Promise((r) => setTimeout(r, 30));
   }
   /* eslint-enable no-await-in-loop */
 };
@@ -189,11 +209,39 @@ describe('no request leaves without a run', () => {
   });
 });
 
+/**
+ * These counts are PRODUCTION counts, and that is load-bearing.
+ *
+ * `src/index.js` wraps the app in `<React.StrictMode>`, which deliberately
+ * invokes every effect twice in development to surface effects that are not
+ * idempotent. `renderApp` here does not wrap in StrictMode — RTL's `render`
+ * mounts what it is given — so one effect run is one request, and "exactly one"
+ * means what it says.
+ *
+ * **Get this wrong in either direction and the file is worthless.** Wrapping in
+ * StrictMode would double every expected count, so the numbers below would have
+ * to be 2, and a genuine duplicate-fetch defect would then be indistinguishable
+ * from the doubling. Leaving it out, as here, means these numbers do not match
+ * what a developer sees in a dev-server network panel — which is a feature, not
+ * a discrepancy to reconcile.
+ *
+ * Observed on 2026-10-06: in the dev server `/api/cyclones` fires twice per
+ * load while `/api/forecast-hours` fires once. That is not a defect in one and
+ * not the other. It is StrictMode doubling both, with `forecast-hours` absorbing
+ * its second run in the `if (!selectedRun) return;` guard — confirmed by
+ * disabling StrictMode, where `/api/cyclones` drops to one. The same reasoning
+ * also explains why `forecast-hours` measured *three* before that guard: two
+ * doubled mounts plus one when the run arrived.
+ *
+ * So when these tests disagree with a dev-server network panel, suspect
+ * StrictMode before suspecting either. And a future version of this file that
+ * exercises the Cyclones tab must account for it: `/api/cyclones` would trip
+ * the duplicate-URL assertion below under StrictMode and be perfectly correct.
+ */
 describe('one answer, one request', () => {
   it('fetches forecast-hours once for the initial selection', async () => {
-    // Was three in dev and two in production: the effect ran at mount with
-    // `selectedRun` still null and again when it arrived. StrictMode is not
-    // enabled in this renderer, so this counts production behaviour.
+    // Was three in the dev server and two in production: the effect ran at
+    // mount with `selectedRun` still null and again when it arrived.
     renderApp();
     await settle();
     expect(to('/api/forecast-hours')).toHaveLength(1);
@@ -206,6 +254,12 @@ describe('one answer, one request', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Controls' }));
     fireEvent.click(await screen.findByRole('button', { name: /UKMO/ }));
+
+    // Wait for the request to appear before waiting for quiet, or a slow run
+    // settles during the gap before it is issued and reads zero added — which
+    // is how the first version of this test flaked only in the full suite.
+    await waitFor(() =>
+      expect(to('/api/forecast-hours').length).toBeGreaterThan(before));
     await settle();
 
     const added = to('/api/forecast-hours').slice(before);

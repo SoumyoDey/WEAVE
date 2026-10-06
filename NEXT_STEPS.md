@@ -4162,6 +4162,41 @@ inside a `setTimeout`, so in jsdom it lands after a test unmounts and throws
 "Map container not found" asynchronously, attributed to whichever test is
 running. Anything asserting on the map belongs in a file that does not mock it.
 
+**The counts in that file are production counts, and it matters which.**
+`src/index.js` wraps the app in `<React.StrictMode>`, which invokes every effect
+twice in development on purpose. RTL's `render` does not wrap, so one effect run
+is one request and "exactly one" means it. Wrapping would double every expected
+number and make a real duplicate-fetch defect indistinguishable from the
+doubling; not wrapping means the numbers deliberately do **not** match a
+dev-server network panel.
+
+That is worth knowing because the dev panel looks wrong until you understand it:
+`/api/cyclones` fires twice per load while `/api/forecast-hours` fires once.
+Neither is a defect. StrictMode doubles both, and `forecast-hours` absorbs its
+second run in the `if (!selectedRun) return;` guard — confirmed 2026-10-06 by
+disabling StrictMode, where `/api/cyclones` drops to one. The same mechanism
+explains why `forecast-hours` measured *three* before that guard: two doubled
+mounts plus one when the run arrived.
+
+**The first version of that file was flaky, which is worse than not having
+it.** Its `settle()` helper looped eight times at 30 ms and stopped. That was
+enough running alone and not enough under `npm test`, where jest runs workers in
+parallel and everything is slower, so the model-change case passed five times in
+isolation and failed in the full suite — the worst failure mode, because it
+teaches people a red run means nothing. It now waits for **two consecutive quiet
+windows** (80 ms, 4 s budget) rather than a fixed number of ticks, and the
+interaction case waits for its request to *appear* before waiting for quiet.
+Requiring two quiet windows is the load-bearing part: one is satisfied by the
+gap between a response landing and the effect it triggers firing. Verified with
+three consecutive full-suite runs, and re-verified that the tests still
+discriminate afterwards — a more generous wait is exactly how a count test goes
+quietly toothless.
+
+**When a count test disagrees with the dev server, suspect StrictMode before
+suspecting the code.** And a future version of that file which exercises the
+Cyclones tab has to account for it: under StrictMode `/api/cyclones` would trip
+the duplicate-URL assertion while being entirely correct.
+
 Two things worth keeping from the build. A test written before the code caught a
 **500**: `_resolve_init_time` returns `None` for a model with no loaded run and
 the endpoint called `.isoformat()` on it. It now answers 404, which is
