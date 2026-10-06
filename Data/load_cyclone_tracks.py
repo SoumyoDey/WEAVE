@@ -229,7 +229,28 @@ CREATE TABLE IF NOT EXISTS cyclone_run_registry (
     -- The filename's claim, kept because it is what the file is called, and
     -- never used as a duration: it is wrong by 2x for ECMWF. See the docstring.
     source_label_hours  INTEGER,
-    source_cycles       INTEGER,          -- the `T` column: initialisation cycles back
+    -- The `T` column. **MEASURED 2026-10-06, and it counts forward, not back.**
+    --
+    -- T is the centre's own forecast cycle, numbered from the earliest run the
+    -- archive holds for that storm: T=0 is the EARLIEST initialisation and T=12
+    -- the latest, which is the opposite of what this comment used to say. It is
+    -- monotonic in `init_time` for all 401 storm-centre pairs, no exceptions.
+    --
+    -- It takes only 0, 4, 8, 12 here: the archive kept every 4th cycle, four
+    -- runs per storm. **Hours elapsed is T x the centre's own cycle interval**,
+    -- which is 12 h for ECMWF and 6 h for MOGREPS and GEFS -- so T=12 is 144 h
+    -- for ecmf and 72 h for the other two.
+    --
+    -- That mapping is not exact: it holds for 96% of ecmf pairs, 91% of egrr
+    -- and 83% of kwbc, and every miss is a POSITIVE multiple of the interval
+    -- (+6, +12, +18 h). A cycle that produced no file leaves T under-counting
+    -- the elapsed time, so **T is a cycle number, not a duration.** Derive
+    -- hours from `init_time` and never from T.
+    --
+    -- This is also the mechanism behind the filename defect: the label is
+    -- always T x 6, correct for the 6-hourly centres and wrong by 2x for ECMWF,
+    -- because the generating script assumed 6-hourly for everyone.
+    source_cycles       INTEGER,
     source_generation   TEXT,
     loaded_at           TIMESTAMP DEFAULT now(),
     CONSTRAINT uq_cyclone_run_registry UNIQUE (centre, storm_name, init_time)

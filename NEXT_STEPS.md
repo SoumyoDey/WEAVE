@@ -3798,7 +3798,31 @@ tabs have no horizontal page overflow and no control off-screen. It also now
 says what is *not* claimed — this is a desktop-first analysis tool, and "nothing
 is broken or unreachable" is a weaker promise than "designed for mobile".
 
-Only `T`'s meaning is still unknown, and nothing reads it.
+**`T` is settled too, 2026-10-06 — the last open question on this tab.** It is
+the centre's own forecast cycle numbered from the earliest archived run for that
+storm, so **T=0 is the earliest initialisation and T=12 the latest**. The
+loader's comment said "cycles back"; it counts forward. Monotonic in `init_time`
+across all 401 storm-centre pairs.
+
+Elapsed hours is T x the centre's own cycle interval — **12 h for ECMWF, 6 h for
+MOGREPS and GEFS** — but only for 96% / 91% / 83% of pairs respectively, and
+every miss is a positive multiple of the interval. A cycle that produced no file
+leaves T under-counting the gap, so **T is a cycle number, not a duration**:
+derive hours from `init_time`.
+
+That also explains the filename defect this file already records. The label is
+always **T x 6**, right for the two 6-hourly centres and wrong by 2x for ECMWF,
+because the generating script assumed 6-hourly for everyone. The defect was
+known from the lead ranges; the cause was not.
+
+Worth noting the shape of this one: the question sat open for four days as "one
+email to `wang.shuoc`", and the answer was a single `GROUP BY` over a column
+already in the database. The same was true of both IBTrACS questions and of
+GITA. **Four provenance questions, four answers already in the data** — the
+pattern is strong enough now to invert the default: assume it is measurable
+before assuming it needs asking.
+
+Nothing on this tab is open.
 
 **525 rows dropped by `ON CONFLICT DO NOTHING` — found by a deployment
 document, then explained by going and looking.** The loader reported 993,255

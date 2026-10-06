@@ -2,7 +2,11 @@
 
 **Status: surveyed 2026-10-02; both provenance questions since answered from
 the files (§9), and the one file the loader refused — `egrr_72h_GITA.csv` —
-resolved and loaded on 2026-10-02. All 1,181 files are in the database.**
+resolved and loaded on 2026-10-02. All 1,181 files are in the database. The
+`T` column was decoded on 2026-10-06 — it is the centre's own cycle number
+counting **forward** from the earliest archived run, and hours elapsed is
+T x the centre's interval (12 h ECMWF, 6 h MOGREPS/GEFS). Nothing about this
+archive is now unexplained.**
 
 > Earlier sections below were written *during* the survey and some of their
 > open questions were later settled. §9 is the authority where they disagree;

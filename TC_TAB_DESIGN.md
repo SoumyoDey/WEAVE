@@ -407,7 +407,7 @@ wrong twice before measuring it per centre.
 | ~~1~~ | ~~What feature 2 means~~ **DECIDED 2026-10-02: (c), the derived field. Specified in §6a.** | — |
 | ~~2~~ | ~~Which IBTrACS vintage each product was scored against~~ **ANSWERED 2026-10-02 from the files.** | — |
 | ~~3~~ | ~~What the June re-selection was selecting for~~ **ANSWERED 2026-10-02 from the files.** | — |
-| 4 | What the `T` column is | open — **not blocking**, see below |
+| ~~4~~ | ~~What the `T` column is~~ **ANSWERED 2026-10-06 from the data.** | — |
 | ~~5~~ | ~~Which generation to load~~ **SETTLED by 2 and 3: `output/`, already loaded.** | — |
 | 6 | North Atlantic only, or make the extent data | ours |
 
@@ -426,10 +426,27 @@ provenance questions, and provenance turned out to be recoverable:
 - **5** follows directly: `output/` has both the deeper lead and the newer best
   track, and mixing was never an option. It is what is loaded.
 
-**4 stays open and is now explicitly not blocking.** The `T` column is not read
-by the loader, is not stored, and is not used by any of the five views; every
-number on screen derives from the forecast positions and the best track. If it
-is ever wanted, it is one question — but nothing waits on it.
+**4 is answered, and it counts forward rather than back.** `T` is the centre's
+own forecast cycle, numbered from the earliest run the archive holds for that
+storm: **T=0 is the earliest initialisation, T=12 the latest.** Monotonic in
+`init_time` for all **401** storm-centre pairs, no exceptions.
+
+It takes only 0, 4, 8 and 12 — the archive kept every 4th cycle, four runs per
+storm. Elapsed hours is **T x the centre's own cycle interval**: 12 h for ECMWF,
+6 h for MOGREPS and GEFS. So T=12 is 144 h for `ecmf` and 72 h for the others.
+
+**But T is a cycle number, not a duration.** That mapping is exact for 96% of
+`ecmf` pairs, 91% of `egrr` and 83% of `kwbc`, and every miss is a *positive*
+multiple of the interval (+6, +12, +18 h) — a cycle that produced no file leaves
+T under-counting elapsed time. Derive hours from `init_time`, never from T.
+
+This also supplies the mechanism behind the filename defect recorded above: the
+label is always **T x 6**, which is right for the two 6-hourly centres and wrong
+by 2x for ECMWF, because the generating script assumed 6-hourly for everyone.
+The defect was known from the lead ranges; now the cause is known too.
+
+Nothing was waiting on this, which is why it stayed open so long. It is stored
+as `source_cycles` and no view reads it.
 
 ---
 
