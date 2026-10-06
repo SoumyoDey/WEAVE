@@ -29,6 +29,10 @@ plan.)
 
 ---
 
+> **Adding a run to a database that already works?** That is
+> [`RUNBOOK_LOAD_ONE_RUN.md`](RUNBOOK_LOAD_ONE_RUN.md), not this file. This one
+> builds an empty database from nothing.
+
 ## 2. Database
 
 **Two stages, and the second is not optional.** The loaders populate the *native*
@@ -41,10 +45,15 @@ metric panels were all empty — the app looked installed and verified nothing.
 createdb weave_weather
 psql -d weave_weather -f Data/schema.sql
 psql -d weave_weather -f Data/add_indexes.sql        # indexes — do not skip, queries rely on them
-# Load data with the loaders (adjust paths/args inside as needed):
-python Data/load_to_postgres.py
-python Data/load_wind.py
-python Data/load_gefs_ukmo_wind.py
+# Load data with the loaders. They take arguments as of 2026-10-06 — until then
+# they carried a hardcoded __main__ naming a database that does not exist, so
+# the three lines this block used to print failed on connect (RUNBOOK_LOAD_ONE_RUN.md).
+python Data/load_to_postgres.py --source <json dir> --model AIFS --init-time "2025-09-16 00:00:00"
+python Data/load_wind.py --source <u json dir> --model AIFS \
+    --init-time "2025-09-16 00:00:00" --variable wind_u_10m
+python Data/load_gefs_ukmo_wind.py --source <u json dir> --model GEFS \
+    --init-time "2025-09-16 00:00:00" --variable wind_u_10m
+# Repeat per model, and per wind component (wind_v_10m).
 ```
 Verify: `psql -d weave_weather -c "SELECT count(*) FROM forecast_data;"` should be non-zero.
 

@@ -4325,9 +4325,8 @@ stops trusting the list:
 6. **UKMO wind and precipitation coordinates differ** — confirmed still true:
    `35.1562` and `35.15625` both exist in `ensemble_statistics`, from two
    loaders. Nothing joins across variables, and a test pins it.
-7. **No "load one run" runbook** as a single document. `DEPLOY.md` is a
-   first-install guide; adding a run to an existing database is a different
-   narrative and does not exist as one.
+7. ~~**No "load one run" runbook.**~~ **WRITTEN 2026-10-06 — §45**,
+   `RUNBOOK_LOAD_ONE_RUN.md`. Writing it broke two things documented as working.
 
 **Four more entries were stale, found by checking rather than re-reading**
 (2026-10-06, §44). The pattern is now consistent enough to state as a rule: in
@@ -4579,6 +4578,59 @@ by work. One needs a second three-model run to exist; the other needs provenance
 nobody recorded at the time. **Items that need new data survive; items that need
 effort get done and the note stays**, which is exactly backwards from how a
 to-do list is supposed to decay.
+
+---
+
+## 45. The runbook, and the two things writing it broke — 2026-10-06
+
+`RUNBOOK_LOAD_ONE_RUN.md`: adding one initialisation of one model to a database
+that already works. `DEPLOY.md` builds an empty one from nothing, which is a
+different document, and §40 had this listed as open on the grounds that *"the
+steps exist and are exercised; the narrative that strings them together does
+not."*
+
+**The narrative is what found the breakage.** Writing a command down forces you
+to run it, and two of them did not work.
+
+### The three forecast loaders would not run as documented
+
+`load_to_postgres.py`, `load_wind.py` and `load_gefs_ukmo_wind.py` each carried
+a hardcoded `__main__`: database **`weather_forecasts`**, user **`s.dey`**, fixed
+source directories, and `init_time='2025-09-08 00:00:00'`. `weather_forecasts`
+does not exist on this machine — checked — so `python Data/load_to_postgres.py`,
+exactly as `DEPLOY.md` §2a printed it, failed on connect before reading a file.
+
+They now take `--source`, `--model`, `--init-time`, and `--variable` for the two
+wind loaders, and read the same env-driven `DB_CONFIG` as `flask_api.py` and
+`load_cyclone_tracks.py`. One wind component per invocation on purpose: u and v
+are separate directories, and a flag that loaded "both" would have to guess the
+second path from the first.
+
+### `SYSTEM_DESIGN_PLAN.md` said that was already done
+
+Struck through, as *"Fix the loader: config-driven, correct DB, `argparse`,
+parameterized `init_time` — **DONE**"*. It was not done for these three. That is
+the §44 pattern inverted and worse: §44 was about notes saying work remained
+after it was finished, and this is a note saying work was finished when it was
+not. **A struck-through line is read as settled and nobody re-checks it**, which
+makes a wrong one more durable than a wrong open item.
+
+### Two conventions the runbook records rather than smooths over
+
+The converters disagree: `convert_aifs.py` takes `--init-time` while
+`convert_gefs.py` and `convert_ukmo.py` take `--verify-init-time` for the same
+job. The runbook prints both and says the inconsistency is real, because a
+reader who assumes a typo will type the wrong one.
+
+And the whole document turns on one instruction: **decide the initialisation
+time first and pass it to every step.** §24's defect — four of six
+model/variable combinations filed under the wrong run — came from assuming it
+rather than passing it, and produced no error at all, just forecasts scored
+against truth from eight days earlier.
+
+Step 7 is therefore the MAE-against-lead provenance check, not a row count. Row
+counts, grids, member counts and lead ranges were identical between the right
+run and the wrong one and told §24 nothing.
 
 ---
 

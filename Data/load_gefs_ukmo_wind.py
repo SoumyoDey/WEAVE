@@ -1,8 +1,27 @@
+import argparse
 import json
+import os
+import sys
 import psycopg2
 from psycopg2.extras import execute_batch
 from pathlib import Path
 import re
+
+
+# ── Database ──────────────────────────────────────────────────────────────────
+# Env-driven, defaulting to the live database, exactly as `flask_api.py` and
+# `load_cyclone_tracks.py` do. This block used to be a literal
+# `{'dbname': 'weather_forecasts', 'user': 's.dey', ...}` inside `__main__` —
+# a database that does not exist on this machine and a user who is not the
+# current one, so `python load_gefs_ukmo_wind.py` as `DEPLOY.md` printed it failed on connect
+# before reading a file (`NEXT_STEPS.md` §45).
+DB_CONFIG = {
+    'dbname':   os.environ.get('DB_NAME',     'weave_weather'),
+    'user':     os.environ.get('DB_USER',     'k.aggarwal'),
+    'password': os.environ.get('DB_PASSWORD', ''),
+    'host':     os.environ.get('DB_HOST',     'localhost'),
+    'port':     int(os.environ.get('DB_PORT', 5432)),
+}
 
 
 class WeatherDataLoader:
@@ -169,50 +188,29 @@ class WeatherDataLoader:
 
 
 if __name__ == "__main__":
+    ap = argparse.ArgumentParser(
+        description='Load converted wind JSON for ONE model, ONE run, ONE component.')
+    ap.add_argument('--source', required=True,
+                    help='directory of converted JSON for one wind component')
+    ap.add_argument('--model', required=True, choices=['AIFS', 'GEFS', 'UKMO'])
+    ap.add_argument('--init-time', required=True,
+                    help='initialisation time, "YYYY-MM-DD HH:MM:SS"')
+    # One component per invocation, deliberately. u and v live in separate
+    # directories and are separate rows; a flag that loaded "both" would have to
+    # guess the second path from the first.
+    ap.add_argument('--variable', required=True,
+                    choices=['wind_u_10m', 'wind_v_10m'])
+    args = ap.parse_args()
 
-    db_config = {
-        'dbname': 'weather_forecasts',
-        'user': 's.dey',
-        'password': '',
-        'host': 'localhost',
-        'port': 5432
-    }
+    if not os.path.isdir(args.source):
+        sys.exit(f'not a directory: {args.source}')
 
-    loader = WeatherDataLoader(db_config)
-
+    loader = WeatherDataLoader(DB_CONFIG)
     try:
-        # Load GEFS wind
         loader.load_all_files_for_model(
-            folder_path='../json_data_wind_u_gefs',
-            model_name='GEFS',
-            init_time='2025-09-08 00:00:00',
-            variable_name='wind_u_10m'
-        )
-
-        loader.load_all_files_for_model(
-            folder_path='../json_data_wind_v_gefs',
-            model_name='GEFS',
-            init_time='2025-09-08 00:00:00',
-            variable_name='wind_v_10m'
-        )
-
-        # Load UKMO wind
-        loader.load_all_files_for_model(
-            folder_path='../json_data_wind_u_ukmo',
-            model_name='UKMO',
-            init_time='2025-09-08 00:00:00',
-            variable_name='wind_u_10m'
-        )
-
-        loader.load_all_files_for_model(
-            folder_path='../json_data_wind_v_ukmo',
-            model_name='UKMO',
-            init_time='2025-09-08 00:00:00',
-            variable_name='wind_v_10m'
-        )
-
+            folder_path=args.source, model_name=args.model,
+            init_time=args.init_time, variable_name=args.variable)
         loader.get_database_stats()
-        print("\n✅ GEFS & UKMO WIND DATA LOADED!")
-
+        print('\n\u2705 loaded')
     finally:
-        loader.close()
+        loader.close() if hasattr(loader, 'close') else None

@@ -252,11 +252,18 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
   initialisation time *out of the file* and refuses a directory whose files
   disagree — the check that would have caught §20 at the moment it was
   introduced.
-  - *Still open:* an end-to-end **"load one run" runbook** as a single document.
-    The steps exist and are exercised; the narrative that strings them together
-    does not.
+  - ~~*Still open:* an end-to-end **"load one run" runbook**~~ — **written
+    2026-10-06**, `RUNBOOK_LOAD_ONE_RUN.md`. Writing it broke two steps that
+    were documented as working, which is the argument for having it.
 - ~~Fix the loader: config-driven, correct DB, `argparse`, parameterized
-  `init_time`~~ **DONE.**
+  `init_time`~~ ~~**DONE.**~~ **This was not true for the three forecast
+  loaders** and said so for some time. `load_to_postgres.py`, `load_wind.py`
+  and `load_gefs_ukmo_wind.py` each carried a hardcoded `__main__` — database
+  `weather_forecasts` (which does not exist here), user `s.dey`, fixed source
+  paths and `init_time='2025-09-08 00:00:00'`. **Actually done 2026-10-06**:
+  all three take `--source`, `--model`, `--init-time` and, for wind,
+  `--variable`, and read the env-driven `DB_CONFIG` the rest of the codebase
+  uses. Found by writing the runbook above.
 - ~~Link the table families; consistency check that fails ingestion on
   divergence~~ **DONE.** `regridded_*` carry `init_time` (`migrate_init_time.py`),
   and `uq_forecast_data_natural_key` / `uq_ensemble_statistics_natural_key` /
