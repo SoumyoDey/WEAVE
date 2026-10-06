@@ -125,9 +125,25 @@ export const fetchRuns = async () => {
  * nothing for that variable — the latter is a 200 with an empty list.
  */
 export const fetchForecastHours = async ({ model, variable, initTime }) => {
-  const q = new URLSearchParams({ model, variable });
-  if (initTime) q.set('init_time', initTime);
-  const res = await fetch(`${BASE}/forecast-hours?${q}`);
+  // `whenRunReady()` then `withRunParam()`, the same two lines every other
+  // fetcher in this file uses, and for the same reason.
+  //
+  // The first version of this skipped both and built the query by hand. On
+  // every page load it fired before the run had resolved, so `init_time` was
+  // absent, so the backend saw three loaded AIFS runs and rightly refused with
+  // a 400 — then the effect re-ran with the run and succeeded. Two doomed
+  // requests per load, self-correcting and invisible except in the network log.
+  //
+  // That is the same defect as the cyclone tab's stale-init 404s
+  // (`NEXT_STEPS.md` §37): an effect firing before its dependency resolves.
+  // The fix there was to derive the value during render; the fix here is the
+  // gate the api layer already has, which exists precisely so callers do not
+  // have to get effect ordering right.
+  await whenRunReady();
+  const params = new URLSearchParams({ model, variable });
+  if (initTime) params.set('init_time', initTime);
+  else withRunParam(params);
+  const res = await fetch(`${BASE}/forecast-hours?${params}`);
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 };

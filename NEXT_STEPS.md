@@ -4087,6 +4087,31 @@ not be selected at all before. It falls back to the old constant while the
 fetch is in flight or if it fails, because a briefly coarser slider beats a
 briefly absent one.
 
+**And the build shipped a defect that the next check caught.** The first
+version of `fetchForecastHours` built its query by hand and skipped the api
+layer's two gating lines. On every page load it fired before the run had
+resolved, so `init_time` was absent, so the backend — which refuses a missing
+`init_time` once more than one run is loaded, and three are — answered **400**.
+The effect then re-ran with the run and succeeded.
+
+Two doomed requests per load, self-correcting, invisible outside the network
+panel, and all 250 frontend tests passed straight through it. **That is the
+cyclone tab's stale-init 404 defect again** (§37), in a different file, nine
+commits later: an effect firing before its dependency resolves, surviving
+because the final state is correct. Found the same way too — by reading the
+network log rather than the screen.
+
+The fix was not new code but the gate that already existed: `await
+whenRunReady()` then `withRunParam()`, the two lines every other fetcher in
+`forecastApi.js` uses, which exist precisely so callers do not have to get
+effect ordering right. `src/api/forecastHours.test.js` asserts a property of
+the *request* rather than of the response; three of its six cases fail against
+the pre-fix client.
+
+The lesson is narrower than "check the network log". It is: **when a file has a
+gating helper that every sibling function calls, a new function that does not
+call it is the bug**, and that is visible without running anything.
+
 Two things worth keeping from the build. A test written before the code caught a
 **500**: `_resolve_init_time` returns `None` for a model with no loaded run and
 the endpoint called `.isoformat()` on it. It now answers 404, which is
