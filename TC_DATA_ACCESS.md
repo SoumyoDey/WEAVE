@@ -855,10 +855,16 @@ survey.
 **1. The `<offset>h` in the filename is wrong for ECMWF, by a factor of two.**
 The generating script stepped back `T` initialisation cycles and labelled the
 file `T * 6` hours — correct for MOGREPS and GEFS, which run 6-hourly, and wrong
-for ECMWF, which runs 00Z and 12Z only. Measured on BERYL, IDA, ETA, LAN and
-GONI: every ECMWF file labelled `24h` is a **48-hour** earlier initialisation.
-`egrr`/LAN is 30 h rather than 24 h for a different reason — a gap in that
-archive, so four cycles back landed further than four cycles should.
+for ECMWF, which runs 00Z and 12Z only.
+
+**Re-measured archive-wide 2026-10-06**, replacing the five storms this
+paragraph used to cite (BERYL, IDA, ETA, LAN, GONI). An ECMWF file labelled
+`24h` is a **48-hour** earlier initialisation in **96 of 99** storm pairs; the
+other 3 are 60 h, which is a skipped cycle rather than a different rule. For the
+6-hourly centres, `egrr` 24h is 24 h in 111 of 117 and `kwbc` in 96 of 111 — so
+the `egrr`/LAN 30 h this note once called a one-off archive gap is **6** egrr
+cases and **15** kwbc ones. The factor-of-two for ECMWF holds; "every" did
+not.
 
 **A cross-centre comparison at "24h" would compare a 48-hour-old ECMWF forecast
 against a 24-hour-old MOGREPS one.** The loader records the label as

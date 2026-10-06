@@ -21,6 +21,17 @@
 > wind MAE is **AIFS 1.0124, GEFS 1.2854, UKMO 1.2712**: AIFS is still best, by
 > about 21–27% rather than 3.4×. §0 has the full comparison.
 >
+> **Partly replicated 2026-10-06, and the limit is worth stating.** That figure
+> rested on one run, which is the weakness that produced the 3.4× error in the
+> first place. AIFS vs UKMO can be checked on a second run and holds: per-cell
+> wind MAE is **0.9298 vs 1.3096** at 09-08 (AIFS 29% better) against
+> **1.0124 vs 1.2712** at 09-16 (20% better). Direction replicates, magnitude
+> moves 20–29%.
+>
+> **The GEFS comparison cannot be replicated at all**: 2025-09-16 is the only
+> loaded run with GEFS wind, so "AIFS beats GEFS by ~21%" still rests on n=1 and
+> should be read as that single run's result, not a model ranking.
+>
 > The banner below is kept as the record of the AIFS wind replacement, and for
 > the method it describes — *only one field moved, every other figure
 > byte-identical, which is the control rather than a footnote*. That method is

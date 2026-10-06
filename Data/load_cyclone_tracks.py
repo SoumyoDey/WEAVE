@@ -18,10 +18,16 @@ What this refuses to do
 ECMWF, systematically and by a factor of two. The generating script stepped back
 `T` initialisation cycles and labelled the file `T * 6` hours — right for MOGREPS
 and GEFS, which run 6-hourly, and wrong for ECMWF, which runs 00Z and 12Z only.
-Measured on BERYL, IDA, ETA, LAN and GONI: every ECMWF file labelled `24h` is a
-**48-hour** earlier initialisation. `egrr`/LAN is 30 h rather than 24 h for a
-different reason — a gap in that archive, so four cycles back landed further
-than four cycles should.
+Measured across the whole archive (2026-10-06), not the five storms this note
+used to cite: an ECMWF file labelled `24h` is a **48-hour** earlier
+initialisation in **96 of 99** storm pairs. The other 3 are 60 h, a skipped
+cycle rather than a different rule.
+
+The same shape holds for the 6-hourly centres and the exceptions are commoner
+than this note once implied: `egrr` 24h is 24 h in 111 of 117, `kwbc` in 96 of
+111. The aside here used to call `egrr`/LAN's 30 h a one-off archive gap; it is
+**6** such egrr cases and **15** kwbc ones. The factor-of-two for ECMWF is
+right; the word "every" was not.
 
 So the label is recorded as `source_label_hours` and **never used as a time**.
 `init_time` comes from the data, where it is unambiguous and derivable two

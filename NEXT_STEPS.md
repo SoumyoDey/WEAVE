@@ -4221,6 +4221,64 @@ returns an empty list silently, which is the same mismatch
 
 ---
 
+## 39. Single-case claims, audited — 2026-10-06
+
+Prompted by the MOGREPS 26 km retraction being the fifth claim in this project
+built on one unit of data. Rather than wait for a sixth, every empirical claim
+in the documents was checked for its sample size.
+
+**Two were resting on too little.**
+
+### The ECMWF `24h` label — five storms stated as "every"
+
+`load_cyclone_tracks.py` and `TC_DATA_ACCESS.md` both said: *"Measured on BERYL,
+IDA, ETA, LAN and GONI: **every** ECMWF file labelled `24h` is a 48-hour earlier
+initialisation."* Re-measured over the whole archive: **96 of 99** storm pairs,
+with 3 at 60 h from a skipped cycle. The factor-of-two is right and the word
+"every" was not.
+
+The same paragraph's aside — that `egrr`/LAN's 30 h was a one-off archive gap —
+is **6** egrr cases and **15** kwbc ones. `egrr` 24h is 24 h in 111 of 117,
+`kwbc` in 96 of 111. Both corrected in place.
+
+### "AIFS is 21–27% better at wind" — one run, now half-replicated
+
+This figure is itself the *correction* to the retracted "3.4x better" headline,
+and it inherited the same weakness: one run. AIFS vs UKMO can be tested on a
+second run and holds — per-cell wind MAE **0.9298 vs 1.3096** at 09-08 (29%)
+against **1.0124 vs 1.2712** at 09-16 (20%). Direction replicates, magnitude
+moves.
+
+**The GEFS half cannot be tested**: 2025-09-16 is the only loaded run with GEFS
+wind. "AIFS beats GEFS by ~21%" still rests on n=1 and `METRICS_AUDIT.md` now
+says so. That is a data limit, not an unfinished check — it closes only when a
+second three-model run is loaded.
+
+**Four were checked and are sound**, which is worth recording so they are not
+re-audited:
+
+- `mean_lon` out by up to 213° — measured across 63 files and 15 storms.
+- The basin vocabularies — "enumerated from every file in `output/`, not
+  guessed", and the code refuses unknown codes rather than passing them.
+- `METRICS_AUDIT` finding 16 — flagged itself as single-case at the time and was
+  later closed against an independent run, exactly the right handling.
+- `TC_TAB_DESIGN` § on non-monotone error curves — reasons *correctly* from one
+  case: "a single storm's curve has no reason to be monotone … a flag, not a
+  gate." The lesson applied rather than violated.
+
+Also not instances, though they name one storm: ALCIDE's genesis-variant counts,
+Dorian's member fall-off, YASA's 23-of-36 denominator. Each illustrates a number
+the tab computes *per run* and displays, rather than generalising from it.
+
+**The tell, stated once so it is recognisable:** a number quoted without its
+sample size, where the sample is one storm, one run, or one file. All five
+earlier instances had it — three longitude claims, the IBTrACS vintage sample,
+the MOGREPS penalty — and so did both found here. The fix is not more care; it
+is writing the n beside the number, because a claim that carries its own sample
+size cannot hide this.
+
+---
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in
