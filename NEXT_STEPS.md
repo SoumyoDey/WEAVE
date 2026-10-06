@@ -4459,6 +4459,22 @@ number was never re-derived when the data it described was corrected.
 comment explained it was written to survive a recalibration; it now reads the
 edge from `METRIC_CONFIG`.
 
+**Verified on the rendered output, not just the numbers.** The wind MAE PNG
+now carries **17,107 distinct colours** with no single one dominating the
+plotted area — a gradient rather than a flat field. And the ramp utilisation is
+arithmetic rather than impression:
+
+| metric | p90 | max | old vmax | ramp used | new vmax | ramp used | clipped |
+|---|---|---|---|---|---|---|---|
+| MAE | 1.78 | 2.92 | 5.0 | 58% | 2.0 | 100% | 4.3% |
+| RMSE | 2.26 | 3.38 | 5.5 | 61% | 2.5 | 100% | 4.6% |
+| CRPS | 1.33 | 2.53 | 4.0 | 63% | 1.5 | 100% | 5.8% |
+
+The old limits left roughly 40% of each ramp unreachable, so every cell was
+squeezed into the lower half of the colour scale. The new ones clip about 5% on
+purpose, which is the stated design — "near the observed p90 rather than the
+maximum".
+
 **What is still a judgement.** These bands are distributional — "Excellent"
 means better than ~70% of cells in this archive, not that a forecaster would
 call it excellent. An absolute standard is a different object. But the map
