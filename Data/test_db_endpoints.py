@@ -592,20 +592,46 @@ class TestPointCategoricalMetrics:
             assert got == pytest.approx(want, **APPROX) if want is not None else got is None
 
     def test_a_wider_box_gives_fss_something_to_work_with(self, db_client):
-        """`box_cells` and `fss_window` are separate parameters because widening
-        the neighbourhood used to move CSI/POD/FAR too. The point metrics must
-        stay on the centre cell while FSS appears."""
+        """`box_cells` widens what every categorical metric is scored over.
+
+        **This test asserted the opposite until 2026-10-06** — that CSI/POD/FAR
+        stayed on the centre cell while only FSS used the box. That was the
+        behaviour, and it made `scored_area` a lie: the response reported
+        `n_cells: 81` beside a CSI computed from one cell, and the same click
+        gave 0.0833 here against `/api/compare/categorical`'s 0.2756
+        (`NEXT_STEPS.md` §41).
+
+        `box_cells=1` remains the exact-point case, which is why it is the
+        comparison below rather than a second boxed call.
+        """
         args = {'model': 'AIFS', 'variable': 'precipitation',
                 'lat': 36.0, 'lon': -75.0, 'hour_min': 0, 'hour_max': 36,
                 'threshold_mm_6h': fx.EXPECT_PRECIP['threshold_mm_6h']}
         point = db_client.post('/api/categorical-metrics', json=args).get_json()
         boxed = db_client.post('/api/categorical-metrics',
                                json={**args, 'box_cells': 3}).get_json()
-        assert point['summary']['fss'] is None
+        assert point['summary']['fss'] is None, 'one cell has no neighbourhood'
         assert boxed['summary']['fss'] is not None
         assert boxed['scored_area']['n_cells'] > 1
-        assert boxed['summary']['csi'] == pytest.approx(point['summary']['csi'])
-        assert boxed['summary']['false_alarms'] == point['summary']['false_alarms']
+
+        # The contingency table grows with the box, because the box is what is
+        # being scored. A boxed call that matched the point exactly would mean
+        # the pooling had been reverted.
+        assert boxed['summary']['n_pts'] > point['summary']['n_pts']
+        assert (boxed['summary']['hits'] + boxed['summary']['misses']
+                + boxed['summary']['false_alarms'] + boxed['summary']['correct_neg']
+                ) == boxed['summary']['n_pts']
+
+    def test_box_cells_one_is_still_the_exact_point(self, db_client):
+        """The escape hatch has to keep working, or 'pooled' has no opposite."""
+        args = {'model': 'AIFS', 'variable': 'precipitation',
+                'lat': 36.0, 'lon': -75.0, 'hour_min': 0, 'hour_max': 36,
+                'threshold_mm_6h': fx.EXPECT_PRECIP['threshold_mm_6h']}
+        one = db_client.post('/api/categorical-metrics',
+                             json={**args, 'box_cells': 1}).get_json()
+        assert one['scored_area']['n_cells'] == 1
+        # One case per scored hour, never more.
+        assert one['summary']['n_pts'] == len(one['hours'])
 
     def test_the_fss_window_cannot_be_wider_than_the_field_it_slides_over(self, db_client):
         """A window wider than the field gives every cell the same neighbourhood
@@ -687,9 +713,21 @@ class TestPointCategoricalMetrics:
         assert boxed['fss'] is not None
         assert point['composite_confidence'] is not None
         assert boxed['composite_confidence'] is not None
-        # Same CSI/POD/FAR — only FSS enters — so any difference is the formula.
-        assert point['csi'] == boxed['csi']
-        assert point['composite_confidence'] != boxed['composite_confidence']
+
+        # Each composite is checked against **its own** inputs.
+        #
+        # This used to isolate the formula by asserting `point['csi'] ==
+        # boxed['csi']` — true while CSI was centre-cell regardless of box
+        # size, false since the categorical scores were pooled over the box
+        # (`NEXT_STEPS.md` §41). Comparing a response to its own CSI/POD/FAR
+        # tests the arithmetic directly and does not care how the inputs were
+        # sampled, which is what the test was always trying to establish.
+        assert boxed['composite_confidence'] == pytest.approx(round(
+            0.40 * boxed['csi'] + 0.30 * boxed['fss']
+            + 0.20 * boxed['pod'] + 0.10 * (1.0 - boxed['far']), 4))
+        assert point['composite_confidence'] == pytest.approx(round(
+            (0.40 * point['csi'] + 0.20 * point['pod']
+             + 0.10 * (1.0 - point['far'])) / 0.70, 4))
 
     def test_the_region_path_reaches_its_own_correct_negatives(self, db_client):
         d = db_client.post('/api/region-categorical-metrics', json={
@@ -1066,3 +1104,60 @@ class TestFormerDefects:
         assert d['n_points']['UKMO']['correlation'] == 0
         assert d['models']['UKMO']['fss'] is not None
         assert d['n_points']['UKMO']['fss'] > 0
+
+
+class TestTheTwoCategoricalSurfacesAgree:
+    """Analysis and Comparison must answer a click the same way.
+
+    They did not. `/api/categorical-metrics` scored CSI/POD/FAR on the centre
+    cell while `/api/compare/categorical` pooled the whole box, so the same
+    point at the same threshold gave **0.0833** against **0.2756** — and the
+    Analysis response reported `scored_area {box_cells: 9, n_cells: 81}` beside
+    its single-cell number, so it mislabelled itself as well as disagreeing.
+
+    `CONSISTENCY_AUDIT.md` recorded this as a decision nobody had made and
+    `METRICS_AUDIT.md` finding 8 as the same blind spot: the phase-1 matrix
+    asked which metrics were *available* in each surface, never which estimator
+    produced them. Resolved 2026-10-06 in favour of pooling — a CSI of 0.0833
+    from one hit in twelve cases is not a measurement, and pooling is what both
+    tabs' captions already claimed (`NEXT_STEPS.md` §41).
+
+    This is the test that would have caught it. It compares the two surfaces
+    directly rather than checking each against itself, which is why neither
+    file's existing tests noticed.
+    """
+
+    ARGS = {'variable': 'precipitation', 'lat': 36.0, 'lon': -75.0,
+            'hour_min': 0, 'hour_max': 36, 'box_cells': 3}
+
+    def _both(self, db_client, **over):
+        args = {**self.ARGS, 'threshold_mm_6h': fx.EXPECT_PRECIP['threshold_mm_6h'],
+                **over}
+        a = db_client.post('/api/categorical-metrics',
+                           json={**args, 'model': 'AIFS'}).get_json()['summary']
+        c = db_client.post('/api/compare/categorical',
+                           json={**args, 'models': ['AIFS']}).get_json()
+        return a, c['summaries']['AIFS']
+
+    def test_the_contingency_tables_are_identical(self, db_client):
+        a, c = self._both(db_client)
+        for key in ('hits', 'misses', 'false_alarms'):
+            assert a[key] == c[key], f'{key}: analysis {a[key]} vs comparison {c[key]}'
+
+    def test_the_scores_are_identical(self, db_client):
+        a, c = self._both(db_client)
+        for key in ('csi', 'pod', 'far', 'fss'):
+            assert a[key] == pytest.approx(c[key]), \
+                f'{key}: analysis {a[key]} vs comparison {c[key]}'
+
+    def test_they_agree_at_a_second_threshold_too(self, db_client):
+        """One threshold could agree by coincidence; the event base rate is what
+        the two estimators disagreed about, so it has to be varied."""
+        a, c = self._both(db_client, threshold_mm_6h=0.1)
+        assert a['csi'] == pytest.approx(c['csi'])
+        assert a['hits'] == c['hits']
+
+    def test_they_agree_on_a_wider_box(self, db_client):
+        a, c = self._both(db_client, box_cells=5)
+        assert a['csi'] == pytest.approx(c['csi'])
+        assert a['hits'] == c['hits']

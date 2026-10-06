@@ -4302,9 +4302,8 @@ stops trusting the list:
 
 *Decisions nobody has made — these need a person, not work:*
 
-1. **Which categorical estimator is right.** Analysis scores CSI/POD/FAR on the
-   clicked cell; Comparison pools over the 9x9 box. Both say what they do;
-   the same point gives two different CSIs. A cross-reference makes it visible.
+1. ~~**Which categorical estimator is right.**~~ **DECIDED 2026-10-06 — §41.**
+   Both pool over the box; the two surfaces now agree metric for metric.
 2. **Wind metric colour bands.** The precipitation edges are applied to m/s and
    saturate most of a wind map. The panel now states whose scale it is rather
    than guessing a constant — the judgement is still unmade.
@@ -4332,6 +4331,58 @@ stops trusting the list:
    exercised; the narrative does not.
 
 Nothing on the cyclone tab is open.
+
+---
+
+## 41. Analysis and Comparison now answer a click the same way — 2026-10-06
+
+§40 listed this as a decision nobody had made, and `CONSISTENCY_AUDIT.md` had
+carried it since phase 6. Measured first, at (35.5, −78.5), threshold 0.1 mm/6h,
+hours 0–168, run 2025-09-16, `box_cells=9` on both:
+
+| | `/api/categorical-metrics` | `/api/compare/categorical` |
+|---|---|---|
+| CSI | **0.0833** | **0.2756** |
+| POD / FAR | 0.5 / 0.9091 | 0.8329 / 0.7083 |
+| hits / misses / FA | 1 / 1 / 10 | 304 / 61 / 738 |
+| sample | centre cell, 12 cases | 81 cells x 28 h = 2,268 pts |
+| FSS | 0.4901 | 0.4901 |
+
+**Decided in favour of pooling**, and the sample is why rather than taste. The
+Analysis CSI was `1/12` — one hit. One case either way moves it to 0 or 0.167.
+That is not a measurement, and `METRICS_AUDIT` finding 8's warning about
+ratio-of-means applies hardest exactly where the counts are smallest.
+
+Three things also pointed the same way. Both tabs already defaulted to 9x9.
+Both captions already said "9x9 cells". And the Analysis response already
+returned `scored_area {box_cells: 9, n_cells: 81}` beside a one-cell CSI — so
+it was **mislabelling itself**, independently of the disagreement. Pooling made
+the behaviour match what was already claimed; it did not introduce a new claim.
+
+`box_cells=1` remains the exact-point case and is unchanged.
+
+**The implementation was smaller than the decision.** `_fss_for_hour` already
+built the per-cell forecast/observation bins for the whole box — the data was
+there and only the counting was narrow. It now returns those cases too
+(renamed `_box_for_hour`), and the contingency table and Brier score accumulate
+over them. One scan, two consumers.
+
+**`n_pts` is new in the summary**, because the defect's real lesson is that a
+CSI without its sample size hides this: 0.0833 and 0.2756 look like a
+contradiction, while "0.0833 of 12" and "0.2756 of 2,268" read as two different
+questions. Same tell as §39's single-case claims, one layer down.
+
+**Two tests pinned the old behaviour and had to change**, which is worth
+noticing rather than glossing. One asserted CSI *must not* move with
+`box_cells`; the other isolated the composite formula by assuming it. Both were
+faithful descriptions of what the code did and neither compared the two
+surfaces to each other — which is exactly how the disagreement survived two
+audits. `TestTheTwoCategoricalSurfacesAgree` does that comparison now, across
+two thresholds and two box sizes.
+
+**`METRICS_AUDIT.md` §0 does not need regenerating**, checked rather than
+assumed: its categorical figures come from `/api/compare/region-metrics`, not
+the point endpoint. I had said it would when framing the choice.
 
 ---
 

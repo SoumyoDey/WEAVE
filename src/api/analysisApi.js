@@ -53,8 +53,14 @@ export async function fetchCategoricalMetrics({
     body: JSON.stringify(withRun({
       model, variable, lat, lon,
       hour_min: hourMin, hour_max: hourMax,
-      // box_cells 1 keeps this a true point (FSS undefined). Above 1 it gives
-      // FSS a field without moving CSI/POD/FAR, which stay on the centre cell.
+      // `box_cells` is what every categorical metric is scored over: 1 is the
+      // exact point (FSS undefined — one cell has no neighbourhood), above 1
+      // pools CSI/POD/FAR/FBI/Brier over the box as well as giving FSS a field.
+      //
+      // Until 2026-10-06 it moved FSS only and the rest stayed on the centre
+      // cell, so this panel and the Comparison tab gave different answers for
+      // the same click — 0.0833 against 0.2756 — while both captions said
+      // "9x9 cells" (`NEXT_STEPS.md` §41).
       ...(boxCells  != null ? { box_cells:  boxCells }  : {}),
       ...(fssWindow != null ? { fss_window: fssWindow } : {}),
       ...thresholdField,

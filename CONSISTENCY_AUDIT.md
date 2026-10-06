@@ -498,9 +498,22 @@ point at the same threshold gives two different CSIs with no visible reason.
 
 This is a phase-1 finding that phase 1 missed, because the matrix asked whether a
 metric is *available* in each surface and not which estimator produced it — the
-same blind spot as `METRICS_AUDIT.md` finding 8. **A cross-reference was added to
-Comparison's caption** so the difference is at least visible; which estimator is
-right is a real decision and is left open.
+same blind spot as `METRICS_AUDIT.md` finding 8.
+
+**DECIDED 2026-10-06 — both pool over the box.** `/api/categorical-metrics` now
+scores CSI/POD/FAR/FBI/Brier over `box_cells` exactly as
+`/api/compare/categorical` always did, and the two agree metric for metric at
+the same click. `box_cells=1` remains the exact-point case.
+
+The deciding argument was the sample, not taste: at one cell the contingency
+table held **12 cases and a single hit** (CSI 0.0833) against the pooled
+**2,268 points and 1,103 events** (0.2756). A ratio from one hit is not a
+measurement. Both tabs also already defaulted to 9x9 and both captions already
+said so, and the Analysis response reported `scored_area {n_cells: 81}` beside
+its one-cell CSI — so pooling made the behaviour match what was already
+claimed. `TestTheTwoCategoricalSurfacesAgree` in `Data/test_db_endpoints.py`
+pins it by comparing the surfaces to each other, which is the check neither
+file's own tests performed.
 
 ### The metric colour bands are calibrated for precipitation — **open**
 

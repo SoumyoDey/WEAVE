@@ -4588,26 +4588,41 @@ def categorical_metrics_endpoint():
         # ── 3. Per-hour categorical + probabilistic metrics ───────────────────
         hours_data = []
         hits = misses = false_alarms = correct_neg = 0
+        # Cases in the contingency table: hours x cells in the box. Reported so
+        # a reader can see what a CSI rests on — the centre-cell version this
+        # replaced could produce 0.0833 from a single hit in 12 cases.
+        n_pts = 0
         brier_sq_sum = 0.0
         n_brier      = 0
         # FSS is the one metric here that needs a field rather than a cell, so
         # it is accumulated separately over every cell in the box.
         fss_num = fss_den = 0.0
 
-        def _fss_for_hour(hour):
-            f_bin, o_bin = {}, {}
+        def _box_for_hour(hour):
+            """(fss components, [(is_fcst, is_obs, mean, std)]) over the box.
+
+            One scan, two consumers. It used to return only the FSS components
+            and the contingency table was built separately from the centre cell
+            alone — so `scored_area` reported 81 cells while CSI described 1,
+            and the same click gave 0.0833 here against Comparison's 0.2756
+            (`NEXT_STEPS.md` §41). The per-cell data was already being computed
+            for FSS; only the counting was narrow.
+            """
+            f_bin, o_bin, cases = {}, {}, []
             for cell, cell_rates in rates_by_cell.items():
                 rec = cell_rates.get(hour)
                 if rec is None:
                     continue
-                c_mean, _c_std, c_period = rec
+                c_mean, c_std, c_period = rec
                 c_vt = init_time_val + timedelta(hours=hour)
                 c_obs, c_covered, _n = _obs_window_mean(obs_by_cell.get(cell), c_vt, c_period)
                 if c_obs is None or c_covered < c_period:
                     continue
                 f_bin[cell] = float(c_mean > threshold_rate)
                 o_bin[cell] = float(c_obs > threshold_rate)
-            return _fss_components(f_bin, o_bin, fss_window)
+                cases.append((c_mean > threshold_rate, c_obs > threshold_rate,
+                              c_mean, c_std))
+            return _fss_components(f_bin, o_bin, fss_window), cases
 
         for hour in sorted(rates):
             mean_rate, std_rate, period = rates[hour]
@@ -4622,16 +4637,34 @@ def categorical_metrics_endpoint():
             is_fcst = mean_rate > threshold_rate
             is_obs  = obs_rate  > threshold_rate
 
-            # Contingency table
+            # Contingency table.
+            #
+            # **Pooled over the box, not the centre cell** (changed 2026-10-06,
+            # `NEXT_STEPS.md` §41). At `box_cells=1` the box *is* the centre
+            # cell, so that remains the exact-point case and nothing about it
+            # changes. Above 1, every cell in the box contributes a case, which
+            # is what `scored_area` has always claimed and what
+            # `/api/compare/categorical` has always done.
             if box_cells > 1:
-                h_num, h_den, _n = _fss_for_hour(hour)
+                (h_num, h_den, _n), cases = _box_for_hour(hour)
                 fss_num += h_num
                 fss_den += h_den
+            else:
+                cases = [(is_fcst, is_obs, mean_rate, std_rate)]
 
-            if   is_fcst and     is_obs:  hits         += 1
-            elif is_fcst and not is_obs:  false_alarms += 1
-            elif not is_fcst and is_obs:  misses       += 1
-            else:                         correct_neg  += 1
+            for c_fcst, c_obs_hit, c_mean, c_std in cases:
+                if   c_fcst and     c_obs_hit: hits         += 1
+                elif c_fcst and not c_obs_hit: false_alarms += 1
+                elif not c_fcst and c_obs_hit: misses       += 1
+                else:                          correct_neg  += 1
+                n_pts += 1
+                # Brier over the same cases, so the probabilistic and
+                # categorical scores describe one sample rather than two.
+                c_p = (None if c_std is None
+                       else _exceedance_probability(c_mean, c_std, threshold_rate))
+                if c_p is not None:
+                    brier_sq_sum += (c_p - float(c_obs_hit)) ** 2
+                    n_brier      += 1
 
             # Probabilistic event probability (Gaussian). Needs the spread, which
             # isn't recoverable for every record of a cumulative model, so those
@@ -4640,9 +4673,9 @@ def categorical_metrics_endpoint():
             p_event = (None if std_rate is None
                        else _exceedance_probability(mean_rate, std_rate, threshold_rate))
 
-            if p_event is not None:
-                brier_sq_sum += (p_event - float(is_obs)) ** 2
-                n_brier      += 1
+            # `p_event` stays for the per-hour series below, which is a
+            # centre-cell story by construction; the Brier *score* is
+            # accumulated with the cases above.
 
             hours_data.append({
                 'hour':      hour,
@@ -4723,6 +4756,11 @@ def categorical_metrics_endpoint():
         return jsonify({
             'hours':        hours_data,
             'summary': {
+                # hours x cells behind the counts below. The categorical
+                # scores are pooled over `scored_area`, which `n_cells` and
+                # `box_cells` describe; before 2026-10-06 they described the
+                # FSS area while CSI used the centre cell alone.
+                'n_pts':                 n_pts,
                 'hits':                  hits,
                 'misses':                misses,
                 'false_alarms':          false_alarms,
