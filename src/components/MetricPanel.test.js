@@ -140,9 +140,18 @@ describe('units follow the variable', () => {
       expect(precip).toContain(verdict);
     }
     // ...but the numbers differ, and each quotes its own unit.
-    expect(wind).toContain('1.0 – 2.0');
-    expect(precip).toContain('0.2 – 0.5');
-    expect(wind).not.toContain('0.2 – 0.5');
+    //
+    // Read from METRIC_CONFIG rather than written as literals. This asserted
+    // `wind` contained '1.0 – 2.0' until 2026-10-06, when the wind bands were
+    // re-derived from correctly-paired data and that edge became '0.75 – 1.25'
+    // — so the test broke on a recalibration, which the comment above says it
+    // was written not to do. A literal edge is a copy of the calibration, and
+    // the invariant is that the two scales differ, not what either one says.
+    const maeCfg = METRIC_CONFIG.find(m => m.key === 'mae');
+    const edgeOf = (entry) => entry.label.replace(/\{unit\}/g, '').trim();
+    expect(wind).toContain(edgeOf(maeCfg.windLegend[1]));
+    expect(precip).toContain(edgeOf(maeCfg.legend[1]));
+    expect(wind).not.toContain(edgeOf(maeCfg.legend[1]));
     expect(wind).toContain(VALUE_UNITS.wind);
     expect(precip).toContain(VALUE_UNITS.precipitation);
     // The old warning is not merely absent in one mode — it is gone, because a

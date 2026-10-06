@@ -2633,12 +2633,21 @@ PLOT_STYLE_REGISTRY = {
 
 
 # Wind overrides for the error-magnitude styles. The registry's limits above are
-# precipitation ranges in mm/h, and a wind field in m/s runs several times
-# larger: measured per cell over the full domain and all three models on the
-# loaded run, MAE has a median of 1.79 and a p90 of 4.65, so `Normalize(0, 2)`
-# saturated most of the map at its top colour and the PNG carried no gradient
-# where the interesting variation was. The frontend's band edges are the
-# discrete version of the same fix — see WIND_BAND_BASIS in src/constants.js.
+# precipitation ranges in mm/h, and a wind field in m/s runs larger, so
+# `Normalize(0, 2)` saturated most of the map at its top colour and the PNG
+# carried no gradient where the interesting variation was. The frontend's band
+# edges are the discrete version of the same fix — see WIND_BAND_BASIS in
+# src/constants.js.
+#
+# **Re-derived 2026-10-06, because the first pass measured the wrong data.** It
+# read "MAE has a median of 1.79 and a p90 of 4.65", taken from the 2025-09-08
+# run — where GEFS and UKMO wind were the 09-16 forecast under the wrong label
+# (§24), so two thirds of the sample were scored eight days out of register.
+# Over every correctly-paired model-run instead (n=6,564 cells): MAE median
+# **1.07**, p90 **1.78**; RMSE p90 2.26; CRPS p90 1.33; bias p05/p95 −1.15/+0.90.
+# The old limits were roughly twice as wide as real errors warrant, which is the
+# original saturation defect in the other direction — every cell crowded into
+# the bottom third of the ramp.
 #
 # Each vmax sits near the observed p90 rather than the maximum, which leaves
 # about 10% of cells clipped on purpose: stretching to the maximum would
@@ -2648,24 +2657,24 @@ PLOT_STYLE_REGISTRY = {
 # dimensionless, so their limits mean the same thing in any unit.
 WIND_PLOT_STYLE_OVERRIDES = {
     'bias': {
-        'norm': mcolors.TwoSlopeNorm(vmin=-5.0, vcenter=0.0, vmax=5.0),
-        'cbar_ticks':      [-5, -2.5, 0, 2.5, 5],
-        'cbar_ticklabels': ['-5', '-2.5', '0', '+2.5', '+5'],
+        'norm': mcolors.TwoSlopeNorm(vmin=-1.5, vcenter=0.0, vmax=1.5),
+        'cbar_ticks':      [-1.5, -0.75, 0, 0.75, 1.5],
+        'cbar_ticklabels': ['-1.5', '-0.75', '0', '+0.75', '+1.5'],
     },
     'mae': {
-        'norm': mcolors.Normalize(vmin=0, vmax=5.0),
-        'cbar_ticks':      [0, 1.25, 2.5, 3.75, 5.0],
-        'cbar_ticklabels': ['0', '1.25', '2.5', '3.75', '5'],
+        'norm': mcolors.Normalize(vmin=0, vmax=2.0),
+        'cbar_ticks':      [0, 0.5, 1.0, 1.5, 2.0],
+        'cbar_ticklabels': ['0', '0.5', '1', '1.5', '2'],
     },
     'rmse': {
-        'norm': mcolors.Normalize(vmin=0, vmax=5.5),
-        'cbar_ticks':      [0, 1.375, 2.75, 4.125, 5.5],
-        'cbar_ticklabels': ['0', '1.4', '2.75', '4.1', '5.5'],
+        'norm': mcolors.Normalize(vmin=0, vmax=2.5),
+        'cbar_ticks':      [0, 0.625, 1.25, 1.875, 2.5],
+        'cbar_ticklabels': ['0', '0.6', '1.25', '1.9', '2.5'],
     },
     'crps': {
-        'norm': mcolors.Normalize(vmin=0, vmax=4.0),
-        'cbar_ticks':      [0, 1.0, 2.0, 3.0, 4.0],
-        'cbar_ticklabels': ['0', '1', '2', '3', '4'],
+        'norm': mcolors.Normalize(vmin=0, vmax=1.5),
+        'cbar_ticks':      [0, 0.375, 0.75, 1.125, 1.5],
+        'cbar_ticklabels': ['0', '0.4', '0.75', '1.1', '1.5'],
     },
 }
 

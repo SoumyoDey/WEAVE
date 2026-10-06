@@ -151,8 +151,25 @@ export const withUnit = (text, variable) =>
 // reaches only +23 h, and the domain is mostly ocean and coastline. Re-deriving
 // the edges from a different run would be re-calibrating to its difficulty —
 // change them because the meteorology says so, not because a percentage moved.
+// Re-derived 2026-10-06. The previous basis was the 2025-09-08 00Z run, where
+// **GEFS and UKMO wind were the 09-16 forecast under the wrong label**
+// (`NEXT_STEPS.md` §24) — so two thirds of the sample were forecasts scored
+// against truth eight days out of register, and the edges came out roughly
+// twice as wide as real errors warrant. That run's pooled MAE read median 1.79,
+// p90 4.65; correctly-paired data reads **median 1.07, p90 1.78**.
+//
+// The basis is now every correctly-paired model-run in the database: AIFS at
+// both 09-08 and 09-16, GEFS and UKMO at 09-16 (09-08 is excluded for those
+// two, being the mislabelled pair). Edges sit near quartiles of that pool, so
+// each band holds roughly a quarter of observed cells.
+//
+// **These are distributional, not an operational standard.** They rank a cell
+// against what this archive contains; "Excellent" means better than ~70% of
+// measured cells, not that a forecaster would call it excellent. An absolute
+// scale is a different object and would need someone who can set one.
 export const WIND_BAND_BASIS =
-  'per-cell, all models, full domain, loaded run 2025-09-08 00Z (n=4883/metric)';
+  'per-cell, correctly-paired model-runs (AIFS 09-08 + 09-16, GEFS/UKMO 09-16), '
+  + 'full domain, n=6564/metric, quartile-derived';
 
 // ── Spatial metric registry ───────────────────────────────────────────────────
 // To add a metric: append one entry here. Selector, overlay, legend, and plot
@@ -262,23 +279,24 @@ export const METRIC_CONFIG = [
       { color: 'rgba(241,148,138,0.85)',  label: '0.3 – 1 {unit} — Slight over-forecast' },
       { color: 'rgba(192,57,43,0.85)',    label: '> 1 {unit}  —  Strong over-forecast' },
     ],
-    // ±1 m/s is not a "strong" wind bias: measured over the loaded run, 42% of
-    // cells fell in the strongest under-forecast band and only 12% read as
-    // near-unbiased. |bias| has a median of 1.47 m/s.
+    // Wind bias runs much tighter than the old ±2.5 edges allowed: measured
+    // p05 −1.15, p50 −0.22, p95 +0.90. At ±2.5 / ±0.75 the centre band swallowed
+    // 59% of cells and both outer bands were near-empty. These give 8/31/42/15/4
+    // — centred, as an unbiased field should be, without being one colour.
     windColorFn: (v) => {
       if (v == null) return null;
-      if (v < -2.5)  return 'rgba(41,128,185,0.85)';
-      if (v < -0.75) return 'rgba(133,193,233,0.85)';
-      if (v <=  0.75) return 'rgba(200,200,200,0.75)';
-      if (v <=  2.5)  return 'rgba(241,148,138,0.85)';
+      if (v < -1.0)   return 'rgba(41,128,185,0.85)';
+      if (v < -0.35)  return 'rgba(133,193,233,0.85)';
+      if (v <=  0.35) return 'rgba(200,200,200,0.75)';
+      if (v <=  1.0)  return 'rgba(241,148,138,0.85)';
       return 'rgba(192,57,43,0.85)';
     },
     windLegend: [
-      { color: 'rgba(41,128,185,0.85)',   label: '< −2.5 {unit}  —  Strong under-forecast' },
-      { color: 'rgba(133,193,233,0.85)',  label: '−2.5 – −0.75  —  Slight under-forecast' },
-      { color: 'rgba(200,200,200,0.75)',  label: '−0.75 – 0.75 —  Near-unbiased ✓' },
-      { color: 'rgba(241,148,138,0.85)',  label: '0.75 – 2.5 {unit} — Slight over-forecast' },
-      { color: 'rgba(192,57,43,0.85)',    label: '> 2.5 {unit}  —  Strong over-forecast' },
+      { color: 'rgba(41,128,185,0.85)',   label: '< −1.0 {unit}  —  Strong under-forecast' },
+      { color: 'rgba(133,193,233,0.85)',  label: '−1.0 – −0.35  —  Slight under-forecast' },
+      { color: 'rgba(200,200,200,0.75)',  label: '−0.35 – 0.35 —  Near-unbiased ✓' },
+      { color: 'rgba(241,148,138,0.85)',  label: '0.35 – 1.0 {unit} — Slight over-forecast' },
+      { color: 'rgba(192,57,43,0.85)',    label: '> 1.0 {unit}  —  Strong over-forecast' },
     ],
     legendGradient: null,
   },
@@ -302,20 +320,22 @@ export const METRIC_CONFIG = [
       { color: 'rgba(230,126,34,0.82)', label: '0.5 – 1.0  —  Moderate' },
       { color: 'rgba(192,57,43,0.82)',  label: '> 1.0 {unit}  —  Poor' },
     ],
-    // Wind. Measured over the loaded run, the mm/h edges above put 79% of
-    // cells in "Poor" — one colour over most of the map. See WIND_BAND_BASIS.
+    // Wind. The mm/h edges above put 79% of cells in "Poor"; the first wind
+    // edges replaced that with 47/53/0/0, because they were derived from the
+    // mislabelled run. Quartiles of correctly-paired data (p25 0.69, p50 1.07,
+    // p75 1.49) give 30/31/28/11. See WIND_BAND_BASIS.
     windColorFn: (v) => {
       if (v == null) return null;
-      if (v < 1.0) return 'rgba(39,174,96,0.82)';
-      if (v < 2.0) return 'rgba(241,196,15,0.82)';
-      if (v < 3.5) return 'rgba(230,126,34,0.82)';
+      if (v < 0.75) return 'rgba(39,174,96,0.82)';
+      if (v < 1.25) return 'rgba(241,196,15,0.82)';
+      if (v < 1.75) return 'rgba(230,126,34,0.82)';
       return 'rgba(192,57,43,0.82)';
     },
     windLegend: [
-      { color: 'rgba(39,174,96,0.82)',  label: '< 1.0 {unit}  —  Excellent' },
-      { color: 'rgba(241,196,15,0.82)', label: '1.0 – 2.0  —  Good' },
-      { color: 'rgba(230,126,34,0.82)', label: '2.0 – 3.5  —  Moderate' },
-      { color: 'rgba(192,57,43,0.82)',  label: '> 3.5 {unit}  —  Poor' },
+      { color: 'rgba(39,174,96,0.82)',  label: '< 0.75 {unit}  —  Excellent' },
+      { color: 'rgba(241,196,15,0.82)', label: '0.75 – 1.25  —  Good' },
+      { color: 'rgba(230,126,34,0.82)', label: '1.25 – 1.75  —  Moderate' },
+      { color: 'rgba(192,57,43,0.82)',  label: '> 1.75 {unit}  —  Poor' },
     ],
     legendGradient: null,
   },
@@ -339,18 +359,19 @@ export const METRIC_CONFIG = [
       { color: 'rgba(230,126,34,0.82)', label: '0.7 – 1.2  —  Moderate' },
       { color: 'rgba(192,57,43,0.82)',  label: '> 1.2 {unit}  —  Poor' },
     ],
+    // p25 0.87, p50 1.36, p75 1.89 on correctly-paired data -> 33/24/33/10.
     windColorFn: (v) => {
       if (v == null) return null;
-      if (v < 1.2) return 'rgba(39,174,96,0.82)';
-      if (v < 2.5) return 'rgba(241,196,15,0.82)';
-      if (v < 4.0) return 'rgba(230,126,34,0.82)';
+      if (v < 1.0)  return 'rgba(39,174,96,0.82)';
+      if (v < 1.5)  return 'rgba(241,196,15,0.82)';
+      if (v < 2.25) return 'rgba(230,126,34,0.82)';
       return 'rgba(192,57,43,0.82)';
     },
     windLegend: [
-      { color: 'rgba(39,174,96,0.82)',  label: '< 1.2 {unit}  —  Excellent' },
-      { color: 'rgba(241,196,15,0.82)', label: '1.2 – 2.5  —  Good' },
-      { color: 'rgba(230,126,34,0.82)', label: '2.5 – 4.0  —  Moderate' },
-      { color: 'rgba(192,57,43,0.82)',  label: '> 4.0 {unit}  —  Poor' },
+      { color: 'rgba(39,174,96,0.82)',  label: '< 1.0 {unit}  —  Excellent' },
+      { color: 'rgba(241,196,15,0.82)', label: '1.0 – 1.5  —  Good' },
+      { color: 'rgba(230,126,34,0.82)', label: '1.5 – 2.25  —  Moderate' },
+      { color: 'rgba(192,57,43,0.82)',  label: '> 2.25 {unit}  —  Poor' },
     ],
     legendGradient: null,
   },
@@ -374,18 +395,19 @@ export const METRIC_CONFIG = [
       { color: 'rgba(230,126,34,0.82)', label: '0.35 – 0.6   —  Moderate' },
       { color: 'rgba(192,57,43,0.82)',  label: '> 0.6 {unit}   —  Poor' },
     ],
+    // p25 0.47, p50 0.76, p75 1.05 on correctly-paired data -> 28/26/30/16.
     windColorFn: (v) => {
       if (v == null) return null;
-      if (v < 0.7) return 'rgba(39,174,96,0.82)';
-      if (v < 1.5) return 'rgba(241,196,15,0.82)';
-      if (v < 2.8) return 'rgba(230,126,34,0.82)';
+      if (v < 0.5) return 'rgba(39,174,96,0.82)';
+      if (v < 0.8) return 'rgba(241,196,15,0.82)';
+      if (v < 1.2) return 'rgba(230,126,34,0.82)';
       return 'rgba(192,57,43,0.82)';
     },
     windLegend: [
-      { color: 'rgba(39,174,96,0.82)',  label: '< 0.7 {unit}  —  Excellent' },
-      { color: 'rgba(241,196,15,0.82)', label: '0.7 – 1.5  —  Good' },
-      { color: 'rgba(230,126,34,0.82)', label: '1.5 – 2.8  —  Moderate' },
-      { color: 'rgba(192,57,43,0.82)',  label: '> 2.8 {unit}  —  Poor' },
+      { color: 'rgba(39,174,96,0.82)',  label: '< 0.5 {unit}  —  Excellent' },
+      { color: 'rgba(241,196,15,0.82)', label: '0.5 – 0.8  —  Good' },
+      { color: 'rgba(230,126,34,0.82)', label: '0.8 – 1.2  —  Moderate' },
+      { color: 'rgba(192,57,43,0.82)',  label: '> 1.2 {unit}  —  Poor' },
     ],
     legendGradient: null,
   },

@@ -120,11 +120,17 @@ describe('wind band scales', () => {
   });
 
   it('spreads a realistic wind error distribution across all four bands', () => {
-    // The actual defect, expressed as a test. These deciles are the measured
-    // per-cell wind MAE distribution over the loaded run (all models, full
-    // domain): p10 0.70, median 1.79, p90 4.65. Under the precipitation bands
-    // all but one of them came out 'Poor'.
-    const observedMae = [0.09, 0.70, 1.09, 1.40, 1.79, 2.30, 3.30, 4.65, 7.05];
+    // The actual defect, expressed as a test — with the right data since
+    // 2026-10-06. These are the measured per-cell wind MAE deciles over every
+    // **correctly-paired** model-run (n=6,564): p10 0.53, median 1.07, p90 1.78.
+    //
+    // The fixture used to read [0.09, 0.70, 1.09, 1.40, 1.79, 2.30, 3.30, 4.65,
+    // 7.05] — "median 1.79, p90 4.65" — taken from the 2025-09-08 run, where
+    // GEFS and UKMO wind were the 09-16 forecast mislabelled (§24). Two thirds
+    // of that sample were scored eight days out of register, which is why it
+    // ran roughly twice as hot as reality. The test still passed against the
+    // corrected bands, which is the point: a fixture can be wrong and green.
+    const observedMae = [0.53, 0.64, 0.75, 0.90, 1.07, 1.24, 1.41, 1.58, 1.78];
     const cfg = cfgFor('mae');
     const colours = new Set(observedMae.map(v => cfg.windColorFn(v)));
     expect(colours.size).toBe(4);
@@ -132,6 +138,12 @@ describe('wind band scales', () => {
     // And the old scale really did collapse it, so this is not a vacuous claim.
     const precipColours = new Set(observedMae.map(v => cfg.colorFn(v)));
     expect(precipColours.size).toBeLessThan(4);
+
+    // The first wind bands collapse it too, in the other direction: derived
+    // from the mislabelled run, <1.0 / 1.0-2.0 / 2.0-3.5 / >3.5 put every one
+    // of these deciles in the bottom two colours.
+    const firstWindBands = (v) => (v < 1.0 ? 'a' : v < 2.0 ? 'b' : v < 3.5 ? 'c' : 'd');
+    expect(new Set(observedMae.map(firstWindBands)).size).toBe(2);
   });
 
   it('leaves the precipitation scale untouched', () => {

@@ -515,17 +515,40 @@ claimed. `TestTheTwoCategoricalSurfacesAgree` in `Data/test_db_endpoints.py`
 pins it by comparing the surfaces to each other, which is the check neither
 file's own tests performed.
 
-### The metric colour bands are calibrated for precipitation — **open**
+### ~~The metric colour bands are calibrated for precipitation~~ — **closed**
 
-`< 0.2 — Excellent` through `> 1.0 — Poor` are mm/h judgements, and the same
-numbers are applied to m/s. The backend norms have the same problem: MAE and RMSE
-cap at `vmax=2`, and a wind MAE map over 35–37 N, 77–74 W runs to **2.18 m/s**, so
-most of the domain saturates into one flat colour and the map stops discriminating.
+> **This entry was stale, then wrong, in two separate ways.** Wind bands were
+> added on 2026-09-02 and this section was never updated, so it described a
+> state that had not existed for a month. And when the bands were re-derived on
+> 2026-10-06 it turned out the 09-02 calibration had itself been measured on
+> the 2025-09-08 run, where GEFS and UKMO wind were the 09-16 forecast under
+> the wrong label (`NEXT_STEPS.md` §24) — so the first fix was right in shape
+> and wrong in numbers.
 
-Setting wind bands is a judgement about what a good wind MAE is, and this project's
-own method lesson is not to guess a constant. So the panel now **says whose scale
-it is** ("Band edges and verdicts are calibrated for precipitation, not for wind")
-and the decision is left to someone who can make it.
+`< 0.2 — Excellent` through `> 1.0 — Poor` are mm/h judgements and were being
+applied to m/s; the backend norms capped MAE and RMSE at `vmax=2` while a wind
+MAE map ran past it, so most of the domain saturated into one flat colour.
+
+**Both halves are fixed.** `METRIC_CONFIG` carries `windColorFn`/`windLegend`
+for the four dimensional metrics (bias, MAE, RMSE, CRPS) and nothing for the
+dimensionless ones, whose limits mean the same in any unit; `metricColorFn` and
+`metricLegend` select by variable, and `metricLayer.js` and `MetricPanel.jsx`
+read through them. `WIND_PLOT_STYLE_OVERRIDES` does the same for the rendered
+PNG.
+
+**The edges are measured, not judged.** Over every correctly-paired model-run
+(AIFS at 09-08 and 09-16, GEFS and UKMO at 09-16; n=6,564 cells per metric),
+wind MAE reads p25 0.69, median 1.07, p75 1.49, p90 1.78. Edges near those
+quartiles — 0.75 / 1.25 / 1.75 — put 30/31/28/11 percent of cells in the four
+bands. The previous wind edges (1.0 / 2.0 / 3.5, from the mislabelled run) gave
+47/53/0/0: better than the precipitation scale's 0/12/35/53, and still two
+colours over the whole map.
+
+**What is still a judgement, stated plainly:** these bands are *distributional*.
+"Excellent" means better than roughly 70% of the cells this archive contains,
+not that a forecaster would call it excellent. An absolute operational standard
+for wind MAE is a different object and would need someone who can set one — but
+it is no longer true that the map cannot discriminate.
 
 ---
 

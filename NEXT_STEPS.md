@@ -4304,9 +4304,9 @@ stops trusting the list:
 
 1. ~~**Which categorical estimator is right.**~~ **DECIDED 2026-10-06 — §41.**
    Both pool over the box; the two surfaces now agree metric for metric.
-2. **Wind metric colour bands.** The precipitation edges are applied to m/s and
-   saturate most of a wind map. The panel now states whose scale it is rather
-   than guessing a constant — the judgement is still unmade.
+2. ~~**Wind metric colour bands.**~~ **DONE 2026-10-06 — §42.** Re-derived from
+   correctly-paired data; the 2026-09-02 bands had been measured on the
+   mislabelled run.
 3. **`fbi` and `composite_confidence` are Analysis-only** and nobody decided
    that. FBI in Comparison is cheap; the composite's weights are a judgement.
 
@@ -4398,6 +4398,71 @@ The result caption needed nothing — it already said `scored: 81 cells at
 37.00°N, 77.00°W`, which was true of FSS before and is true of everything now.
 **That caption was accurate and the control label beside it was not**, in the
 same panel, for as long as the default was 9.
+
+---
+
+## 42. The wind colour bands were calibrated on corrupted data — 2026-10-06
+
+§40 listed this as a decision nobody had made. It had in fact been made on
+2026-09-02 — `METRIC_CONFIG` has carried `windColorFn`/`windLegend` for the four
+dimensional metrics since then, wired through `metricColorFn`, with matching
+`WIND_PLOT_STYLE_OVERRIDES` on the backend. `CONSISTENCY_AUDIT.md` was never
+updated, so it described a month-old state.
+
+**Earlier today I checked that exact pair and called it "not stale".** The
+reasoning was that `NEXT_STEPS` said "fixed" while `CONSISTENCY_AUDIT` said
+"open" because the *defect* was fixed by labelling the panel and the *judgement*
+was still unmade. That was a guess that reconciled two documents without opening
+the code, and the code had the bands in it.
+
+**Then the bands turned out to be wrong anyway.** `WIND_BAND_BASIS` named its
+source: *"loaded run 2025-09-08 00Z"*. That is the run where **GEFS and UKMO
+wind were the 09-16 forecast under the wrong label** (§24), so two thirds of the
+calibration sample were forecasts scored against truth eight days out of
+register. It shows in the numbers: the basis recorded pooled MAE median **1.79**
+and p90 **4.65**, where correctly-paired data reads **1.07** and **1.78**.
+
+| | old basis (09-08, 2/3 mislabelled) | correctly paired |
+|---|---|---|
+| MAE median | 1.79 | **1.07** |
+| MAE p90 | 4.65 | **1.78** |
+| MAE max | — | 2.92 |
+
+So the bands came out about twice as wide as real errors warrant, and the
+saturation defect simply moved: the precipitation edges put 0/12/35/53 percent
+of cells in the four bands, and the first wind edges put **47/53/0/0**. Two
+colours over the whole map, with "Poor" unreachable.
+
+**Re-derived from every correctly-paired model-run** — AIFS at 09-08 and 09-16,
+GEFS and UKMO at 09-16, n=6,564 cells per metric. Edges near the quartiles:
+
+| metric | edges | spread |
+|---|---|---|
+| MAE | 0.75 / 1.25 / 1.75 | 30/31/28/11 |
+| RMSE | 1.0 / 1.5 / 2.25 | 33/24/33/10 |
+| CRPS | 0.5 / 0.8 / 1.2 | 28/26/30/16 |
+| bias | ±1.0 / ±0.35 | 8/31/42/15/4 |
+
+Backend norms moved with them — each `vmax` sits near the measured p90, so MAE
+2.0 (was 5.0), RMSE 2.5 (5.5), CRPS 1.5 (4.0), bias ±1.5 (±5.0). At the old
+limits every cell crowded into the bottom third of the ramp, which is the
+original defect inverted.
+
+**Two tests encoded the bad data and both stayed green.**
+`constants.test.js` asserted a realistic distribution spreads across four bands
+using the deciles `[0.09, 0.70, 1.09, 1.40, 1.79, 2.30, 3.30, 4.65, 7.05]` —
+the corrupted ones, named as such in its comment. It passed against the new
+bands too, so nothing announced it. **A fixture can be wrong and green**, which
+is the same lesson as §39's single-case claims wearing different clothes: the
+number was never re-derived when the data it described was corrected.
+`MetricPanel.test.js` hardcoded the edge string `'1.0 – 2.0'` while its own
+comment explained it was written to survive a recalibration; it now reads the
+edge from `METRIC_CONFIG`.
+
+**What is still a judgement.** These bands are distributional — "Excellent"
+means better than ~70% of cells in this archive, not that a forecaster would
+call it excellent. An absolute standard is a different object. But the map
+discriminates now, which is what the entry was actually about.
 
 ---
 
