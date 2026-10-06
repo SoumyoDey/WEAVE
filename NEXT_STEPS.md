@@ -4124,6 +4124,44 @@ missing gate, then the missing guard. Neither was visible on screen and all 250
 tests passed through both. The network panel is worth a second and third pass
 after a change, not just a first.
 
+### `src/App.requests.test.js` — the class of defect, pinned
+
+Three defects in three commits, all the same shape: a request that should not
+have gone out, self-correcting, invisible on screen, green suite. Every test in
+this repo asserted what a response *contains*; none asserted how many went out.
+Each was caught by a person reading a network panel, which is not a repeatable
+check. This file is.
+
+Five cases, in two groups:
+
+- **No request leaves without a run.** Every `/api/` call except `/api/runs`
+  and `/api/config` must carry `init_time`, and `/api/forecast-hours`
+  specifically must never fire before the run resolves.
+- **One answer, one request.** `forecast-hours` is fetched exactly once for the
+  initial selection and exactly once more per model change, and **no two
+  identical `/api/` URLs** appear in one settled load — the general form,
+  independent of endpoint.
+
+**Verified to discriminate, by reverting the fixes.** With the effect guard
+removed, 2 of 5 fail; with both the guard and the api gate removed — the state
+the previous commit shipped — 3 of 5 fail. The two groups catch *different*
+defects: without the gate the unqualified and qualified URLs differ, so the
+duplicate test passes while the init_time tests fail. Both groups are needed.
+
+Two things learned writing it, both worth more than the tests:
+
+**CRA sets `resetMocks: true`.** That clears every mock's implementation before
+each test, *including* ones created inside a `jest.mock` factory, which runs
+once. So `jest.fn(() => x)` in a module factory returns `x` in the first test
+and `undefined` in every one after — and the symptom is a TypeError deep inside
+`App.js` with nothing pointing at the mock. Use plain functions in module
+factories.
+
+**Leaflet is stubbed in that file, deliberately.** `App.js` builds its map
+inside a `setTimeout`, so in jsdom it lands after a test unmounts and throws
+"Map container not found" asynchronously, attributed to whichever test is
+running. Anything asserting on the map belongs in a file that does not mock it.
+
 Two things worth keeping from the build. A test written before the code caught a
 **500**: `_resolve_init_time` returns `None` for a model with no loaded run and
 the endpoint called `.isoformat()` on it. It now answers 404, which is
