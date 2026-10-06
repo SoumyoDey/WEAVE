@@ -4384,6 +4384,21 @@ two thresholds and two box sizes.
 assumed: its categorical figures come from `/api/compare/region-metrics`, not
 the point endpoint. I had said it would when framing the choice.
 
+**Opening the tab found two labels the change had falsified**, which no test
+would have caught because both are strings. The control was called **"FSS
+area"** — correct until that day, since it moved FSS and nothing else — and the
+mode was **"This cell"**. With the box governing every metric, the first named
+the wrong metric and the second contradicted the behaviour outright. They now
+read **"Scored area"** and **"Around a point"**, which is also what Comparison
+calls its equivalent; the comment beside the control used to explain at length
+why the two tabs deliberately used *different* words, and that reason is what
+§41 removed. "FSS window" is unchanged, being genuinely FSS-only.
+
+The result caption needed nothing — it already said `scored: 81 cells at
+37.00°N, 77.00°W`, which was true of FSS before and is true of everything now.
+**That caption was accurate and the control label beside it was not**, in the
+same panel, for as long as the default was 9.
+
 ---
 
 ## Standing decisions — do not undo these by accident

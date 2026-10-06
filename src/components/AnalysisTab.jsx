@@ -730,7 +730,7 @@ export function AnalysisTab({
                         Score over
                       </span>
                       <div style={{ display: 'flex', borderRadius: t.radius, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.15)' }}>
-                        {[{ id: 'point', label: 'This cell' },
+                        {[{ id: 'point', label: 'Around a point' },
                           { id: 'region', label: 'Drawn region' }].map(({ id, label }) => (
                           <button
                             key={id}
@@ -782,30 +782,35 @@ export function AnalysisTab({
                       </span>
                     </div>
 
-                    {/* The field FSS is evaluated over — point mode only, since
-                        region mode uses the drawn bbox instead.
+                    {/* The area every metric here is scored over — point mode
+                        only, since region mode uses the drawn bbox instead.
 
-                        Called "FSS area", NOT "Scored area", which is what it
-                        said while it defaulted to 1. This control moves FSS and
-                        nothing else: CSI, POD, FAR, FBI and Brier read the centre
-                        cell at every width. At the old default of 1 the
-                        distinction did not matter because the box WAS the cell;
-                        at 9 a label saying "Scored area: 9 cells (≈4.5°)" would
-                        claim the contingency table covered 4.5°, which is false.
-                        Comparison's "Scored area" is a true scored area — it
-                        pools every metric over the box — so the two tabs use
-                        different words because they mean different things. */}
+                        **Called "Scored area" since 2026-10-06, and the previous
+                        label was right until that day.** It read "FSS area"
+                        because the control moved FSS and nothing else: CSI, POD,
+                        FAR, FBI and Brier read the centre cell at every width,
+                        so "Scored area: 9 cells (≈4.5°)" would have claimed a
+                        contingency table covering 4.5° that did not exist. The
+                        comment here used to end by noting that Comparison's
+                        "Scored area" was a true scored area and that the two
+                        tabs therefore used different words for the same control.
+
+                        That difference is what `NEXT_STEPS.md` §41 removed: the
+                        point endpoint now pools every categorical metric over
+                        this box, exactly as Comparison always did, so the two
+                        tabs mean the same thing and say the same word. At 1 the
+                        box IS the cell, which is the exact-point case. */}
                     {catMode === 'point' && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <span
                           style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }}
-                          title="The field FSS compares over, centred on the clicked cell. FSS needs neighbours, so at 1 cell it is undefined. Every other metric here reads the clicked cell alone, whatever this is set to."
+                          title="The area every metric here is scored over, centred on the clicked cell: the contingency table pools every cell in it. Set it to 1 to score the clicked cell alone — FSS is then undefined, since one cell has no neighbourhood."
                         >
-                          FSS area
+                          Scored area
                         </span>
                         <input
                           type="number" min="1" max="41" step="2" value={catBoxCells}
-                          aria-label="FSS field width (grid cells)"
+                          aria-label="Scored area width (grid cells)"
                           onChange={e => setCatBoxCells(Math.max(1, Math.min(41, parseInt(e.target.value, 10) || 1)))}
                           style={{ width: '56px', padding: '4px 6px', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'center', outline: 'none' }}
                         />
@@ -979,7 +984,7 @@ export function AnalysisTab({
                         hint: fss != null
                           ? `Fractions Skill Score over a ${w}×${w}-cell neighbourhood (0→1, higher=better)`
                           : catMode === 'point' && box <= 1
-                            ? 'Undefined at one cell — raise the FSS area above'
+                            ? 'Undefined at one cell — raise the scored area above'
                             : 'Undefined here: no cell in the field crosses the threshold, in the forecast or the observation',
                       });
                     }
