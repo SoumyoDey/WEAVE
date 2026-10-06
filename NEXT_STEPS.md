@@ -3727,23 +3727,35 @@ system, true of all 432 MOGREPS runs here, not of the one file that happened to
 disclose it — so the tab now states it on every MOGREPS run, which is the
 "honest version" this file called for and said was blocked on confirmation.
 
-**Two measurements settled how far it can be taken.** GITA's 12Z member ids
-split cleanly — 0–17 the 12Z cycle, 18–35 the lagged 06Z — and the lagged half
-is worse at every lead: +15 km at T+0, +26 at T+72, **+54 at T+144**, pooled
-+25.8 km, exactly the shape a six-hour handicap predicts. The same comparison
-across the whole archive gives **−2.1 km over 335,821 matched points**: nothing.
+**The magnitude I attached to it was wrong, and is retracted (2026-10-06).**
+§37 stated that MOGREPS error curves are pessimistic by roughly 26 km. That
+came from GITA's 12Z run alone, split at member 18 on the strength of its
+`cyclone_id` stamps: **+25.8 km, 95% CI [+9.1, +42.6]**, n=900. The same split
+over every MOGREPS point gives **−2.1 km, CI [−4.1, −0.3]**, n=335,821 — 373x
+the sample, opposite sign, indistinguishable from zero.
 
-**The null is the interesting half.** It does not mean the other runs are
-unlagged — documentation says they are. It means the member ids stop encoding
-which half a member came from, so both id blocks are a 50/50 mix and the
-penalty cancels. **Absence of a signal from a split that no longer corresponds
-to anything is not absence of the thing**, and reading it the other way would
-have been the same mistake as treating `n_live_tup = 0` as a row count.
+**And the mechanism is disproved.** The claim assumed members 18–35 are the
+previous cycle's forecasts carried forward. Tested against the raw CXML for
+2018-02-11, where both cycles exist: a 12Z file's members 18–35 match the 06Z
+file's members 0–17 at **1 of 504** shared valid times, against 2 of 504 for the
+null. Different forecasts. Member number does not identify the lagged half.
 
-The consequence is left uncorrected and stated: every MOGREPS error curve here
-is pessimistic by roughly the pooled +26 km, and nothing identifies which
-members to correct. Correcting would need member provenance the archive does
-not carry.
+The earlier write-up explained the archive-wide null away — "the ids stop
+encoding which half, so both blocks are a 50/50 mix and the penalty cancels".
+That is possible, and it was reasoning backwards from a number I wanted to keep.
+A one-run result that reverses sign at 373x the sample is a one-run result.
+
+What survives is only the documented fact: MOGREPS-G is a 36-member time-lagged
+ensemble. Some pooled penalty must exist in principle; **its size is not
+measurable from this archive**, and the provenance needed to correct it is
+absent from the derived CSVs *and* from the raw CXML, whose header carries a
+single `baseTime` and no per-member cycle marker. Nothing is corrected because
+there is no established bias to correct.
+
+**This is the fifth time in this project a claim came from one case.** The
+longitude convention three times, the IBTrACS vintage sample, and now this. The
+tell was present each time and ignored each time: a number from a single unit of
+the data, stated without its sample size.
 
 **The archive is now fully loaded: 1,181 runs, 993,630 track rows.**
 

@@ -355,17 +355,19 @@ export function CycloneTab({ active, isNarrow = false }) {
               earlier, aligned by valid time. So half of any 36 are a staler
               forecast at the same moment.
 
-              Only 1 of the 432 MOGREPS files here lets you tell which half.
-              Where you can (GITA's 12Z run, whose cyclone_ids name the cycle),
-              the lagged members are measurably worse at every lead — +15 km at
-              T+0 rising to +54 km at T+144, pooled +26 km. Everywhere else the
-              member ids do not preserve the grouping, so the two id blocks are
-              each a 50/50 mix and the effect washes out to -2 km archive-wide.
+              **No magnitude is claimed, deliberately.** An earlier version of
+              this comment said the lagged half costs about 26 km, from GITA's
+              12Z run split at member 18. Over all 335,821 MOGREPS points the
+              same split gives -2.1 km, and the mechanism is disproved: a 12Z
+              file's members 18-35 are not the 06Z file's members 0-17, matching
+              1 of 504 shared valid times. Member number does not identify the
+              lagged half, and the penalty has no support at scale.
 
-              That null is not evidence of no lag; it is evidence the ids do not
-              encode it. Hence a statement about the system, which is documented
-              and always true, rather than a per-run number that would be
-              unknowable for 431 of 432 runs. See TC_TAB_DESIGN.md.
+              So this states what the Met Office documents and nothing more.
+              Correcting for the lag would need per-member provenance, which is
+              absent from the derived CSVs and from the raw CXML alike — its
+              header carries one baseTime and no per-member cycle marker.
+              See TC_TAB_DESIGN.md.
             */}
             {data.system === 'MOGREPS' && (
               <div style={{ color: 'rgba(255,255,255,0.45)',

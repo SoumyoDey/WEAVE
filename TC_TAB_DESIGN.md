@@ -515,47 +515,44 @@ as `source_cycles` and no view reads it.
    inferred from GITA alone; it is a property of the system, true of all 432
    MOGREPS runs here.
 
-   **Measured, on the one run where the halves are identifiable.** GITA's 12Z
-   `cyclone_id`s name the originating cycle and the member ids split cleanly:
-   **0–17 are the 12Z cycle, 18–35 the lagged 06Z**, contiguous, 18 each. The
-   lagged half is worse at every lead, by exactly the shape a six-hour handicap
-   predicts:
+   **There is no measurable penalty, and the claim that used to be here was
+   wrong.** This section asserted that MOGREPS error curves are pessimistic by
+   about **26 km** because half the ensemble is six hours older. Retracted
+   2026-10-06: the claim rested on a measurement and a mechanism, and both
+   failed.
 
-   | lead | ids 0–17 | ids 18–35 | penalty |
-   |---|---|---|---|
-   | T+0 | 38.7 km | 53.8 km | +15.2 |
-   | T+72 | 139.0 km | 165.0 km | +26.0 |
-   | T+108 | 182.6 km | 224.4 km | +41.9 |
-   | T+144 | 340.8 km | 394.5 km | **+53.7** |
+   *The measurement did not generalise.* It came from GITA's 12Z run alone,
+   split at member 18 because that run's `cyclone_id` stamps mark 0–17 as the
+   12Z cycle and 18–35 as 06Z. That split gives **+25.8 km, 95% CI
+   [+9.1, +42.6]** on n=900 — real for that run. The same split over **all**
+   MOGREPS points gives **−2.1 km, 95% CI [−4.1, −0.3]** on n=335,821. That is
+   nothing, and slightly the wrong way: 373x the sample, opposite sign.
 
-   Pooled, +25.8 km. Error grows roughly 40 km per six hours at that range, so
-   the magnitude fits.
+   *The mechanism is disproved.* The reading was that members 18–35 are the
+   previous cycle's forecasts carried forward. If so, a 12Z file's members
+   18–35 would be the 06Z file's members 0–17 at the same valid times. Checked
+   against the raw CXML for 2018-02-11, where both cycles exist: **1 of 504
+   shared valid times matches**, against 2 of 504 for the null. Different
+   forecasts.
 
-   **But the id convention does not survive into the other 431 files.** The
-   same 0–17 / 18–35 comparison gives −11.8 km on GITA's other runs and
-   **−2.1 km across all 335,821 matched MOGREPS points** — noise, and slightly
-   the wrong way.
+   So member number does not identify the lagged half, GITA's stamps are the
+   only place the split is visible at all, and the +26 km has neither a
+   mechanism nor support at scale. The earlier text explained the archive-wide
+   null away as "the ids stop encoding which half" — which is possible, but it
+   was reasoning backwards from a number I wanted to keep.
 
-   **That null is not evidence of no lag.** Those runs are lagged too; the
-   member ids simply stop encoding which half a member came from, so both id
-   blocks are a 50/50 mix and the penalty cancels — which is exactly what
-   −2 km looks like. Absence of a signal from a split that no longer
-   corresponds to anything is not absence of the thing.
+   **What remains true is only what the Met Office documents**: MOGREPS-G is a
+   36-member time-lagged ensemble, 18 from the stated cycle plus 18 from six
+   hours earlier, aligned by valid time. Some pooled penalty must exist in
+   principle. **Its size is not measurable from this archive**, the best
+   estimate over 335,821 points is indistinguishable from zero, and the
+   provenance needed to correct it is absent from the derived CSVs *and* from
+   the raw CXML, whose header carries one `baseTime` and no per-member cycle
+   marker.
 
-   So: the tab states the lag **as a property of MOGREPS, on every MOGREPS
-   run**, which is documented and always true. It does not state which members
-   are stale, because that is unknowable for 431 of 432 runs. A
-   `lagged_members` column that tried to was added and removed the same day
-   (`NEXT_STEPS.md` §37) — it read as a measurement while being a disclosure
-   quirk.
-
-   **What this costs, left uncorrected.** Every MOGREPS error curve on this tab
-   is pessimistic by something like the pooled +26 km, because half the
-   ensemble is six hours older than the label implies, and nothing identifies
-   which half to correct. A reader comparing MOGREPS against ECMWF's
-   same-cycle 51 is comparing a lagged ensemble with an unlagged one. Stated
-   rather than silently corrected, because correcting would need the member
-   provenance the archive does not carry.
+   Nothing is corrected, because there is no established bias to correct. The
+   tab states that the ensemble is lagged, which is documented, and claims no
+   magnitude.
 
    Also: 6 rows of 994,161 carry only one coordinate, all in EMERAUDE. Dropped
    and counted, because a latitude with no longitude is not a position.
