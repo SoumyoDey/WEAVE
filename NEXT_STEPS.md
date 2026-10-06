@@ -4512,10 +4512,21 @@ So it stays Analysis-only, now by decision rather than by accident, and
 later change that adds it has to delete that test on purpose and justify the
 weights somewhere, which is the point.
 
-**Noticed in passing:** `README.md`'s verification-metrics row still described
-the contingency table as "reading the centre cell only — so the point metrics do
-not move". That was §41's behaviour before §41 changed it; I updated four places
-that day and missed this one. Corrected here.
+**§41 left two stale strings behind, both found by opening the tab.**
+`README.md`'s verification-metrics row still described the contingency table as
+"reading the centre cell only — so the point metrics do not move", and the
+Comparison tab's advanced-metrics caption still said *"Analysis scores these on
+the clicked cell alone, so its values differ"*. Both described the behaviour
+§41 changed. The caption was wrong twice over, since it also listed
+"CSI · POD · FAR · Brier" without FBI; it now reads "… · FBI · Brier … Analysis
+pools over the same box, so the two tabs agree."
+
+That is **four** stale strings from one behaviour change — two control labels
+caught at the time (§41), these two caught a day later. None of them is reachable
+by a test, because a test asserting a sentence has to be rewritten by the same
+change that falsifies the sentence. **The only reliable check is reading the
+screen after changing behaviour**, which is exactly the step I had proposed
+dropping as unproductive two commits earlier.
 
 §40's three decisions are now closed: the categorical estimator (§41), the wind
 colour bands (§42), and this.

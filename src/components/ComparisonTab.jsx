@@ -1852,10 +1852,10 @@ export function ComparisonTab({
                       same point therefore give two different numbers, which is
                       worth saying here rather than leaving to be discovered. */}
                   <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.sm }}>
-                    CSI · POD · FAR · Brier over a {boxCells}×{boxCells}-cell box at the point;
+                    CSI · POD · FAR · FBI · Brier over a {boxCells}×{boxCells}-cell box at the point;
                     FSS at a {fssWindow}×{fssWindow}-cell neighbourhood inside it.
                     <span style={{ color: 'rgba(255,255,255,0.28)' }}>
-                      {' '}Analysis scores these on the clicked cell alone, so its values differ.
+                      {' '}Analysis pools over the same box, so the two tabs agree.
                     </span>
                   </span>
                 </div>
