@@ -796,9 +796,14 @@ samples of the same quantity, so the same metric name can legitimately differ
 between tabs. Collapsing that is a data-architecture decision (pick one source
 of truth, or label each view with its source), not a refactor.
 
-Also still open from the audit's notes: metric results are deterministic in
+~~Also still open from the audit's notes: metric results are deterministic in
 (model, bbox, hours, threshold) but only the *plot* endpoint is cached, and the
-point-list queries have no row cap.
+point-list queries have no row cap.~~ **Both done**, and this note was left
+standing — found in the 2026-10-06 sweep (`NEXT_STEPS.md` §40). Three endpoints
+now go through `_metric_cache_key`/`_cache_get`, pinned by
+`Data/test_metric_cache.py` including an allowlist test for the deliberately
+uncached ones; point lists are capped by `_point_list_response`, which reports
+`truncated` and logs it, pinned by `Data/test_point_list_caps.py`.
 
 
 ---

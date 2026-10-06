@@ -2692,11 +2692,14 @@ level, because there is no forecast–truth relationship left to decay. **Add th
 to the verification kit: for any run whose provenance is in doubt, plot MAE
 against lead before trusting it.**
 
-### Still open after this
+### ~~Still open after this~~ — closed 2026-10-01
 
-`METRICS_AUDIT.md` §0 is stale in a new way. The stored data is now correct; the
-audit still reports figures derived from the mislabelled rows, so every wind
-number and every GEFS number in it describes data that no longer exists.
+`METRICS_AUDIT.md` §0 was stale in a new way: the stored data had been corrected
+while the audit still reported figures derived from the mislabelled rows, so
+every wind and GEFS number in it described data that no longer existed.
+**Regenerated 2026-10-01 against the 2025-09-16 00Z run** by
+`rederive_audit.py`, and §0's header now states which run it describes. Found
+still listed as open during the 2026-10-06 sweep (§40).
 
 ## 25. Region mode gets the spread metrics too — 2026-10-01
 
@@ -4276,6 +4279,59 @@ earlier instances had it — three longitude claims, the IBTrACS vintage sample,
 the MOGREPS penalty — and so did both found here. The fix is not more care; it
 is writing the n beside the number, because a claim that carries its own sample
 size cannot hide this.
+
+---
+
+## 40. What is actually open — swept 2026-10-06
+
+Three items were listed as open and are not. An "open" list that is partly wrong
+is worse than none, because the next person either re-does finished work or
+stops trusting the list:
+
+- **`METRICS_AUDIT.md` §0 is stale** (§24) — regenerated 2026-10-01 against the
+  2025-09-16 run. Closed for five days, still listed.
+- **The two IBTrACS questions** (`TC_DATA_ACCESS.md`) — answered in §9 of that
+  same file on 2026-10-02. The header was corrected then and the list below it
+  was not.
+- **"Only the plot endpoint is cached, point lists have no row cap"**
+  (`METRICS_AUDIT.md`) — both done. Three endpoints cache through
+  `_metric_cache_key`, and `_point_list_response` caps and reports truncation,
+  each with its own test file.
+
+**What is genuinely open**, with why it is open rather than merely undone:
+
+*Decisions nobody has made — these need a person, not work:*
+
+1. **Which categorical estimator is right.** Analysis scores CSI/POD/FAR on the
+   clicked cell; Comparison pools over the 9x9 box. Both say what they do;
+   the same point gives two different CSIs. A cross-reference makes it visible.
+2. **Wind metric colour bands.** The precipitation edges are applied to m/s and
+   saturate most of a wind map. The panel now states whose scale it is rather
+   than guessing a constant — the judgement is still unmade.
+3. **`fbi` and `composite_confidence` are Analysis-only** and nobody decided
+   that. FBI in Comparison is cheap; the composite's weights are a judgement.
+
+*Blocked on data, not effort:*
+
+4. **"AIFS beats GEFS by ~21%" rests on n=1** (§39). 2025-09-16 is the only
+   loaded run with GEFS wind. Closes when a second three-model run is loaded.
+5. **Observations stop at 2025-09-08 23:30 UTC**, so the 06Z run verifies to
+   about +17.5 h. A short series is the correct result, not a failure.
+   Extending means loading 09-09 IMERG and ERA5.
+6. **GEFS has no converter** and different window conventions; **where the
+   loaded AIFS wind came from** is unresolved (§16).
+
+*Known and deliberately not acted on:*
+
+7. **`regridded_forecast` is kept** so old and new numbers stay comparable. It
+   can be dropped when someone is satisfied — but see the `n_live_tup` trap
+   (lesson 17) before concluding any table is empty.
+8. **UKMO wind and precipitation coordinates differ** (`35.1562` vs
+   `35.15625`, two loaders). Nothing joins across variables; a test pins it.
+9. **No "load one run" runbook** as a single document. The steps exist and are
+   exercised; the narrative does not.
+
+Nothing on the cyclone tab is open.
 
 ---
 

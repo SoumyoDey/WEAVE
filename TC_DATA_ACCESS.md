@@ -90,9 +90,17 @@ superseded development history.
 Of 131 ECMWF storms at 0 h: 48 NW Pacific, 32 SW Pacific, 28 NE Pacific,
 **21 North Atlantic**, 2 N Indian.
 
-### Still open
+### ~~Still open~~ — both answered 2026-10-02, see §9
 
-1. **Which IBTrACS vintage each product was scored against.** Two downloads
+> This list was left standing after §9 answered both questions from the files.
+> Found during the 2026-10-06 sweep (`NEXT_STEPS.md` §40). The answers are in
+> §9; the questions are kept here because what was asked, and what it took to
+> settle it, is the useful part of the record.
+
+1. ~~**Which IBTrACS vintage each product was scored against.**~~ **ANSWERED:**
+   `output/` used the 2026-04-27 download, `storm_2016_2024_*` the 2025-09-17
+   one; they differ for 24 of 138 storms, so the generations must not be mixed.
+   Two downloads
    exist, seven months apart, and IBTrACS revises past storms retrospectively.
    `storm_2016_2024_*` predates the newer one; `output/` postdates it.
 2. **What the June re-selection was selecting for.** Not basin — the loss is
