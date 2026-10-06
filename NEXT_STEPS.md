@@ -359,10 +359,9 @@ So: the records are reconciled against the code, and any claim resting on a
 Three still open; the fourth is struck through, fixed 2026-09-02. The first two
 are old, the last two came out of phase 6.
 
-- **`fbi` and `composite_confidence` are Analysis-only and nobody decided that.**
-  Recorded as undecided in `categorical_metrics_endpoint`'s docstring rather than
-  justified. Adding FBI to Comparison is cheap; the composite is a judgement call
-  because its weights are.
+- ~~**`fbi` and `composite_confidence` are Analysis-only and nobody decided
+  that.**~~ **DECIDED 2026-10-06 (§43):** FBI is in both surfaces; the composite
+  stays Analysis-only on purpose, with a test pinning the absence.
 - **UKMO's wind and precipitation coordinates differ** in `ensemble_statistics`
   (`35.1562` vs `35.15625`, two loaders). Nothing joins across variables, so
   nothing is broken; a test pins the difference so it cannot surprise anyone.
@@ -4307,8 +4306,8 @@ stops trusting the list:
 2. ~~**Wind metric colour bands.**~~ **DONE 2026-10-06 — §42.** Re-derived from
    correctly-paired data; the 2026-09-02 bands had been measured on the
    mislabelled run.
-3. **`fbi` and `composite_confidence` are Analysis-only** and nobody decided
-   that. FBI in Comparison is cheap; the composite's weights are a judgement.
+3. ~~**`fbi` and `composite_confidence` are Analysis-only.**~~ **DECIDED
+   2026-10-06 — §43.** FBI added; the composite deliberately not.
 
 *Blocked on data, not effort:*
 
@@ -4479,6 +4478,47 @@ maximum".
 means better than ~70% of cells in this archive, not that a forecaster would
 call it excellent. An absolute standard is a different object. But the map
 discriminates now, which is what the entry was actually about.
+
+---
+
+## 43. FBI and Composite Confidence — opposite answers — 2026-10-06
+
+The last of §40's three decisions, and the one where "make the two tabs
+consistent" was the wrong frame. The gap was incidental — no reason for it had
+ever been recorded — but the two metrics deserved opposite answers.
+
+**FBI added.** Events forecast over events observed, 1 = perfect. It is a
+measurement, and the counts it needs were already summed in
+`_categorical_summary`, so it was one line in the summary path and one in the
+per-hour path. It earns its place on the Comparison tab specifically: **CSI says
+how wrong a model is, FBI says which direction.** Two models can post the same
+CSI while one over-forecasts the event and the other under-forecasts it, and
+nothing else on that tab would show it.
+
+It takes `refLine: 1`, not `bounded: true`. FBI is not in [0, 1] — 2 means twice
+too many events — and pinning the axis to [0, 1] would clip every
+over-forecasting model to the top and make them look identical, which is the
+failure the `bounded` flag exists to prevent for the scores that *are* bounded.
+
+**Composite Confidence deliberately not added.** `0.40 CSI + 0.30 FSS +
+0.20 POD + 0.10(1−FAR)`, and nobody has justified those weights. Inside one
+model it is a summary device: the weighting is constant, so it cancels out of
+any comparison a reader makes across thresholds or lead times. Ranking *models*
+by it ranks them by the weighting while looking exactly like a measurement —
+and ranking models is what the Comparison tab is for.
+
+So it stays Analysis-only, now by decision rather than by accident, and
+`test_the_composite_stays_out_of_the_comparison_surface` pins the absence. A
+later change that adds it has to delete that test on purpose and justify the
+weights somewhere, which is the point.
+
+**Noticed in passing:** `README.md`'s verification-metrics row still described
+the contingency table as "reading the centre cell only — so the point metrics do
+not move". That was §41's behaviour before §41 changed it; I updated four places
+that day and missed this one. Corrected here.
+
+§40's three decisions are now closed: the categorical estimator (§41), the wind
+colour bands (§42), and this.
 
 ---
 

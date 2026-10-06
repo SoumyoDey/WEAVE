@@ -129,7 +129,30 @@ one thing it is not. It now carries the registry name for the estimator it
 actually uses, and the point summary and the region bars finally agree on both
 the key and the label ("SSR (aggregated)").
 
-### 1d. `fbi` and `composite_confidence` are Analysis-only — **undecided · DOCUMENTED**
+### 1d. ~~`fbi` and `composite_confidence` are Analysis-only~~ — **DECIDED 2026-10-06**
+
+**FBI added to Comparison; Composite Confidence deliberately kept out.** The
+gap was incidental, and the two halves deserved opposite answers.
+
+FBI is a measurement — events forecast over events observed — and the counts it
+needs were already being summed in `_categorical_summary`, so it was one line in
+each of the two paths. It also earns its place on that tab specifically: CSI
+says how wrong a model is and FBI says which *direction*, and two models with
+identical CSI can be over- and under-forecasting with nothing else there showing
+it. It takes `refLine: 1` rather than `bounded`, since it is not in [0, 1].
+
+Composite Confidence stays Analysis-only, now by decision rather than by
+accident. Its weights (0.40 CSI + 0.30 FSS + 0.20 POD + 0.10(1−FAR)) have never
+been justified. Within one model that is a summary device and the weighting
+cancels out of any comparison a reader makes across thresholds or lead times.
+Ranking *models* by it ranks them by the weighting while looking exactly like a
+measurement — and ranking models is what the Comparison tab is for.
+`test_the_composite_stays_out_of_the_comparison_surface` pins the absence, so a
+later change has to remove that test on purpose and justify the weights.
+
+The original entry follows.
+
+---
 
 This entry first guessed "deliberate: summary devices for a single model, and
 Comparison arguably needs none". Looking for the reason in the code found **none**,

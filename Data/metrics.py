@@ -623,6 +623,13 @@ def _categorical_summary(hours_list):
         'csi':     round(hits / csi_den,  4) if csi_den  > 0 else None,
         'pod':     round(hits / obs_yes,  4) if obs_yes  > 0 else None,
         'far':     round(fa   / fcst_yes, 4) if fcst_yes > 0 else None,
+        # Frequency bias: events forecast over events observed, 1 = perfect.
+        # Analysis-only until 2026-10-06 for no recorded reason — the gap was
+        # incidental, and the counts it needs were already being summed here
+        # (`CONSISTENCY_AUDIT.md` 1d, `NEXT_STEPS.md` §43). Unlike CSI it says
+        # which *direction* a model is wrong: over- or under-forecasting the
+        # event, which two models with equal CSI can differ on entirely.
+        'fbi':     round(fcst_yes / obs_yes, 4) if obs_yes > 0 else None,
         'fss':     _fss_from_components(fss_num, fss_den),
         'hits':    hits,
         'misses':  misses,

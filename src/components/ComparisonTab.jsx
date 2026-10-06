@@ -25,6 +25,16 @@ const CAT_METRICS = [
   { key: 'csi', label: 'CSI', hint: 'Critical Success Index · higher is better', bounded: true },
   { key: 'pod', label: 'POD', hint: 'Probability of Detection · higher is better', bounded: true },
   { key: 'far', label: 'FAR', hint: 'False Alarm Ratio · lower is better', bounded: true },
+  // FBI is NOT bounded in [0, 1] — it is events forecast over events observed,
+  // so 1 is perfect and 2 means twice too many. It takes `refLine: 1` like SSR
+  // rather than `bounded`, which would clip every over-forecasting model to the
+  // top of the axis and make them look identical.
+  //
+  // Analysis-only until 2026-10-06 for no recorded reason (§43). It earns its
+  // place here specifically: CSI says how wrong a model is, FBI says which
+  // *direction*, and two models with equal CSI can be over- and
+  // under-forecasting respectively with nothing else on this tab showing it.
+  { key: 'fbi', label: 'FBI', hint: 'Frequency Bias · 1 = right number of events', refLine: 1 },
   { key: 'fss', label: 'FSS', hint: 'Fractions Skill Score · higher is better', bounded: true },
 ];
 
@@ -72,6 +82,9 @@ const REGION_METRIC_GROUPS = [
       { key: 'csi',   label: 'CSI',   hint: 'higher is better', decimals: 3, bounded: true },
       { key: 'pod',   label: 'POD',   hint: 'higher is better', decimals: 3, bounded: true },
       { key: 'far',   label: 'FAR',   hint: 'lower is better',  decimals: 3, bounded: true },
+      // Unbounded with an ideal of 1 — see CAT_METRICS above.
+      { key: 'fbi',   label: 'FBI',   hint: '1 = right number of events',
+        decimals: 3, refLine: 1 },
       { key: 'brier', label: 'Brier', hint: '0 is perfect',     decimals: 4, bounded: true },
       // FSS is a property of the whole field at a lead time, so it has a
       // region value but no per-cell value — hence no map (noMap).

@@ -4425,19 +4425,24 @@ def categorical_metrics_endpoint():
       Composite Confidence (no FSS, weights re-normalised to sum 1):
            = (0.40·CSI + 0.20·POD + 0.10·(1-FAR)) / 0.70
 
-    **FBI and Composite Confidence are Analysis-only** — the Comparison tab's
-    endpoints return neither (CONSISTENCY_AUDIT.md 1d). No reason for that was
-    ever recorded, and this note is not inventing one: on the evidence it looks
-    incidental rather than decided. Both are ordinary per-model scores and either
-    would compare across models perfectly well.
+    **FBI is now in both surfaces; Composite Confidence is deliberately not**
+    (decided 2026-10-06, CONSISTENCY_AUDIT.md 1d, NEXT_STEPS.md §43). The split
+    used to be incidental — no reason for it had ever been recorded — and the two
+    halves turned out to deserve opposite answers:
 
-    Two things to weigh before adding them there, which is why this is written
-    down rather than just fixed:
-      - Composite Confidence is a weighted blend, and the weights above are a
-        judgement call. Comparing models on a composite ranks them by that
-        judgement rather than by a measurement, which is a different kind of
-        claim from comparing them on CSI.
-      - FBI has no such problem and is the cheaper of the two to add.
+      - **FBI is a measurement**, events forecast over events observed, and its
+        counts were already being summed in `_categorical_summary`. It is also
+        the one score here that says which *direction* a model is wrong: two
+        models with equal CSI can be over- and under-forecasting respectively,
+        and nothing else on the Comparison tab would show it. Added.
+
+      - **Composite Confidence is a weighted blend and the weights are a
+        judgement nobody has justified.** Within one model it is a summary
+        device and the weights cancel out of any comparison a reader makes
+        across thresholds or lead times. Ranking *models* by it ranks them by
+        the weighting, while looking exactly like a measurement — and the
+        Comparison tab exists to rank models. Not added, and that is now a
+        decision rather than an oversight.
 
     Request JSON:
         { model, variable, lat, lon, threshold_mm_6h, hour_min, hour_max }
@@ -5211,8 +5216,9 @@ def _categorical_hours_for_box(cursor, model_name, fcst_var, obs_var, obs_src,
         far = round(h_fa   / n_fcst_yes,  4) if n_fcst_yes  > 0 else None
         fss_num, fss_den, _n_fss = _fss_components(h_fcst_binary, h_obs_binary, fss_window)
         fss = _fss_from_components(fss_num, fss_den)
+        fbi = round(n_fcst_yes / n_obs_yes, 4) if n_obs_yes > 0 else None
         out.append({'hour': hour, 'n_pts': h_n_pts,
-                    'csi': csi, 'pod': pod, 'far': far, 'fss': fss,
+                    'csi': csi, 'pod': pod, 'far': far, 'fbi': fbi, 'fss': fss,
                     'hits': h_hits, 'misses': h_misses,
                     'false_alarms': h_fa, 'correct_neg': h_cn,
                     # kept so _categorical_summary can aggregate FSS properly

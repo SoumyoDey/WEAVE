@@ -1161,3 +1161,72 @@ class TestTheTwoCategoricalSurfacesAgree:
         a, c = self._both(db_client, box_cells=5)
         assert a['csi'] == pytest.approx(c['csi'])
         assert a['hits'] == c['hits']
+
+
+class TestFbiIsInBothSurfaces:
+    """FBI was Analysis-only for no recorded reason (`CONSISTENCY_AUDIT.md` 1d).
+
+    It is a measurement — events forecast over events observed — and the counts
+    it needs were already being summed for CSI, so the gap was incidental
+    rather than decided. It is also the one score here that says which
+    *direction* a model is wrong: two models with identical CSI can be over-
+    and under-forecasting the event respectively, and nothing else on the
+    Comparison tab would reveal it.
+
+    Composite Confidence deliberately did **not** come with it — see
+    `test_the_composite_stays_out_of_the_comparison_surface` below.
+    """
+
+    ARGS = {'variable': 'precipitation', 'lat': 36.0, 'lon': -75.0,
+            'hour_min': 0, 'hour_max': 36, 'box_cells': 3}
+
+    def _both(self, db_client):
+        args = {**self.ARGS, 'threshold_mm_6h': fx.EXPECT_PRECIP['threshold_mm_6h']}
+        a = db_client.post('/api/categorical-metrics',
+                           json={**args, 'model': 'AIFS'}).get_json()['summary']
+        c = db_client.post('/api/compare/categorical',
+                           json={**args, 'models': ['AIFS']}).get_json()
+        return a, c
+
+    def test_the_comparison_summary_reports_fbi(self, db_client):
+        _a, c = self._both(db_client)
+        assert 'fbi' in c['summaries']['AIFS']
+
+    def test_it_matches_the_analysis_value(self, db_client):
+        a, c = self._both(db_client)
+        assert c['summaries']['AIFS']['fbi'] == pytest.approx(a['fbi'])
+
+    def test_it_is_the_ratio_of_the_counts_reported_beside_it(self, db_client):
+        """Derivable from the same response, so the two cannot drift apart."""
+        _a, c = self._both(db_client)
+        s = c['summaries']['AIFS']
+        obs_yes = s['hits'] + s['misses']
+        fcst_yes = s['hits'] + s['false_alarms']
+        if obs_yes:
+            assert s['fbi'] == pytest.approx(round(fcst_yes / obs_yes, 4))
+
+    def test_the_per_hour_series_carries_it_too(self, db_client):
+        """The chart reads the per-hour list, not the summary."""
+        args = {**self.ARGS, 'threshold_mm_6h': fx.EXPECT_PRECIP['threshold_mm_6h']}
+        c = db_client.post('/api/compare/categorical',
+                           json={**args, 'models': ['AIFS']}).get_json()
+        hours = c['models']['AIFS']
+        assert hours, 'no per-hour rows to check'
+        assert all('fbi' in h for h in hours)
+
+    def test_the_composite_stays_out_of_the_comparison_surface(self, db_client):
+        """**A deliberate absence, pinned so it is not "fixed" by accident.**
+
+        Composite Confidence is 0.40 CSI + 0.30 FSS + 0.20 POD + 0.10 (1−FAR),
+        and nobody has justified those weights. Inside one model it is a summary
+        device. Ranking *models* by it ranks them by the weighting while looking
+        exactly like a measurement — and ranking models is what the Comparison
+        tab is for. So it is Analysis-only on purpose now, where it was
+        Analysis-only by accident before (`NEXT_STEPS.md` §43).
+
+        If a later change adds it, this test should fail and be deleted
+        deliberately, with the weights justified somewhere.
+        """
+        a, c = self._both(db_client)
+        assert 'composite_confidence' in a, 'still expected in Analysis'
+        assert 'composite_confidence' not in c['summaries']['AIFS']
