@@ -10,11 +10,17 @@ WEAVE is an interactive web application for exploring, verifying, and comparing 
 The main map view for real-time forecast exploration. Controls live in a single left-hand **Controls** sidebar, grouped by decision (Data → Display → Advanced) so the three choices that matter most — model, variable, time — are always up front, with power-user settings tucked behind an "Advanced" disclosure.
 
 - **Multi-model support** — AIFS (50 members), GEFS (30 members), UKMO (18 members)
-- **Variables** — Precipitation (mm/h) and Wind Speed (m/s) in the UI; the database also holds Temperature 2 m (K) and MSLP (hPa) for future exposure
+- **Variables** — Precipitation (mm/h) and Wind Speed (m/s), derived from stored `wind_u_10m` / `wind_v_10m` (m/s). Those three are the only variables with data.
+
+  The `variables` lookup table also **declares** `temperature_2m` (K) and `pressure_msl` (**Pa**, not hPa), but `forecast_data` holds **zero rows** for either — checked 2026-10-06. An earlier version of this line said the database "holds" them, which conflated a schema row with data. Exposing them needs an ingest, not a UI change.
 - **Ensemble members** — Switch between ensemble mean, individual members, or an uncertainty overlay (member selection is disabled while an uncertainty style is active, since those overlays always read from the ensemble mean/spread)
 - **IDW interpolation** — Smooth spatial field rendering via inverse-distance weighting
 - **Wind overlays** — Arrow glyphs and animated streamlines
-- **Timeline** — Transport controls (step/play/pause), a scrubber from +0 h to +360 h (15 days), and a persistent valid-time + lead-time readout
+- **Timeline** — Transport controls (step/play/pause) and a persistent valid-time + lead-time readout. The scrubber is a fixed grid of **+0 h to +360 h in 6-hour steps** (`constants.js`), which is not the same thing as the range of the data.
+
+  Measured 2026-10-06, stored steps per model against that grid: AIFS precipitation 60 steps, all selectable; GEFS precipitation 80 steps in +3..+240 h, of which **40 are not on the grid** (the odd 3-hourly ones); UKMO 155 steps in +0..+198 h, of which **121 are not**; GEFS wind 105 steps reaching **+384 h**, so 4 lie beyond the scrubber's top and 44 are off-grid.
+
+  So the timeline addresses a 6-hourly subset, not the archive. Whether that is the intended verification cadence or an oversight has not been settled — it is recorded in `NEXT_STEPS.md` §38 rather than asserted either way here.
 - **Spatial Metric overlay (MetricPanel)** — Live per-grid-point dot overlay for any of 11 verification metrics with configurable threshold and legend
 - **Onboarding tour** — First-run 3-step walkthrough (pick data → read the map → explore uncertainty), replayable any time from the About modal
 - **Accessibility** — Viridis (colorblind-safe, perceptually uniform) is the default colormap; keyboard-operable controls, visible focus rings, and `prefers-reduced-motion` support throughout

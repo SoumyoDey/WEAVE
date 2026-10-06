@@ -4017,6 +4017,64 @@ often a spread or quantile field rather than 50 overplotted ones.
 **Nothing here is started**, and nothing should be until step 1 is written
 down. `TC_DATA_ACCESS.md` says what "written down" has to contain.
 
+## 38. The README's feature claims, audited — 2026-10-06
+
+Prompted by the responsive claim turning out false in two ways: it had sounded
+plausible for months and nobody re-read it. So every countable claim in
+`README.md` was checked against the code or the database rather than against
+memory.
+
+**Eight held.** AIFS 50 / GEFS 30 / UKMO 18 members (confirmed in both
+`forecast_run_registry` and `regridded_forecast_member`); 11 verification
+metrics (`METRIC_CONFIG` has exactly 11 keys); 9 colormaps; 5 uncertainty
+modes (`null | vsup | bivariate | fan | texture`); buckets 0–20
+(`Math.max(0, ...)` / `Math.min(20, ...)`); the 3-step onboarding tour, whose
+step titles match the README's parenthetical word for word; Viridis as the
+default colormap; and the responsive claim, now that it has been fixed.
+
+**Two did not.**
+
+### `temperature_2m` and `pressure_msl` are declared, not held
+
+The README said the database "also holds Temperature 2 m (K) and MSLP (hPa) for
+future exposure". The `variables` lookup table does carry rows for both — and
+`forecast_data` has **zero rows** for either `variable_id`. A schema row was
+being read as data. The units were wrong too: the table says `pressure_msl` is
+in **Pa**, not hPa.
+
+Worth noting how this one nearly escaped: an earlier table inventory in this
+session reported `variables` and `models` as having **0 rows**, because it read
+`n_live_tup`. They have 5 and 3. That is the same estimate-as-count mistake as
+method lesson 17, made twice in one session, and the second time it would have
+produced the opposite wrong answer — "the variables table is empty, so the claim
+is false" happens to reach the right verdict by the wrong route.
+
+### The scrubber addresses a 6-hourly subset, not the archive — OPEN
+
+`constants.js` builds the timeline as `for (let h = 0; h <= 360; h += 6)`. The
+stored data does not line up with it:
+
+| model / variable | stored steps | range | not on the grid |
+|---|---|---|---|
+| AIFS precipitation | 60 | +6..+360 | 0 |
+| GEFS precipitation | 80 | +3..+240 | **40** |
+| UKMO precipitation | 155 | +0..+198 | **121** |
+| GEFS wind | 105 | +0..**+384** | 44, incl. 4 past +360 |
+
+So roughly four fifths of the stored UKMO steps and half the GEFS 3-hourly
+steps are not selectable, and 24 hours of loaded GEFS wind sits beyond the
+scrubber's top.
+
+**This is left open rather than called a bug**, because the project has a
+`COMMON_VERIFICATION_WINDOW_HOURS` and a standing decision that display paths
+keep native cadence, and those two pull in opposite directions here. The
+question for whoever knows: is a 6-hourly display grid the intent, with the
+finer steps kept only for scoring — or should the scrubber follow each model's
+own cadence? The README no longer implies the timeline covers the data either
+way.
+
+---
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in
