@@ -967,7 +967,7 @@ function App() {
       {/* Mounted only once visited: it builds its own Leaflet map, and a second
           hidden map instance costs tiles and listeners for a tab nobody opened. */}
       <div style={{ display: activeTab === 'cyclones' ? 'block' : 'none', position: 'absolute', top: TAB_BAR_H, left: 0, right: 0, bottom: 0, background: '#0d151f' }}>
-        <CycloneTab active={activeTab === 'cyclones'} />
+        <CycloneTab active={activeTab === 'cyclones'} isNarrow={isNarrow} />
       </div>
 
       {/* ══ ANALYSIS TAB ══ */}

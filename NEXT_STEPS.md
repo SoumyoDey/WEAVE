@@ -3759,6 +3759,29 @@ Atlantic, which cannot reach the dateline. **That is the third time a longitude
 claim here has come from one case** (see `TC_DATA_ACCESS.md`); the counters are
 now separate, and only a forecast conversion warns.
 
+**The tab was unusable on a phone, and the map was the part that vanished.**
+Found 2026-10-05 by opening it in a narrow pane. The chart panel is a fixed
+`340px` with `flexShrink: 0`; the map is `flex: 1`. Below the app's 760px
+breakpoint the two were still laid out side by side, so the panel took its 340
+and the map got the remainder — measured at a 397px viewport, **28 pixels**,
+with its own zoom buttons hanging off the edge.
+
+`App.js` has had an `isNarrow` state at `< 760` since long before this tab; the
+tab simply never received it. It does now, and below the breakpoint the map and
+panel stack. One listener, one threshold, no second breakpoint invented.
+
+Two things the fix needed that the first attempt did not have. The map takes a
+fixed height when stacked, because `flex: 1` in a column whose parent scrolls
+collapses to nothing — the same defect one axis over. And `invalidateSize` now
+runs on `isNarrow` as well as on `active`: Leaflet does not notice container
+resizes, so crossing the breakpoint left the view computed at 28px wide, with
+tracks off the edge and unpainted tiles. It re-fits the stored bounds too,
+since what framed a storm in a sliver does not frame it in a full-width map.
+
+Worth noting what nearly hid this: at the desktop widths every previous check
+used, the layout is correct and the map is 911px. The defect needed a narrow
+pane to appear, and `README.md` advertises the app as responsive below 760px.
+
 Only `T`'s meaning is still unknown, and nothing reads it.
 
 **525 rows dropped by `ON CONFLICT DO NOTHING` — found by a deployment

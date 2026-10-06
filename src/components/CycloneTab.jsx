@@ -44,10 +44,12 @@ const MEMBER_STYLE  = { color: '#6fb1ff', weight: 1.2, opacity: 0.45 };
 const BEST_STYLE    = { color: '#ffffff', weight: 3.5, opacity: 0.95 };
 const BEST_CASING   = { color: '#111b27', weight: 6,   opacity: 0.9 };
 
-export function CycloneTab({ active }) {
+export function CycloneTab({ active, isNarrow = false }) {
   const mapRef   = useRef(null);
   const divRef   = useRef(null);
   const layerRef = useRef(null);
+  // What the draw effect last fitted, so a resize can re-fit the same thing.
+  const boundsRef = useRef(null);
 
   const [runs, setRuns]       = useState([]);
   const [storm, setStorm]     = useState(null);
@@ -193,9 +195,29 @@ export function CycloneTab({ active }) {
 
   // Leaflet measures the container on creation; a tab that was hidden then has
   // a zero-size map until it is told to look again.
+  //
+  // **`isNarrow` belongs in here too.** Crossing the 760px breakpoint moves the
+  // map from a column beside the panel to a row above it — a far bigger change
+  // of shape than showing the tab — and Leaflet does not notice container
+  // resizes on its own. Without this the map kept the view it had computed at
+  // 28px wide: tracks running off the edge and unpainted tiles in the newly
+  // exposed area, which looks like a rendering bug and is really a stale
+  // measurement.
+  //
+  // Re-fitting after the resize, not just invalidating: the bounds that framed
+  // the storm in a sliver do not frame it in a full-width map. `boundsRef`
+  // holds what the draw effect last fitted, so the two cannot disagree about
+  // what "the storm" is.
   useEffect(() => {
-    if (active && mapRef.current) setTimeout(() => mapRef.current.invalidateSize(), 0);
-  }, [active]);
+    if (!active || !mapRef.current) return;
+    const id = setTimeout(() => {
+      const map = mapRef.current;
+      if (!map) return;
+      map.invalidateSize();
+      if (boundsRef.current) map.fitBounds(boundsRef.current);
+    }, 0);
+    return () => clearTimeout(id);
+  }, [active, isNarrow]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -234,7 +256,10 @@ export function CycloneTab({ active }) {
       L.polyline(best, BEST_STYLE).addTo(layer);
     }
     bounds.push(...best);
-    if (bounds.length) map.fitBounds(L.latLngBounds(bounds).pad(0.15));
+    if (bounds.length) {
+      boundsRef.current = L.latLngBounds(bounds).pad(0.15);
+      map.fitBounds(boundsRef.current);
+    }
   }, [data, strike, mapReady]);
 
   const missing = data ? data.nominal_members - data.tracked_members : 0;
@@ -377,16 +402,38 @@ export function CycloneTab({ active }) {
                       fontSize: t.fontSize.sm }}>Loading tracks…</div>
       )}
 
-      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-        <div ref={divRef} style={{ flex: 1, minWidth: 0 }} />
+      {/*
+          **The panel is a fixed 340px that does not shrink**, which is right
+          beside a map and wrong inside one. Below 760px the two were still laid
+          out side by side, so the panel took its 340 and the map got whatever
+          remained — measured at a 397px viewport: **28 pixels**, a sliver with
+          its own zoom buttons hanging off the edge. The map is the primary view
+          of this tab, and it was the part that disappeared.
 
-        {/* Error and spread against lead. Beside the map rather than below it:
-            the map answers "where", this answers "how wrong, and did the
-            ensemble know" — the question the rest of this application is about,
-            asked in track space. */}
-        <div style={{ width: '340px', flexShrink: 0, padding: '12px 14px',
+          Stacking below the app's own 760px breakpoint rather than inventing a
+          second one, and `isNarrow` is passed from `App.js` rather than
+          recomputed here so there is one resize listener and one threshold.
+          The map keeps a fixed height when stacked, because `flex: 1` inside a
+          column whose parent scrolls collapses it to nothing — the same defect
+          one axis over.
+      */}
+      <div style={{ display: 'flex', flex: 1, minHeight: 0,
+                    flexDirection: isNarrow ? 'column' : 'row' }}>
+        <div ref={divRef} style={isNarrow
+                  ? { height: '55vh', flexShrink: 0, minHeight: '260px' }
+                  : { flex: 1, minWidth: 0 }} />
+
+        {/* Error and spread against lead. Beside the map rather than below it
+            when there is room: the map answers "where", this answers "how
+            wrong, and did the ensemble know" — the question the rest of this
+            application is about, asked in track space. */}
+        <div style={{ ...(isNarrow
+                        ? { width: 'auto', flex: 1, minHeight: 0,
+                            borderTop: '1px solid rgba(255,255,255,0.08)' }
+                        : { width: '340px', flexShrink: 0,
+                            borderLeft: '1px solid rgba(255,255,255,0.08)' }),
+                      padding: '12px 14px',
                       background: 'rgba(17,27,39,0.97)',
-                      borderLeft: '1px solid rgba(255,255,255,0.08)',
                       overflowY: 'auto' }}>
           <div style={{ color: 'rgba(255,255,255,0.75)', fontSize: t.fontSize.sm,
                         fontWeight: t.fontWeight.semibold, marginBottom: '2px' }}>
