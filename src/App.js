@@ -774,8 +774,22 @@ function App() {
   return (
     <div style={{ position: 'relative', height: '100vh', fontFamily: 'Arial', overflow: 'hidden' }}>
 
-      {/* Tab bar */}
-      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: TAB_BAR_H, background: 'rgba(22,33,44,0.98)', display: 'flex', alignItems: 'center', zIndex: 1100, boxShadow: '0 2px 8px rgba(0,0,0,0.35)', paddingLeft: '16px', gap: '4px' }}>
+      {/* Tab bar
+
+          `overflowX: auto` because this bar does not wrap and cannot: its
+          height is `TAB_BAR_H` and every tab below is positioned at `top:
+          TAB_BAR_H`, so a second line would slide under the content.
+
+          Measured at a 375px viewport: the bar's content is 408px, and the run
+          selector sat from x=218 to x=408 — **33px past the edge**, with the
+          document not scrolling, so the cycle dropdown was simply unreachable.
+          Not clipped-looking: gone. Scrolling the bar costs nothing above
+          ~760px, where it does not overflow at all.
+
+          The selects inside are native, so their popups are not clipped by
+          this. A custom absolutely-positioned dropdown added here later would
+          be — `overflow-x: auto` forces `overflow-y` to compute to auto too. */}
+      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: TAB_BAR_H, background: 'rgba(22,33,44,0.98)', display: 'flex', alignItems: 'center', zIndex: 1100, boxShadow: '0 2px 8px rgba(0,0,0,0.35)', paddingLeft: '16px', paddingRight: '12px', gap: '4px', overflowX: 'auto' }}>
         <span style={{ color: 'white', fontWeight: t.fontWeight.bold, fontSize: t.fontSize.lg, marginRight: isNarrow ? '8px' : '16px', letterSpacing: '1px', display: 'inline-flex', alignItems: 'center', gap: '7px' }}><CloudRain size={18} style={{ color: '#3aa0ff' }} />{!isNarrow && 'WEAVE'}</span>
         {[['visualization', MapIcon, 'Visualization'], ['analysis', BarChart3, 'Analysis'], ['comparison', Scale, 'Comparison'], ['cyclones', Wind, 'Cyclones']].map(([id, Icon, label]) => (
           <button key={id} onClick={() => setActiveTab(id)} title={label} aria-label={label}

@@ -3782,6 +3782,22 @@ Worth noting what nearly hid this: at the desktop widths every previous check
 used, the layout is correct and the map is 911px. The defect needed a narrow
 pane to appear, and `README.md` advertises the app as responsive below 760px.
 
+**Checking that claim found a second one, on every tab.** The tab bar does not
+wrap and cannot: its height is `TAB_BAR_H` and each tab is positioned at `top:
+TAB_BAR_H`, so a second line slides under the content. At a 375px viewport its
+content is **408px**, and the run selector sat from x=218 to x=408 — 33px past
+the edge, with `overflowX: visible` and the page not scrolling. The cycle
+dropdown was not merely clipped, it was **unreachable**, on all four tabs.
+The bar now scrolls horizontally; at desktop widths it does not overflow, so
+nothing changes there. The selects inside are native, so their popups are
+unaffected — a custom absolutely-positioned dropdown added to that bar later
+would be clipped, since `overflow-x: auto` forces `overflow-y` to auto.
+
+The `README.md` claim is rewritten to what was measured: at 375px, all four
+tabs have no horizontal page overflow and no control off-screen. It also now
+says what is *not* claimed — this is a desktop-first analysis tool, and "nothing
+is broken or unreachable" is a weaker promise than "designed for mobile".
+
 Only `T`'s meaning is still unknown, and nothing reads it.
 
 **525 rows dropped by `ON CONFLICT DO NOTHING` — found by a deployment

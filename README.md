@@ -18,7 +18,11 @@ The main map view for real-time forecast exploration. Controls live in a single 
 - **Spatial Metric overlay (MetricPanel)** — Live per-grid-point dot overlay for any of 11 verification metrics with configurable threshold and legend
 - **Onboarding tour** — First-run 3-step walkthrough (pick data → read the map → explore uncertainty), replayable any time from the About modal
 - **Accessibility** — Viridis (colorblind-safe, perceptually uniform) is the default colormap; keyboard-operable controls, visible focus rings, and `prefers-reduced-motion` support throughout
-- **Responsive** — Sidebar and tab bar reflow to a mobile-friendly layout below ~760px wide
+- **Responsive** — Below ~760px the sidebar and tab bar reflow, tab labels collapse to icons, and the Cyclones tab stacks its map above its chart instead of beside it. Verified at 375px on all four tabs: no horizontal page overflow, and no control left off-screen.
+
+  Two things were measured rather than assumed here, because this claim was previously false in two ways. The Cyclones tab had no breakpoint at all, so its fixed-width chart panel squeezed the map to **28px** — the primary view of the tab, reduced to a sliver. And the tab bar's content is 408px wide at a 375px viewport, so the run selector sat 33px past the edge with the page not scrolling, which made the cycle dropdown unreachable on every tab; the bar now scrolls horizontally when it overflows. Both fixed 2026-10-06 (`NEXT_STEPS.md` §37).
+
+  Still true at narrow widths: the map is usable but cramped, and this is a desktop-first analysis tool rather than a phone app — "nothing is broken or unreachable" is the standard being claimed, not "designed for mobile".
 
 #### Uncertainty Style (5 modes, mutually exclusive)
 Each mode is picked from a thumbnail-preview grid using a plain name; the underlying technique is noted below for reference.
