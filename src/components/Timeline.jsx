@@ -7,7 +7,11 @@ import { t } from '../theme';
  * Bottom timeline scrubber with transport controls.
  *
  * Props:
- *   currentModel     {object}  — { name, color, hours, ... }
+ *   currentModel     {object}  — { name, color, hours, ... }; `hours` is the
+ *                                    constant fallback, not the run's own
+ *   hours            {number[]|null} — the lead times this run actually holds,
+ *                                    from /api/forecast-hours; null while
+ *                                    loading or if it failed
  *   selectedHour     {number}
  *   setSelectedHour  {fn}
  *   selectedVariable {string}
@@ -15,8 +19,17 @@ import { t } from '../theme';
  *                                    loading / if it failed
  *   isNarrow         {boolean} — compact, stacked layout for narrow viewports
  */
-export function Timeline({ currentModel, selectedHour, setSelectedHour, obsCoverage, isNarrow }) {
-  const hours      = currentModel.hours;
+export function Timeline({ currentModel, hours: runHours, selectedHour, setSelectedHour, obsCoverage, isNarrow }) {
+  // The run's own lead times when they have arrived, the model constant until
+  // then. `currentModel.hours` is `ALL_HOURS` — 0..360 every 6 hours — for all
+  // three models, which matches none of them: GEFS precipitation is 3-hourly,
+  // UKMO hourly, and GEFS wind reaches +384 h, so a quarter of a day of loaded
+  // data was unreachable (`NEXT_STEPS.md` §38).
+  //
+  // Falling back rather than rendering nothing: a slider that is briefly
+  // coarser is better than one that is briefly absent, and the fallback is also
+  // what shows if `/api/forecast-hours` fails.
+  const hours      = (runHours?.length ? runHours : currentModel.hours);
   const currentIdx = hours.indexOf(selectedHour);
   const maxIdx     = hours.length - 1;
   const pct        = maxIdx > 0 ? (currentIdx / maxIdx) * 100 : 0;

@@ -3415,6 +3415,73 @@ def get_runs():
         return_db_connection(conn)
 
 
+@app.route('/api/forecast-hours', methods=['GET'])
+def forecast_hours():
+    """The lead times a run actually holds, for one model and variable.
+
+    The timeline used a constant: `for (let h = 0; h <= 360; h += 6)` in
+    `constants.js`, shared by all three models. That describes no model in this
+    archive. Measured against it: 40 of GEFS precipitation's 80 steps are off
+    that grid (it is 3-hourly), **121 of UKMO's 155** are, and GEFS wind reaches
+    **+384 h**, so 24 hours of loaded data sat past the scrubber's top and could
+    not be selected at all (`NEXT_STEPS.md` §38).
+
+    `hour_min`/`hour_max` from `/api/runs` cannot replace this. UKMO's steps run
+    1, 2, 3, 4, 5, 7, 8, ... — irregular, so no min/max/stride reproduces them,
+    and a client that assumed a stride would invent lead times the run does not
+    have. The list is the only honest answer.
+
+    **Derived from the data, not from the registry.** A `hours` column on
+    `forecast_run_registry` would be faster and could drift from the rows it
+    describes, which is §24's defect exactly — a table confidently stating
+    something no longer true. Measured cost of the aggregate for one
+    (model, variable, run): 22 ms for AIFS, 52 ms for GEFS wind, 66 ms for
+    UKMO's 155 steps. Cheap because it is one group; the same aggregate over
+    every group is ~850 ms, which is why this is its own lazy endpoint rather
+    than a field on `/api/runs`.
+
+    Query: model, variable, init_time (optional — resolved when unambiguous)
+    """
+    model_name = request.args.get('model',    'AIFS')
+    variable   = request.args.get('variable', 'precipitation')
+    if _bad_token(model_name, variable):
+        return jsonify({'error': 'Invalid model or variable'}), 400
+
+    conn   = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        requested = request.args.get('init_time', _UNSET)
+        init_time = _resolve_init_time(cursor, model_name, requested)
+        # `None` means no run is loaded for this model at all — an unknown name,
+        # or a model this database does not have. Answered as 404 rather than an
+        # empty list, because "no such run" and "this run holds no hours for
+        # that variable" are different facts and a client that conflates them
+        # cannot tell a typo from a gap. Without this guard the `.isoformat()`
+        # below raised and the endpoint 500ed; a test caught it.
+        if init_time is None:
+            return jsonify({'error': f'no loaded run for {model_name}',
+                            'hint': 'GET /api/runs lists what is loaded'}), 404
+        cursor.execute("""
+            SELECT array_agg(DISTINCT forecast_hour ORDER BY forecast_hour) AS hours
+            FROM regridded_forecast_ens
+            WHERE model_name = %s AND variable_name = %s AND init_time = %s
+        """, (model_name, variable, init_time))
+        hours = cursor.fetchone()['hours'] or []
+        return jsonify({
+            'model':     model_name,
+            'variable':  variable,
+            'init_time': init_time.isoformat(),
+            'hours':     hours,
+            # Stated so a caller can tell "this run holds nothing for this
+            # variable" from "the request was wrong", which an empty list alone
+            # does not distinguish.
+            'count':     len(hours),
+        })
+    finally:
+        cursor.close()
+        return_db_connection(conn)
+
+
 @app.route('/api/observation-coverage', methods=['GET'])
 def observation_coverage():
     """How far the observation record reaches, in lead-time terms.

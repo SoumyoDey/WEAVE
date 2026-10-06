@@ -10,7 +10,7 @@ import { getLegendGradient }  from './utils/colorUtils';
 import { pointInPolygon }     from './utils/geoUtils';
 
 // ── API ───────────────────────────────────────────────────────────────────────
-import { fetchForecastData, fetchTimeseries as apiFetchTimeseries, fetchSpreadSkill as apiFetchSpreadSkill, fetchObservationCoverage } from './api/forecastApi';
+import { fetchForecastData, fetchTimeseries as apiFetchTimeseries, fetchSpreadSkill as apiFetchSpreadSkill, fetchObservationCoverage, fetchForecastHours } from './api/forecastApi';
 import { fetchSpatialMetric } from './api/spatialApi';
 
 // ── Layer renderers ───────────────────────────────────────────────────────────
@@ -248,6 +248,46 @@ function App() {
   const loadSeqRef              = useRef(0);
 
   const currentModel = MODELS[selectedModel];
+
+  // ── The lead times this run actually holds ───────────────────────────────────
+  //
+  // `MODELS[x].hours` is the constant `ALL_HOURS` — 0..360 every 6 hours — for
+  // all three models, and it describes none of them. GEFS precipitation is
+  // 3-hourly, UKMO is hourly, and GEFS wind reaches +384 h, so 24 hours of
+  // loaded data sat past the scrubber's top with no way to select it
+  // (`NEXT_STEPS.md` §38).
+  //
+  // Fetched per (run, model, variable) rather than derived from the run's
+  // `hour_min`/`hour_max`: UKMO's steps are 1, 2, 3, 4, 5, 7, 8, ... and no
+  // min/max/stride reproduces that, so a client assuming a stride would offer
+  // lead times the run does not hold.
+  //
+  // Null while loading or on failure, and the Timeline falls back to the
+  // constant then. A slider that renders nothing until a fetch lands is worse
+  // than one briefly offering a coarser grid.
+  const [runHours, setRunHours] = useState(null);
+  useEffect(() => {
+    // The stored name, not the UI's: the DB has `wind_u_10m`, not `wind`. Both
+    // components share a cadence, so either answers for the pair.
+    const stored = selectedVariable === 'wind' ? 'wind_u_10m' : selectedVariable;
+    let alive = true;
+    setRunHours(null);
+    fetchForecastHours({ model: selectedModel, variable: stored,
+                         initTime: selectedRun })
+      .then((d) => { if (alive) setRunHours(d.hours?.length ? d.hours : null); })
+      .catch(() => { if (alive) setRunHours(null); });
+    return () => { alive = false; };
+  }, [selectedRun, selectedModel, selectedVariable]);
+
+  // Keep the selected lead on the grid the slider is actually offering, or
+  // `hours.indexOf(selectedHour)` is -1 and the thumb jumps to the start.
+  useEffect(() => {
+    if (!runHours?.length) return;
+    setSelectedHour((h) => (runHours.includes(h)
+      ? h
+      : runHours.reduce((best, x) =>
+          Math.abs(x - h) < Math.abs(best - h) ? x : best, runHours[0])));
+  }, [runHours]);
 
   // Derived booleans
   const showUncertainty = uncertaintyMode === 'vsup';
@@ -878,6 +918,7 @@ function App() {
         {/* Timeline */}
         <Timeline
           currentModel={currentModel}
+          hours={runHours}
           selectedHour={selectedHour} setSelectedHour={setSelectedHour}
           selectedVariable={selectedVariable}
           obsCoverage={obsCoverage}

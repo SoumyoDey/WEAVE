@@ -4065,13 +4065,37 @@ So roughly four fifths of the stored UKMO steps and half the GEFS 3-hourly
 steps are not selectable, and 24 hours of loaded GEFS wind sits beyond the
 scrubber's top.
 
-**This is left open rather than called a bug**, because the project has a
-`COMMON_VERIFICATION_WINDOW_HOURS` and a standing decision that display paths
-keep native cadence, and those two pull in opposite directions here. The
-question for whoever knows: is a 6-hourly display grid the intent, with the
-finer steps kept only for scoring — or should the scrubber follow each model's
-own cadence? The README no longer implies the timeline covers the data either
-way.
+**RESOLVED 2026-10-06: the scrubber follows each model's own cadence.** The
+standing decision that display paths keep native cadence settled it; the
+6-hourly grid was never a decision, just a constant nobody revisited.
+
+`GET /api/forecast-hours?model=&variable=&init_time=` returns the actual list.
+**Derived from the rows, not stored on the registry** — a `hours` column would
+be faster and could drift from the data it describes, which is §24's defect. One
+group costs 22 ms (AIFS), 52 ms (GEFS wind) or 66 ms (UKMO's 155 steps); the
+same aggregate over every group is ~850 ms, which is why it is a lazy endpoint
+rather than a field on `/api/runs`.
+
+`hour_min`/`hour_max` could not have served: UKMO's steps are 1, 2, 3, 4, 5, 7,
+8, … and no min/max/stride reproduces them, so a client assuming a stride would
+offer lead times the run does not hold.
+
+Verified in the browser: the slider shows **60** positions for AIFS
+precipitation, **155** for UKMO, **105** for GEFS wind, and its last position
+renders `GEFS · Wind · +384h` with a populated field — a lead time that could
+not be selected at all before. It falls back to the old constant while the
+fetch is in flight or if it fails, because a briefly coarser slider beats a
+briefly absent one.
+
+Two things worth keeping from the build. A test written before the code caught a
+**500**: `_resolve_init_time` returns `None` for a model with no loaded run and
+the endpoint called `.isoformat()` on it. It now answers 404, which is
+deliberately distinct from the 200-with-empty-list case — "no such run" is not
+"this run holds nothing for that variable", and a client that conflates them
+cannot tell a typo from a gap. And the endpoint takes the **stored** variable
+name, so `wind_u_10m` rather than the UI's `wind`; passing the UI spelling
+returns an empty list silently, which is the same mismatch
+`TestTheContractRunContextReads` exists to pin.
 
 ---
 

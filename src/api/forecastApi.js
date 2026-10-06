@@ -104,3 +104,30 @@ export const fetchRuns = async () => {
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 };
+
+/**
+ * The lead times a run actually holds, for one model and one stored variable.
+ *
+ * The timeline used `MODELS[x].hours`, which is the constant `ALL_HOURS` —
+ * `0..360` in 6-hour steps — for all three models. That grid describes none of
+ * them: GEFS precipitation is 3-hourly, UKMO is hourly, and GEFS wind reaches
+ * +384 h, so 24 hours of loaded data was past the scrubber's top and could not
+ * be selected (`NEXT_STEPS.md` §38).
+ *
+ * `variable` here is the **stored** name, so `wind_u_10m` rather than the UI's
+ * `wind`. The two components share a cadence, so the caller picks either one;
+ * `STORED_VARIABLES` in `RunContext.jsx` is the mapping, and passing the UI
+ * spelling would silently return an empty list — the same mismatch that
+ * `TestTheContractRunContextReads` exists to pin.
+ *
+ * Returns `{ model, variable, init_time, hours: [...], count }`. A 404 means no
+ * run is loaded for that model, which is different from a run that holds
+ * nothing for that variable — the latter is a 200 with an empty list.
+ */
+export const fetchForecastHours = async ({ model, variable, initTime }) => {
+  const q = new URLSearchParams({ model, variable });
+  if (initTime) q.set('init_time', initTime);
+  const res = await fetch(`${BASE}/forecast-hours?${q}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+};

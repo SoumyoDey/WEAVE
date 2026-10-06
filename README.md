@@ -16,11 +16,11 @@ The main map view for real-time forecast exploration. Controls live in a single 
 - **Ensemble members** — Switch between ensemble mean, individual members, or an uncertainty overlay (member selection is disabled while an uncertainty style is active, since those overlays always read from the ensemble mean/spread)
 - **IDW interpolation** — Smooth spatial field rendering via inverse-distance weighting
 - **Wind overlays** — Arrow glyphs and animated streamlines
-- **Timeline** — Transport controls (step/play/pause) and a persistent valid-time + lead-time readout. The scrubber is a fixed grid of **+0 h to +360 h in 6-hour steps** (`constants.js`), which is not the same thing as the range of the data.
+- **Timeline** — Transport controls (step/play/pause), a persistent valid-time + lead-time readout, and a scrubber whose steps are **the lead times the selected run actually holds**, fetched per model and variable from `/api/forecast-hours`.
 
-  Measured 2026-10-06, stored steps per model against that grid: AIFS precipitation 60 steps, all selectable; GEFS precipitation 80 steps in +3..+240 h, of which **40 are not on the grid** (the odd 3-hourly ones); UKMO 155 steps in +0..+198 h, of which **121 are not**; GEFS wind 105 steps reaching **+384 h**, so 4 lie beyond the scrubber's top and 44 are off-grid.
+  So the slider has 60 positions for AIFS precipitation, 80 for GEFS precipitation (3-hourly), **155 for UKMO** (hourly out to +198 h) and 105 for GEFS wind, reaching **+384 h**. It used to be a constant `0..360` every 6 hours for all three — which matched none of them, left 121 of UKMO's 155 steps unselectable, and put 24 hours of loaded GEFS wind past the end of the control. Fixed 2026-10-06 (`NEXT_STEPS.md` §38).
 
-  So the timeline addresses a 6-hourly subset, not the archive. Whether that is the intended verification cadence or an oversight has not been settled — it is recorded in `NEXT_STEPS.md` §38 rather than asserted either way here.
+  `hour_min`/`hour_max` could not have replaced the list: UKMO's steps run 1, 2, 3, 4, 5, 7, 8, …, so no stride reproduces them and a client assuming one would offer lead times the run does not hold. While the fetch is in flight, or if it fails, the scrubber falls back to the old constant rather than rendering nothing.
 - **Spatial Metric overlay (MetricPanel)** — Live per-grid-point dot overlay for any of 11 verification metrics with configurable threshold and legend
 - **Onboarding tour** — First-run 3-step walkthrough (pick data → read the map → explore uncertainty), replayable any time from the About modal
 - **Accessibility** — Viridis (colorblind-safe, perceptually uniform) is the default colormap; keyboard-operable controls, visible focus rings, and `prefers-reduced-motion` support throughout
@@ -250,6 +250,7 @@ WEAVE_v3/
 | `GET` | `/api/spread-skill` | Point-level SSR + correlation — `?model=&variable=&lat=&lon=` |
 | `GET` | `/api/models` | List available models |
 | `GET` | `/api/variables` | List available variables |
+| `GET` | `/api/forecast-hours` | The lead times a run actually holds — `?model=&variable=&init_time=` → `{hours: [...], count}`. The stored variable name (`wind_u_10m`), not the UI's `wind` |
 | `GET` | `/api/observation-coverage` | How far the truth reaches — `?model=&variable=` → `{init_time, obs_end, record_end_lead_hours, last_verifiable_hour, window_hours}` |
 | `GET` | `/api/health` | Health check — database, pool headroom, storage headroom, export convention, and what this worker has served |
 | `GET` | `/api/ready` | Readiness probe — pooled `SELECT 1`, 200 or 503. Point a load balancer here, not at `/api/health` |
