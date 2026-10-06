@@ -2027,13 +2027,16 @@ legacy 3 dp deliberately, because it is checking against what is stored.
 
 - **Unblocked:** a second AIFS *precipitation* run, reproducibly, from any of
   the 16 cycles on the cluster.
-- **Still blocked:** GEFS, which has no converter at all and different window
-  conventions (3 h buckets at `h%6==3`, 6 h at `h%6==0` — see `aifs react.py`).
-- **Unresolved:** where the loaded AIFS wind came from.
+- ~~**Still blocked:** GEFS, which has no converter at all~~ — **`convert_gefs.py`
+  exists** (522 lines, "completes the set, so every forecast table can be
+  rebuilt from source"). This line outlived it; found in the 2026-10-06 sweep
+  (§44). The window conventions it names are still the awkward part: 3 h buckets
+  at `h%6==3`, 6 h at `h%6==0`.
+- **Unresolved:** where the loaded AIFS wind came from. **Still open 2026-10-06.**
 
-`netCDF4` is imported lazily and is not in `Data/requirements.txt`, so the
-numeric-convention tests run in CI and the file-reading tests skip themselves
-there — the same bargain the PostgreSQL tests strike.
+~~`netCDF4` is imported lazily and is not in `Data/requirements.txt`~~ — it was
+added in §30 (`netCDF4==1.7.4`), which is what unskipped the file-reading tests
+in CI. Another line this paragraph kept after the fact.
 
 ## 17. AIFS 06Z is loaded, and it broke two things — 2026-09-28
 
@@ -4311,23 +4314,37 @@ stops trusting the list:
 
 *Blocked on data, not effort:*
 
-4. **"AIFS beats GEFS by ~21%" rests on n=1** (§39). 2025-09-16 is the only
-   loaded run with GEFS wind. Closes when a second three-model run is loaded.
-5. **Observations stop at 2025-09-08 23:30 UTC**, so the 06Z run verifies to
-   about +17.5 h. A short series is the correct result, not a failure.
-   Extending means loading 09-09 IMERG and ERA5.
-6. **GEFS has no converter** and different window conventions; **where the
-   loaded AIFS wind came from** is unresolved (§16).
+4. **"AIFS beats GEFS by ~21%" rests on n=1** (§39). 2025-09-16 is still the only
+   loaded run with GEFS wind — re-checked 2026-10-06. Closes when a second
+   three-model run is loaded.
+5. **Where the loaded AIFS wind came from** is unresolved (§16). Staleness does
+   not explain it; the provenance is simply unknown.
 
 *Known and deliberately not acted on:*
 
-7. **`regridded_forecast` is kept** so old and new numbers stay comparable. It
-   can be dropped when someone is satisfied — but see the `n_live_tup` trap
-   (lesson 17) before concluding any table is empty.
-8. **UKMO wind and precipitation coordinates differ** (`35.1562` vs
-   `35.15625`, two loaders). Nothing joins across variables; a test pins it.
-9. **No "load one run" runbook** as a single document. The steps exist and are
-   exercised; the narrative does not.
+6. **UKMO wind and precipitation coordinates differ** — confirmed still true:
+   `35.1562` and `35.15625` both exist in `ensemble_statistics`, from two
+   loaders. Nothing joins across variables, and a test pins it.
+7. **No "load one run" runbook** as a single document. `DEPLOY.md` is a
+   first-install guide; adding a run to an existing database is a different
+   narrative and does not exist as one.
+
+**Four more entries were stale, found by checking rather than re-reading**
+(2026-10-06, §44). The pattern is now consistent enough to state as a rule: in
+this project an item is more likely to be stale than open, so **verify before
+listing**.
+
+- **"Observations stop at 2025-09-08 23:30"** — they now reach **2025-09-26
+  23:30** (IMERG) and 23:00 (ERA5). Eighteen further days of truth were loaded
+  and the note was never updated, so the "+17.5 h verification limit" it warned
+  about has not applied for some time.
+- **"`regridded_forecast` is kept for comparison"** — **dropped**. `to_regclass`
+  returns NULL.
+- **"GEFS has no converter at all"** — `convert_gefs.py` is 522 lines and says
+  it "completes the set". §9 of this file already listed three converters, so
+  the document contradicted itself.
+- **"`netCDF4` is not in `Data/requirements.txt`"** — §30 added
+  `netCDF4==1.7.4`, which is what unskipped the file-reading tests in CI.
 
 Nothing on the cyclone tab is open.
 
@@ -4530,6 +4547,38 @@ dropping as unproductive two commits earlier.
 
 §40's three decisions are now closed: the categorical estimator (§41), the wind
 colour bands (§42), and this.
+
+---
+
+## 44. The open list is wrong more often than it is right — 2026-10-06
+
+Second sweep in one day. The first (§40) found three stale entries of nine; this
+one found four more, after the three decisions were closed. So of the original
+nine items, **seven turned out to be already done** and two were real.
+
+Stale this round: observations "stop at 2025-09-08 23:30" (they reach
+2025-09-26); `regridded_forecast` "is kept" (dropped); "GEFS has no converter at
+all" (`convert_gefs.py`, 522 lines — and §9 of this same file already listed
+three converters, so the document contradicted itself); and "`netCDF4` is not in
+`Data/requirements.txt`" (§30 added it, which is what unskipped the CI tests).
+
+**The failure is structural, not careless.** Every one of these was written true,
+and the work that falsified it happened in a different section. A note saying
+"X is missing" is invalidated by adding X, and nothing about adding X makes
+anyone re-read the note. The documents are organised by *when* work happened,
+which is right for a record and wrong for a to-do list — so the to-do list rots
+at exactly the rate the project advances.
+
+**Working rule, since this has now happened seven times: in this project an item
+is more likely to be stale than open. Verify before listing.** Every entry above
+was re-checked against the database or the filesystem before being written down,
+which took about five minutes and removed four of six.
+
+It is worth noting what the two survivors have in common: neither can be closed
+by work. One needs a second three-model run to exist; the other needs provenance
+nobody recorded at the time. **Items that need new data survive; items that need
+effort get done and the note stays**, which is exactly backwards from how a
+to-do list is supposed to decay.
 
 ---
 
