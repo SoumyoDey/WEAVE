@@ -269,6 +269,13 @@ function App() {
   useEffect(() => {
     // The stored name, not the UI's: the DB has `wind_u_10m`, not `wind`. Both
     // components share a cadence, so either answers for the pair.
+    // Nothing until the run is known. The api layer's `whenRunReady()` already
+    // makes the *request* correct without this, but not the *number* of them:
+    // without the guard this effect fires once at mount with `selectedRun`
+    // still null and again when it arrives, both resolving to the same run, so
+    // the same query ran twice for one answer. The sibling effects in this file
+    // all guard the same way.
+    if (!selectedRun) return;
     const stored = selectedVariable === 'wind' ? 'wind_u_10m' : selectedVariable;
     let alive = true;
     setRunHours(null);

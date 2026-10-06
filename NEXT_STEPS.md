@@ -4112,6 +4112,18 @@ The lesson is narrower than "check the network log". It is: **when a file has a
 gating helper that every sibling function calls, a new function that does not
 call it is the bug**, and that is visible without running anything.
 
+**A third look at the same log found the effect firing three times per load**,
+all resolving to the same run and returning the same answer. The api-layer gate
+made each *request* correct but not the *number* of them: the effect ran once at
+mount with `selectedRun` still null and again when it arrived. One guard —
+`if (!selectedRun) return;`, which the three sibling effects in `App.js` already
+have — took it to one request per load.
+
+So the same file was read three times and gave up a defect each time: the
+missing gate, then the missing guard. Neither was visible on screen and all 250
+tests passed through both. The network panel is worth a second and third pass
+after a change, not just a first.
+
 Two things worth keeping from the build. A test written before the code caught a
 **500**: `_resolve_init_time` returns `None` for a model with no loaded run and
 the endpoint called `.isoformat()` on it. It now answers 404, which is
