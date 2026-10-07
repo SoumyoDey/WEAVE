@@ -101,6 +101,27 @@ def _clear_plot_cache():
 
 
 @pytest.fixture
+def db_cursor(db_client):
+    """A real `RealDictCursor` on the fixture database.
+
+    For the helpers below the endpoints — `_ensemble_size` and friends — which
+    take a cursor rather than a request, and whose defects are therefore
+    invisible to a test that goes through the client. Depends on `db_client` so
+    the pool is already pointed at the fixture.
+    """
+    import flask_api as api
+    from psycopg2.extras import RealDictCursor
+
+    conn = api.get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        yield cursor
+    finally:
+        cursor.close()
+        api.return_db_connection(conn)
+
+
+@pytest.fixture
 def db_client(fixture_pool, _clear_plot_cache, monkeypatch):
     """A Flask test client whose queries reach the fixture database."""
     import flask_api as api
@@ -193,7 +214,11 @@ def fake_db(monkeypatch):
         cur = RoutedCursor(routes)
         monkeypatch.setattr(api, "get_db_connection", lambda: _FakeConn(cur))
         monkeypatch.setattr(api, "return_db_connection", lambda conn: None)
-        # Member counts hit a very large table; keep them out of these tests.
-        monkeypatch.setattr(api, "_ensemble_size", lambda cursor, model: 50)
+        # A member count is a registry lookup these routes do not describe, so
+        # it is stubbed rather than routed. `*a` because callers that know the
+        # variable and the run pass them (§50) and a stub that pins today's
+        # arity fails the next caller for a reason that has nothing to do with
+        # what it is testing.
+        monkeypatch.setattr(api, "_ensemble_size", lambda cursor, model, *a, **k: 50)
         return cur
     return _install

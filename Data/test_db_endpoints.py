@@ -1267,3 +1267,89 @@ class TestFbiIsInBothSurfaces:
         a, c = self._both(db_client)
         assert 'composite_confidence' in a, 'still expected in Analysis'
         assert 'composite_confidence' not in c['summaries']['AIFS']
+
+
+class TestTheMemberCountComesFromTheRegistry:
+    """**The single largest cost in the app, until 2026-10-07** (§50).
+
+    `_ensemble_size` used to COUNT(DISTINCT ensemble_member) over
+    `forecast_data` — 240M rows — at each run's first lead time. The correlated
+    `(SELECT MIN(forecast_hour) ... WHERE run_id = fr.run_id)` could not use an
+    index, so every call sequentially scanned the whole table once per run of
+    that model: **74 s for AIFS, 172 of the 179 s a three-model region request
+    spent**. `forecast_run_registry` records the count at load time.
+
+    These tests pin the source rather than the duration, because a timing
+    assertion on a shared database is a flake. The source is the thing that
+    made it slow.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_cache(self):
+        import flask_api as api
+        api._ENSEMBLE_SIZE_CACHE.clear()
+        yield
+        api._ENSEMBLE_SIZE_CACHE.clear()
+
+    def _recording_cursor(self, db_cursor):
+        """A cursor that answers normally and remembers the SQL it was given."""
+        seen = []
+
+        class Recorder:
+            def execute(self, sql, params=None):
+                seen.append(' '.join(sql.split()))
+                return db_cursor.execute(sql, params)
+
+            def fetchone(self):
+                return db_cursor.fetchone()
+
+        return Recorder(), seen
+
+    def test_it_reads_the_registry_and_not_the_240m_row_table(self, db_cursor):
+        import flask_api as api
+        cur, seen = self._recording_cursor(db_cursor)
+        api._ensemble_size(cur, 'AIFS')
+        assert seen, 'no query issued at all'
+        assert any('forecast_run_registry' in s for s in seen)
+        assert not any('forecast_data' in s for s in seen), (
+            f'back on the big table: {seen}')
+
+    def test_the_value_is_the_one_the_registry_recorded(self, db_cursor):
+        import flask_api as api
+        for model in fx.MODELS:
+            db_cursor.execute("""
+                SELECT n_members FROM forecast_run_registry
+                WHERE model_name = %s ORDER BY init_time DESC LIMIT 1
+            """, (model,))
+            expected = db_cursor.fetchone()['n_members']
+            assert api._ensemble_size(db_cursor, model) == expected
+
+    def test_the_uis_wind_resolves_to_a_stored_variable(self, db_cursor):
+        """`wind` is not a row in the registry — the two components are. Asking
+        for it must not fall through to None and silently drop the SSR bias
+        correction, which is the shape of a defect this project has already
+        hit twice."""
+        import flask_api as api
+        assert api._ensemble_size(db_cursor, 'AIFS', 'wind') == \
+            api._ensemble_size(db_cursor, 'AIFS', 'wind_u_10m')
+        assert api._ensemble_size(db_cursor, 'AIFS', 'wind') is not None
+
+    def test_a_run_the_registry_does_not_describe_falls_back_to_the_model(self, db_cursor):
+        """The count is a property of the run, and an unregistered run is not a
+        reason to lose the correction — nor to go back to the table scan."""
+        import flask_api as api
+        cur, seen = self._recording_cursor(db_cursor)
+        n = api._ensemble_size(cur, 'AIFS', 'precipitation', '1999-01-01 00:00:00')
+        assert n == api._ensemble_size(db_cursor, 'AIFS')
+        assert not any('forecast_data' in s for s in seen)
+
+    def test_the_cache_is_keyed_by_run_not_by_model(self, db_cursor):
+        """A later run can carry a different ensemble size. Keying the cache on
+        the model alone would serve the first run's count for the life of the
+        process."""
+        import flask_api as api
+        api._ensemble_size(db_cursor, 'AIFS', 'precipitation', fx.INIT_TIME)
+        keys = list(api._ENSEMBLE_SIZE_CACHE)
+        assert keys, 'nothing cached'
+        assert all(isinstance(k, tuple) and len(k) == 3 for k in keys), keys
+        assert any(k[2] is not None for k in keys)

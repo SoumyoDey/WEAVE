@@ -4863,6 +4863,89 @@ doing against the system rather than against the other documents.
 
 ---
 
+## 50. The 217-second region request was one `COUNT(DISTINCT)` — 2026-10-07
+
+Noticed while verifying §49 in the browser: a three-model region comparison
+took **217 s**, long enough that a reviewer would assume the tab had hung.
+
+**Profiling first, and the answer was not where anyone would have looked.**
+Timing every stage of the request, per model:
+
+| stage | AIFS | GEFS | UKMO |
+|---|---|---|---|
+| **`_ensemble_size`** | **74.0 s** | **23.8 s** | **74.3 s** |
+| member grid (`_member_pairs_by_cell`) | 0.78 s | 0.94 s | 1.48 s |
+| aggregate pairs | 0.74 s | 0.95 s | 0.53 s |
+| correlation points | 0.37 s | 0.30 s | 0.46 s |
+| pooled metrics, incl. FSS | 0.16 s | 0.16 s | 0.14 s |
+| every per-cell metric fn | ≤0.11 s each | | |
+
+**172 of 179 s was the member count** — a number this database writes down at
+load time. Everything that looks expensive, the 42M-row member grid included,
+was under 1.5 s.
+
+### Why one count cost 74 seconds
+
+```sql
+SELECT COUNT(DISTINCT fd.ensemble_member) FROM forecast_data fd
+JOIN forecast_runs fr ON fr.run_id = fd.run_id
+JOIN models mo ON mo.model_id = fr.model_id AND mo.model_name = %s
+WHERE fd.ensemble_member IS NOT NULL
+  AND fd.forecast_hour = (SELECT MIN(forecast_hour)
+                          FROM forecast_data WHERE run_id = fr.run_id)
+```
+
+The planner cannot use an index for that correlated subquery, so it
+**sequentially scans all 240M rows of `forecast_data` once per run of the
+model** — `EXPLAIN (ANALYZE)` shows three scans, 9.15M buffers and 25.3 s each,
+195M rows discarded per scan to find one minimum. AIFS has three runs, so AIFS
+pays three.
+
+Replaced with one row of `forecast_run_registry`, which records `n_members` at
+load time: **74 s → 11 ms**, and per run rather than per model, which is what
+the SSR bias correction actually wants. The registry's counts were checked
+against the old query's before switching — AIFS 50 at all three runs, GEFS 30,
+UKMO 18, computed the slow way one last time (5 m 33 s) to have something to
+compare against.
+
+**End to end: 217 s → 7.3 s cold through the UI, ~1 s cached, with every
+returned value byte-identical** — verified by running the same request against
+the pre-change code in a parallel checkout and diffing all twelve metrics for
+all three models, `ssr_agg` included, since it is the only one that reads the
+member count.
+
+### Why it hid for months, which is the part worth keeping
+
+**The process cache made it a once-per-model charge that nothing timed.**
+`_ENSEMBLE_SIZE_CACHE` meant the first request after a restart paid 172 s and
+every later one paid nothing — so an interactive session felt slow once and
+fine afterwards, and whoever was testing had already warmed it. In production
+each gunicorn worker pays it separately, on whichever unlucky request lands
+there first.
+
+**The comment above it said "2-6 s".** That was plausibly true when written,
+against a smaller table. Nobody re-measured it, because a comment is not a
+measurement and nothing here fails when one rots — the same failure as §48's
+"nothing joins across variables" and §40's four stale entries, in a performance
+register rather than a correctness one.
+
+**And the guard test asserted nothing.** `test_an_unreadable_member_count_falls_
+back_rather_than_raising` ended `assert api._ensemble_size(Angry(), "AIFS") in
+(None, 0) or True` — the `or True` makes it pass for any return value at all,
+and its docstring described "a 9.7M-row table" that had grown 25-fold. Both
+corrected.
+
+**The transferable rule: profile before optimising, including when the slow
+thing is obvious.** The member grid is 42M rows, three queries per request, and
+is the thing this file's notes keep warning about; it was 3 of 179 s. A count
+of fifty members was 172.
+
+Five tests now pin the source rather than the duration — a timing assertion on
+a shared database is a flake, and the source is what made it slow. The sharpest
+one records every statement and fails if `forecast_data` appears.
+
+---
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in

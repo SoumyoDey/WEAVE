@@ -71,16 +71,23 @@ class TestConnectionSetup:
         assert got.autocommit is True
 
     def test_an_unreadable_member_count_falls_back_rather_than_raising(self, monkeypatch):
-        """_ensemble_size is a COUNT(DISTINCT) over a 9.7M-row table. If it
-        fails, the spread inflation loses its correction — worth a log line, not
-        worth a failed request."""
+        """_ensemble_size reads one row of `forecast_run_registry`. If that
+        fails, the spread inflation loses its correction — worth a log line,
+        not worth a failed request.
+
+        The docstring used to say "a COUNT(DISTINCT) over a 9.7M-row table",
+        which was the old implementation and the wrong size for it by 2026-10
+        (240M rows, and 74 s a call — §50). And the assertion ended `or True`,
+        so it held whatever `_ensemble_size` returned, including a raise turned
+        into a pass by the `in` clause never being reached. Both fixed.
+        """
         class Angry:
             def execute(self, *a, **k):
                 raise Exception("statement timeout")
             def fetchone(self, *a, **k):
                 return None
-        api._ENSEMBLE_SIZE_CACHE.clear() if hasattr(api, "_ENSEMBLE_SIZE_CACHE") else None
-        assert api._ensemble_size(Angry(), "AIFS") in (None, 0) or True
+        api._ENSEMBLE_SIZE_CACHE.clear()
+        assert api._ensemble_size(Angry(), "AIFS") is None
 
 
 class TestRowsWithNothingInThem:

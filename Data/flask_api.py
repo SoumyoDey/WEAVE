@@ -684,29 +684,65 @@ def _parse_latlon(src, lat_default=None, lon_default=None):
 
 
 
-# Member counts are a COUNT(DISTINCT) over a very large table (2-6 s), but they
-# are fixed for a run, so resolve once per process.
+# A member count is fixed for a run, so it is cached per process. The key is the
+# run, not the model: a later run can be loaded with a different ensemble size,
+# and keying on the model alone would serve the first one forever.
 _ENSEMBLE_SIZE_CACHE = {}
 
+# The UI's `wind` is not a stored variable — the registry records the two
+# components. Either answers "how many members", so the first is enough.
+_REGISTRY_VARIABLE = {'wind': 'wind_u_10m'}
 
-def _ensemble_size(cursor, model_name):
-    """Number of ensemble members in a model's latest run, or None if unknown."""
-    if model_name in _ENSEMBLE_SIZE_CACHE:
-        return _ENSEMBLE_SIZE_CACHE[model_name]
+
+def _ensemble_size(cursor, model_name, variable=None, init_time=None):
+    """Number of ensemble members in a run, or None if unknown.
+
+    Reads `forecast_run_registry`, which records the count at load time. With no
+    `init_time` it answers for the newest run of that model, which is what the
+    two callers that cannot name one want.
+
+    **This was 74 seconds and is now 11 milliseconds** (NEXT_STEPS.md §50). It
+    used to COUNT(DISTINCT ensemble_member) over `forecast_data` — 240M rows,
+    73 GB — at each run's first lead time, and the comment above it claimed
+    "2-6 s". The planner could not use an index for the correlated
+    `(SELECT MIN(forecast_hour) ... WHERE run_id = fr.run_id)`, so every call
+    **sequentially scanned the whole table once per run of that model**: three
+    scans, 9.15M buffers each, 25 s each. It was the single largest cost in the
+    app — 172 of the 179 s a three-model region request spent — and it was
+    invisible in development because the process cache made it a once-per-model
+    charge that the first request paid and nobody timed.
+
+    Values verified equal to the old query's on 2026-10-07, per run rather than
+    per model: AIFS 50 at all three runs, GEFS 30, UKMO 18.
+    """
+    reg_var = _REGISTRY_VARIABLE.get(variable, variable)
+    key = (model_name, reg_var, init_time)
+    if key in _ENSEMBLE_SIZE_CACHE:
+        return _ENSEMBLE_SIZE_CACHE[key]
     n = None
     try:
-        cursor.execute("""
-            SELECT COUNT(DISTINCT fd.ensemble_member) AS n
-            FROM forecast_data fd
-            JOIN forecast_runs fr ON fr.run_id = fd.run_id
-            JOIN models mo ON mo.model_id = fr.model_id AND mo.model_name = %s
-            WHERE fd.ensemble_member IS NOT NULL
-              AND fd.forecast_hour = (SELECT MIN(forecast_hour)
-                                      FROM forecast_data WHERE run_id = fr.run_id)
-        """, (model_name,))
+        where  = ['model_name = %s', 'n_members IS NOT NULL']
+        params = [model_name]
+        if reg_var is not None:
+            where.append('variable_name = %s')
+            params.append(reg_var)
+        if init_time is not None:
+            where.append('init_time = %s')
+            params.append(init_time)
+        cursor.execute(f"""
+            SELECT n_members FROM forecast_run_registry
+            WHERE {' AND '.join(where)}
+            ORDER BY init_time DESC
+            LIMIT 1
+        """, tuple(params))
         row = cursor.fetchone()
         if row:
-            n = int(row['n'] if isinstance(row, dict) else row[0])
+            n = int(row['n_members'] if isinstance(row, dict) else row[0])
+        elif reg_var is not None or init_time is not None:
+            # A run the registry does not describe for this variable. The count
+            # is a property of the run, so fall back to the model's newest
+            # registered run rather than to the table scan below.
+            return _ensemble_size(cursor, model_name)
     except RunSelectionError:
         # A 400 about the request, not a server fault: let the
         # errorhandler answer instead of reporting 500.
@@ -714,7 +750,7 @@ def _ensemble_size(cursor, model_name):
     except Exception as e:
         log.warning(f"⚠️  ensemble size lookup failed for {model_name}: {e}")
     n = n if (n and n > 1) else None
-    _ENSEMBLE_SIZE_CACHE[model_name] = n
+    _ENSEMBLE_SIZE_CACHE[key] = n
     return n
 
 
@@ -1826,7 +1862,8 @@ def _compute_ssr_agg_points_rf(cursor, model_name, variable,
         pairs = _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
                                               min_lat, max_lat, min_lon, max_lon,
                                               hour_min, hour_max)
-    n_members = _ensemble_size(cursor, model_name) if cursor is not None else None
+    n_members = (_ensemble_size(cursor, model_name, variable, _kw.get('init_time'))
+                 if cursor is not None else None)
     points = []
     for (lat, lon), entries in pairs.items():
         # Only records whose spread is available can contribute to a spread ratio.
@@ -1851,6 +1888,9 @@ def _dispatch_ssr_agg(cursor, run_id, variable_id, init_time, args,
         cursor, model, variable, min_lat, max_lat, min_lon, max_lon, lo, hi,
         pairs=_member_pairs_by_cell(cursor, model, variable, init_time,
                                     min_lat, max_lat, min_lon, max_lon, lo, hi),
+        # The SSR bias correction is a function of the ensemble size, so it must
+        # be this run's, not whichever run happens to be newest.
+        init_time=init_time,
     ), {}
 
 
@@ -5555,9 +5595,14 @@ def compare_region_metrics():
     conn   = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
-        # The most expensive endpoint in the app: 12.4 s for three models and two
-        # metrics over the full domain, and the Comparison tab requests it on
-        # every parameter change. Deterministic, so cacheable.
+        # The most expensive endpoint in the app, and the Comparison tab
+        # requests it on every parameter change. Deterministic, so cacheable.
+        #
+        # Measured 2026-10-07, three models and all twelve metrics over a 2.5°
+        # box, 0–168 h: **7.3 s cold, ~1 s cached**. It was **217 s** until the
+        # member-count lookup stopped scanning `forecast_data` (§50) — so the
+        # 12.4 s this comment used to quote, for three models and *two*
+        # metrics, was measured before the table grew to 240M rows.
         _key = _body_cache_key('cmp-region', cursor, body, (
             'models', 'variable', 'metrics', 'min_lat', 'max_lat',
             'min_lon', 'max_lon', 'hour_min', 'hour_max', 'fss_window',
@@ -5591,7 +5636,8 @@ def compare_region_metrics():
             # and fixing only the per-cell path would have left the number the
             # user actually reads still empty for an hourly model.
             values = _region_pooled_metrics(pairs, metrics, threshold_rate,
-                                            _ensemble_size(cursor, m),
+                                            _ensemble_size(cursor, m, variable,
+                                                           _resolve_init_time(cursor, m)),
                                             fss_window=fss_window,
                                             spread_pairs=spread_pairs)
             cell_means = {k: _region_mean(v) for k, v in points_by_metric.items()}
