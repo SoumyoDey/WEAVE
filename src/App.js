@@ -42,6 +42,31 @@ import { t } from './theme';
 
 const TAB_BAR_H = 48;
 
+// Which pieces of the header badge each tab is entitled to show: a control
+// belongs there only if the tab in front of you actually reads it.
+//
+// **The cyclone tab reads none of them** and that was the visible defect. It
+// has its own storm / centre / initialisation controls, drawn from
+// `cyclone_run_registry` and spanning 2016-2024, while the header went on
+// offering the forecast run — so the screen showed two "initialised" controls
+// seven years apart, one of which did nothing. It also announced a model, a
+// variable and a lead time to a tab that has no precipitation, no wind field
+// and no scrubber.
+//
+// The others each drop the parts they override:
+//   - Analysis scores the selected model and variable at a clicked point, but
+//     its panels run over lead *ranges* of their own. No single `+Nh`.
+//   - Comparison takes the variable and run globally and then chooses its own
+//     models (up to three at once) and its own lead range, so a header reading
+//     "AIFS · +6h" contradicts the tab's own controls rather than summarising
+//     them. `defaultHour` only seeds the spatial-map hour and then drifts.
+const TAB_CONTEXT = {
+  visualization: { run: true,  model: true,  variable: true,  hour: true  },
+  analysis:      { run: true,  model: true,  variable: true,  hour: false },
+  comparison:    { run: true,  model: false, variable: true,  hour: false },
+  cyclones:      { run: false, model: false, variable: false, hour: false },
+};
+
 function App() {
   // Which forecast run everything below is about. `runEpoch` is what the data
   // effects depend on: it changes on every switch, including a switch back to
@@ -56,6 +81,9 @@ function App() {
   const [showTour, setShowTour]                 = useState(() => { try { return !localStorage.getItem('weave_onboarded'); } catch { return false; } });
   const closeTour = () => { try { localStorage.setItem('weave_onboarded', '1'); } catch { /* ignore */ } setShowTour(false); };
   const [isNarrow, setIsNarrow]                 = useState(() => typeof window !== 'undefined' && window.innerWidth < 760);
+  // What the header badge may say here. Derived during render rather than
+  // stored: it is a function of the open tab and nothing else.
+  const badge = TAB_CONTEXT[activeTab] ?? TAB_CONTEXT.visualization;
 
   // ── Forecast controls state ──────────────────────────────────────────────────
   const [selectedModel, setSelectedModel]       = useState('AIFS');
@@ -844,7 +872,9 @@ function App() {
             <Icon size={15} />{!isNarrow && label}
           </button>
         ))}
-        {/* Persistent context: what you're currently looking at.
+        {/* Persistent context: what you're currently looking at — and only the
+            parts the tab in front of you is actually reading (`TAB_CONTEXT`).
+
             The run leads it, because it qualifies everything after it: the model
             and lead time are only meaningful relative to an initialisation.
 
@@ -855,10 +885,16 @@ function App() {
             forecast* while keeping the pieces it qualifies is the wrong trade,
             so the model, variable and lead time collapse instead: those are
             all reachable from Controls and the timeline, and the run is not. */}
-        <span style={{ marginLeft: 'auto', marginRight: '16px', display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 12px', borderRadius: '20px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.75)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }}>
-          <RunSelector compact />
-          {!isNarrow && ` · ${currentModel.name} · ${selectedVariable === 'wind' ? 'Wind' : 'Precipitation'} · +${selectedHour}h`}
-        </span>
+        {(badge.run || (!isNarrow && (badge.model || badge.variable || badge.hour))) && (
+          <span style={{ marginLeft: 'auto', marginRight: '16px', display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 12px', borderRadius: '20px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.75)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }}>
+            {badge.run && <RunSelector compact />}
+            {!isNarrow && [
+              badge.model    && currentModel.name,
+              badge.variable && (selectedVariable === 'wind' ? 'Wind' : 'Precipitation'),
+              badge.hour     && `+${selectedHour}h`,
+            ].filter(Boolean).map(part => ` · ${part}`).join('')}
+          </span>
+        )}
       </div>
 
       {/* ══ VISUALIZATION TAB ══ */}

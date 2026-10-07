@@ -5119,6 +5119,63 @@ a real one rather than a free upgrade.
 
 ---
 
+## 53. The header offered a forecast run to a tab that has no forecast — 2026-10-07
+
+Reported from the screen: the run selector was *"active on all tabs even where
+it has no meaning"*. It was, and the cyclone tab is where it bit.
+
+**Two "initialised" controls, seven years apart, one of them inert.** The
+header read `16 Sep 2025 · 00Z · AIFS · Precipitation · +6h` while the tab's
+own control beneath it read `INITIALISED 2018-11-09 00:00 · 51/51 members` for
+storm ALCIDE from ECMWF ENS. The cyclone tab reads neither the forecast run nor
+the model, variable or lead time — it has its own storm / centre /
+initialisation, drawn from `cyclone_run_registry` and spanning 2016–2024 — so
+every part of that badge was describing something else on screen.
+
+### The rule, which is now written down
+
+`TAB_CONTEXT` in `App.js`, one row per tab, derived during render:
+
+| tab | run | model | variable | lead time |
+|---|---|---|---|---|
+| Visualization | ✓ | ✓ | ✓ | ✓ |
+| Analysis | ✓ | ✓ | ✓ | **—** |
+| Comparison | ✓ | **—** | ✓ | **—** |
+| Cyclones | **—** | **—** | **—** | **—** |
+
+Each omission is a thing the tab overrides rather than reads:
+
+- **Analysis** scores the selected model and variable at a clicked point, but
+  its panels run over lead *ranges* of their own and it has no scrubber, so a
+  single `+6h` described nothing on the page.
+- **Comparison** takes the run and variable globally and then chooses its own
+  models — up to three at once — and its own lead range. A header reading
+  `AIFS · +6h` beside `✓AIFS ✓GEFS ✓UKMO, 0–168h` contradicts the tab's own
+  controls rather than summarising them. `defaultHour` only seeds the
+  spatial-map hour and drifts from there.
+- **Cyclones** reads none of it.
+
+The badge disappears entirely where nothing survives, rather than leaving an
+empty pill. The narrow-screen rule is unchanged and still right: below 760px
+the run survives and the rest collapses, because the run is the one piece not
+reachable from Controls or the timeline.
+
+### What the defect looked like, and why no test saw it
+
+**A control that is present and inert looks exactly like a control that works
+until you touch it.** Nothing failed, nothing 400ed, and the suite had no
+opinion — the tests covered what the badge *says*, never where it is allowed to
+appear. The five new tests in `src/App.tabContext.test.js` are about absence as
+much as presence, and four of the five fail against the previous `App.js`.
+
+Extracted the Leaflet stub to `src/testing/leafletStub.js` on the way through:
+the new file needed it, and a real Leaflet in jsdom throws "Map container not
+found" **asynchronously, attributed to whichever test is running** — a failure
+that moves when you add a test. `App.requests.test.js` had it inline with the
+explanation; both now share it.
+
+---
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in
