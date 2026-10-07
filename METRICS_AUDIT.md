@@ -1113,12 +1113,17 @@ member grid rather than the native tables, snaps off-grid clicks, reports
 rather than erroring when a cell has no members. 156 backend + 22 frontend pass;
 `metrics.py` stays at 100%.
 
-### Still open
+### ~~Still open~~ — closed
 
-`regridded_forecast` is left in place, untouched, so the old and new numbers can
-be compared. Once you are satisfied, it can be dropped. The wind member grid was
-regridded the same way (u and v separately, combined as √(u²+v²) per member,
-since the combination is not linear and cannot be done before interpolating).
+`regridded_forecast` was left in place, untouched, so the old and new numbers
+could be compared, with "once you are satisfied, it can be dropped" as the exit.
+**It has been dropped** — `to_regclass('regridded_forecast')` returns NULL — and
+this section said otherwise until 2026-10-07, which is how it came to be listed
+as open in a sweep the day before (`NEXT_STEPS.md` §40).
+
+The wind member grid was regridded the same way (u and v separately, combined as
+√(u²+v²) per member, since the combination is not linear and cannot be done
+before interpolating).
 
 ---
 

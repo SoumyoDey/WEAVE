@@ -1,9 +1,15 @@
 # Consistency audit — results, all six phases
 
-**The audit is CLOSED.** All six phases ran, and all but two findings are fixed;
-the two that remain are decisions with no owner, marked **open** where they
-appear (the two tabs' categorical estimators, and `fbi`/`composite_confidence`
-being Analysis-only).
+**The audit is CLOSED, and so are its findings.** All six phases ran and
+everything they found is now fixed or decided.
+
+> **This header said "all but two findings are fixed; the two that remain are
+> decisions with no owner" until 2026-10-07.** Both were decided on 2026-10-06
+> — the two tabs' categorical estimators in `NEXT_STEPS.md` §41, and
+> `fbi`/`composite_confidence` in §43 — and this sentence outlived them by a
+> day. It is the second time this header has described a state that had already
+> ended; see the note below it. The decisions are recorded in 1d and under
+> [Two things phase 6 found that are not text bugs](#two-things-phase-6-found-that-are-not-text-bugs).
 
 Phases 1–4 run 2026-08-19, phase 5 (typography) 2026-08-20, phase 6 (text
 correctness) 2026-08-20. Phases 5 and 6 are further down this file under `#`
@@ -52,8 +58,16 @@ field exists, not just a number.
 | `csi` / `pod` / `far` | ✓ | ✓ map | ✓ | ✓ |
 | `brier` | ✓ as `brier_score` | ✓ map + `brier_score` | ✓ | ✓ |
 | `fss` | ✓ (needs `box_cells` > 1) | ✓ number, no map | ✓ | ✓ number, no map |
-| `fbi` | ✓ | ✓ | **—** | **—** |
-| `composite_confidence` | ✓ | ✓ | **—** | **—** |
+| `fbi` | ✓ | ✓ | ✓ | ✓ number, no map |
+| `composite_confidence` | ✓ | ✓ | **—** | **—** (deliberate, 1d) |
+
+The `fbi` row read `— | —` until 2026-10-07, a day after 1d added it to
+Comparison. Correcting it is what found that the Comparison **region** half had
+never landed: the tab listed FBI in its region metric group while
+`_region_pooled_metrics` did not compute it, so the bar was drawn empty and
+`metrics: ['fbi']` was a 400. Fixed the same day — `NEXT_STEPS.md` §49. The row
+above is now what the endpoints return, re-checked against them rather than
+against this table.
 
 ### 1a. Analysis point has no accuracy metrics — **accidental · FIXED**
 
@@ -140,6 +154,13 @@ each of the two paths. It also earns its place on that tab specifically: CSI
 says how wrong a model is and FBI says which *direction*, and two models with
 identical CSI can be over- and under-forecasting with nothing else there showing
 it. It takes `refLine: 1` rather than `bounded`, since it is not in [0, 1].
+
+**"One line in each of the two paths" was two of three.** The Comparison tab has
+a point surface and a region surface, and only the point one got it; the region
+group listed FBI and `_region_pooled_metrics` never computed it. Completed
+2026-10-07 (`NEXT_STEPS.md` §49), with the region value pooled from the same
+counts as its neighbours and no per-cell map, since at one cell the ratio is
+only ever 0, 1 or undefined.
 
 Composite Confidence stays Analysis-only, now by decision rather than by
 accident. Its weights (0.40 CSI + 0.30 FSS + 0.20 POD + 0.10(1−FAR)) have never
@@ -508,10 +529,12 @@ longitudes did not (defect 6). **Fixed** to state both.
 
 ## Two things phase 6 found that are not text bugs
 
-Recorded rather than edited, because both need a decision and one needs a
-meteorologist.
+Recorded rather than edited, because both needed a decision and one needed a
+meteorologist. **Both were decided on 2026-10-06**; the headings below say
+which way, and the entries are kept whole because the argument is the useful
+part.
 
-### The point categorical metrics use different estimators in the two tabs — **open**
+### ~~The point categorical metrics use different estimators in the two tabs~~ — **DECIDED 2026-10-06**
 
 Analysis pools CSI/POD/FAR over the **clicked cell alone**; `box_cells` only
 feeds FSS, and the control says so. Comparison pools the same metrics over the

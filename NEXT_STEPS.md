@@ -4778,6 +4778,91 @@ understood.
 
 ---
 
+## 49. Five stale markers, and the defect one of them was hiding — 2026-10-07
+
+A sweep of every document's open items, run under §44's rule that an item here
+is more likely stale than open. The rule held: **five markers were stale against
+two-and-a-bit genuinely open items.** Four were corrections. The fifth was not.
+
+### The one that was hiding something
+
+`CONSISTENCY_AUDIT.md`'s phase-1 availability matrix still showed `fbi` as
+absent from both Comparison columns, a day after §43 added it. Correcting a row
+means checking what the endpoints return, and they returned this:
+
+```
+POST /api/compare/region-metrics  {"metrics": ["csi", "fbi"]}
+  -> 400  Unknown metric(s): ['fbi'].
+          Available: [... 'csi', 'pod', 'far', 'brier', 'fss']
+```
+
+**§43 landed two thirds of its own decision.** FBI went into
+`_categorical_summary` (the point surface) and into the Comparison tab's region
+metric group in `ComparisonTab.jsx` — and into `_region_pooled_metrics`, which
+computes the region surface, not at all. The tab drew an FBI bar for every
+selected model with nothing in it.
+
+**Nothing failed, which is why it survived.** The renderer reads
+`regionData.models?.[m]?.[key] ?? null`, so a metric the backend never sends is
+indistinguishable from a model that has no data for it — the same empty bar. The
+400 was never reached from the UI either, because `handleRunRegion` sends no
+`metrics` key and the endpoint defaults to its own list. Four tests covered FBI
+on the point surface and none on the region one.
+
+**And a sixth stale string, found only by opening the tab.** The region
+threshold control read *"CSI · POD · FAR · Brier · FSS only"* — the list of
+metrics the threshold governs, which FBI joined on 2026-10-06 and the caption
+did not. No test reads it; §43's own caption fix had corrected the *point*
+mode's copy two panels away. Checking the fix in the browser is what surfaced
+it, which is the argument for doing that rather than trusting a green suite.
+
+Fixed the same day. `_region_pooled_metrics` already had both counts for
+CSI/POD/FAR, so the value is one line and is pooled over the same sample as its
+neighbours — `fcst_yes / obs_yes`, measured at **1.0537** over 117 cells for
+AIFS on the 09-16 run. `COMPARE_REGION_NO_CELL_VALUE` gains `fbi` beside `fss`
+and the UI entry gains `noMap`: **at one cell both counts are 0 or 1, so a
+per-cell FBI is only ever 0, 1 or undefined**, and a map of it would be three
+colours that look like a measurement. Three tests now pin the region surface,
+including the identity `FBI == POD / (1 − FAR)`, which breaks if FBI is ever
+computed from a different sample than the two metrics beside it.
+
+### The other four
+
+| marker | said | is |
+|---|---|---|
+| `CONSISTENCY_AUDIT.md` header | "all but two findings are fixed" | both decided 2026-10-06 (§41, §43) |
+| …its phase-6 heading | "— **open**" | its own body below says **DECIDED** |
+| `METRICS_AUDIT.md` §13 | "`regridded_forecast` is left in place" | dropped; `to_regclass` → NULL |
+| `SYSTEM_DESIGN_PLAN.md` S4 | the same bullet twice, "Still open" and "NOT DONE" | merged; both copies also carried `AnalysisTab.jsx` at 1,264 lines, now **1,360** |
+
+The duplicate is the instructive one. Two copies of an item get re-read and
+neither gets updated, so a number that was accurate once outlives two rounds of
+edits to the file it counts.
+
+### What is actually open, verified against the data
+
+1. **Every GEFS comparison rests on n=1** — and this is broader than §39 and §40
+   say. The registry holds GEFS for exactly one initialisation, `2025-09-16 00Z`,
+   for **all three variables**, so the precipitation comparison is n=1 too, not
+   just wind. AIFS and UKMO have three runs each.
+2. **The domain is hardcoded and the cyclone archive is global.** S4's "extent"
+   item and `TC_TAB_DESIGN.md` decision 6 are the same item: the grid is
+   25–45 N, 85–65 W, while the loaded tracks span −180…180 and **only 1,074 of
+   15,185 storms ever enter the box**. It binds only if tracks are ever scored
+   against gridded fields; the cyclone tab is track-only and unaffected.
+3. Known and deliberately not acted on: the UKMO coordinate spelling (§48),
+   S4's deferred refactors, and the four questions for a person at the end of
+   `TC_DATA_ACCESS.md`.
+
+**The method point, which is the same one §47 and §48 made and is now three for
+three.** Each of these was one query or one request away from being checked, and
+each had been sitting unchecked underneath a sentence that read like a
+conclusion. The sweep that finds a stale marker is also the sweep that finds the
+code the marker was describing wrongly — so correcting documentation is worth
+doing against the system rather than against the other documents.
+
+---
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in

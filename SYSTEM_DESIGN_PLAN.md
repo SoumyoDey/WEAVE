@@ -377,16 +377,23 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
   existed, passed its tests, and was never called. That is recorded in §35
   rather than quietly corrected, because a well-tested component wired to
   nothing is a failure mode this project has now hit three times.
-- **Still open:** config-driving the hardcoded
-  extent / candidate hours / obs sources / base date, and the deferred refactors
-  (`@with_db_cursor`, `_render_map()`, shared chart primitives, decomposing the
-  two large tab components — `AnalysisTab.jsx` is still 1,264 lines).
-- **NOT DONE** — config-driving the hardcoded extent / candidate hours / obs
+- **Still open** — config-driving the hardcoded extent / candidate hours / obs
   sources / base date, and the deferred refactors (`@with_db_cursor`,
   `_render_map()`, shared chart primitives, decomposing the two large tab
-  components — `AnalysisTab.jsx` is still 1,264 lines).
-- **Exit:** not reached. Adding a model/variable/metric is still a two-place
-  change.
+  components). Re-measured 2026-10-07: the domain is written out as
+  `TARGET_LAT_RANGE`/`TARGET_LON_RANGE` in `Data/regrid_members.py` and again as
+  bbox defaults in two `flask_api.py` handlers; `AnalysisTab.jsx` is **1,360**
+  lines and `ComparisonTab.jsx` **2,372**, both larger than when this was
+  written.
+
+  > This bullet appeared twice, once as "Still open" and once as "NOT DONE",
+  > with the same four items and the same stale line count in both. Merged
+  > 2026-10-07. A duplicated open item is worse than it looks: both copies get
+  > re-read and neither gets updated, which is how the 1,264 survived two
+  > rounds of edits to the components it counts.
+- **Exit:** not reached. Adding a *metric* is now a single-place change (§35),
+  but a model or variable is still two — `constants.js` `MODELS` carries each
+  model's member count and lead hours beside the backend's own registry.
 
 ### S5 — Frontend platform & resilience — ~3–4 days, low–med risk
 - ~~Vite migration (CRA is EOL)~~ **dropped 2026-09-21** — see `NEXT_STEPS.md`
