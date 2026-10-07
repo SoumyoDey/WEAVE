@@ -4946,6 +4946,83 @@ one records every statement and fails if `forecast_data` appears.
 
 ---
 
+## 51. Every endpoint, timed — and `ABS()` cost another 54 seconds — 2026-10-07
+
+§50 fixed one 217-second request by profiling it. This is the same method
+applied to **all 26 routes**, cold, against the live database, with the
+response cache cleared before each — the numbers a reviewer's first click pays.
+
+### What is slow
+
+| endpoint | cold | note |
+|---|---|---|
+| `/api/point-timeseries` | **57.5 s** | **fixed below → 4.1 s** (wind 117 s → 12.7 s) |
+| `/api/spatial-metric` `brier` | 55.8 s | the four member-grid metrics, full domain |
+| … `crps` | 53.2 s | |
+| … `ssr_agg` | 51.3 s | |
+| … `correlation` | 33.4 s | |
+| `/api/compare/spatial-diff` | 12.5 s | two full-domain metrics, so 2 × 6.3 s |
+| `/api/spatial-metric` `csi`/`pod`/`far` | 7.1–7.3 s | |
+| … `mae`/`bias`/`rmse` | 6.3–6.6 s | |
+| `/api/compare/region-metrics` | 6.1 s | was 217 s before §50 |
+| `/api/compare/categorical`, `skill`, `spatial-agreement` | 1.4–2.5 s | |
+| everything else | **≤ 0.6 s** | including all four cyclone endpoints at ≤ 70 ms |
+
+**The cyclone tab is the fastest surface in the app** — 20 ms to 70 ms — which
+is worth knowing before anyone optimises it.
+
+### `ABS()` on a column turns off every index
+
+The cone of uncertainty bounded its cell this way:
+
+```sql
+AND ABS(fd.latitude  - %s) <= %s
+AND ABS(fd.longitude - %s) <= %s
+```
+
+Wrapping the column in a function makes the predicate **non-sargable**: nothing
+can be matched against `ABS(latitude)`, so the planner chose a parallel
+sequential scan of all **240M rows** of `forecast_data` — 3.05M buffers, 79.9M
+rows discarded per worker — to return the 75k rows around one point. 63.5 s.
+
+`BETWEEN lat - radius AND lat + radius` is the identical set of rows and an
+index condition, served by `uq_forecast_data_natural_key`: **3.2 s**. The
+endpoint goes **57.9 s → 4.1 s**, and wind **117.2 s → 12.7 s**, since wind
+runs the query twice for u and v. Payloads byte-identical, checked against the
+pre-change code for both variables.
+
+**This is §50's defect in a different disguise** — a predicate the planner
+cannot use an index for, hidden behind arithmetic that reads perfectly
+naturally. Two of them, found within an hour of each other, in a codebase whose
+slow paths had never been timed end to end. The tests added here pin the
+*shape* of the query, because in both cases the answer was always right.
+
+### The four member-grid metrics: a volume problem, not a plan problem
+
+`crps`, `brier`, `ssr_agg` and `correlation` read `regridded_forecast_member`
+through `_member_cases_by_cell`, and over the full domain that is
+**2,353,400 member rows** for one model: ~29 s to fetch and ~28 s of Python to
+de-accumulate each member, re-bin it onto the common window and pool. The plan
+is already an index scan; there is no mis-planned predicate to fix.
+
+Two options, neither taken here because both are decisions rather than fixes:
+
+- **Make the fetch index-only.** The scan is heap-bound — the same query
+  without `value` is an *index-only* scan at **8.1 s for 5.04M rows** against
+  ~29 s for 2.35M with it. An index `… INCLUDE (ensemble_member, value)` would
+  buy roughly 20 s, at a cost of about 3 GB against the 250 GB retention review
+  (`DATA_EXPANSION_DESIGN.md` phase 5).
+- **Aggregate in SQL.** De-accumulate with a window function over
+  `(cell, member ORDER BY forecast_hour)` and pool the moments in the database,
+  turning 2.35M rows into ~47k. That removes both halves, and it rewrites the
+  numerically sensitive path §21 established — every value would need checking
+  against the current output before it could ship.
+
+The second is the real answer and should be measured against the first; a map
+nobody waits 53 s for is worth more than 3 GB.
+
+---
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in

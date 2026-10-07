@@ -2251,16 +2251,26 @@ def point_timeseries():
         # display side. The wind branch also reported a sample standard deviation
         # where precipitation reported the population one, and omitted n_members.
         def _member_rows(var_name):
+            # `BETWEEN`, not `ABS(fd.latitude - %s) <= %s`, which is the same
+            # set of rows and **63.5 s instead of 3.2 s** (NEXT_STEPS.md §51).
+            # Wrapping the column in a function makes the predicate
+            # non-sargable: no index can be matched against ABS(latitude), so
+            # the planner fell back to a parallel sequential scan of all 240M
+            # rows of `forecast_data` — 3.05M buffers, 79.9M rows discarded per
+            # worker — to return the 75k rows around one point. The bounds
+            # below are an index condition, and `uq_forecast_data_natural_key`
+            # serves them.
             cursor.execute("""
                 SELECT fd.forecast_hour, fd.ensemble_member,
                        fd.latitude, fd.longitude, fd.value
                 FROM forecast_data fd
                 WHERE fd.run_id = %s
                   AND fd.variable_id = (SELECT variable_id FROM variables WHERE variable_name = %s)
-                  AND ABS(fd.latitude  - %s) <= %s
-                  AND ABS(fd.longitude - %s) <= %s
+                  AND fd.latitude  BETWEEN %s AND %s
+                  AND fd.longitude BETWEEN %s AND %s
                   AND fd.ensemble_member IS NOT NULL
-            """, (run_id, var_name, lat, radius, lon, radius))
+            """, (run_id, var_name,
+                  lat - radius, lat + radius, lon - radius, lon + radius))
             return cursor.fetchall()
 
         def _member_key(row):

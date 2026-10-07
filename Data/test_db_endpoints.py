@@ -1269,6 +1269,50 @@ class TestFbiIsInBothSurfaces:
         assert 'composite_confidence' not in c['summaries']['AIFS']
 
 
+class TestThePointTimeseriesPredicateStaysIndexable:
+    """**57 s for one click, until 2026-10-07** (§51).
+
+    The cone-of-uncertainty query bounded its cell with
+    `ABS(fd.latitude - %s) <= %s`. Wrapping the column in a function makes the
+    predicate non-sargable — no index can be matched against `ABS(latitude)` —
+    so the planner fell back to a parallel sequential scan of all 240M rows of
+    `forecast_data`, discarding 79.9M rows per worker to return 75k. `BETWEEN`
+    is the same set of rows and an index condition: **63.5 s to 3.2 s in the
+    database, 57.9 s to 4.1 s for the endpoint, and 117 s to 12.7 s for wind,
+    which runs the query twice.** Payloads byte-identical.
+
+    The radius tests above pin the *answer*; this pins the shape of the query,
+    because the answer was never wrong.
+    """
+
+    def test_it_bounds_the_cell_without_wrapping_the_column(self, db_client, fake_db):
+        cur = fake_db({
+            'FROM forecast_runs': [{'run_id': 1,
+                                    'initialization_time': fx.INIT_TIME}],
+            'FROM variables': [{'variable_id': 1}],
+            'FROM forecast_data': []})
+        db_client.get('/api/point-timeseries?model=AIFS&variable=precipitation'
+                      '&lat=36.0&lon=-75.5&radius=0.5')
+        member_sql = [sql for sql, _p in cur.executed if 'FROM forecast_data' in sql]
+        assert member_sql, 'the member query never ran'
+        for sql in member_sql:
+            assert 'ABS(' not in sql.upper(), f'non-sargable predicate is back: {sql}'
+            assert 'latitude BETWEEN' in sql
+
+    def test_the_bounds_are_the_radius_the_caller_asked_for(self, db_client, fake_db):
+        """The rewrite moved the arithmetic from SQL into the parameters, so
+        the parameters are now the thing that can be wrong."""
+        cur = fake_db({
+            'FROM forecast_runs': [{'run_id': 1,
+                                    'initialization_time': fx.INIT_TIME}],
+            'FROM variables': [{'variable_id': 1}],
+            'FROM forecast_data': []})
+        db_client.get('/api/point-timeseries?model=AIFS&variable=precipitation'
+                      '&lat=36.0&lon=-75.5&radius=0.25')
+        params = [p for sql, p in cur.executed if 'FROM forecast_data' in sql][0]
+        assert params[2:6] == pytest.approx((35.75, 36.25, -75.75, -75.25))
+
+
 class TestTheMemberCountComesFromTheRegistry:
     """**The single largest cost in the app, until 2026-10-07** (§50).
 
