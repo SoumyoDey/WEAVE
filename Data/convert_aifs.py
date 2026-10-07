@@ -563,7 +563,19 @@ def main(argv=None):
     parser.add_argument('--verify', action='store_true',
                         help='compare against a run already in the database instead '
                              'of writing files')
-    parser.add_argument('--init-time', help='restrict --verify to one initialisation')
+    # **Two spellings, one flag.** `--verify-init-time` is canonical, matching
+    # `convert_gefs.py` and `convert_ukmo.py`; `--init-time` is kept so anything
+    # already written against this script keeps working.
+    #
+    # The canonical name is the accurate one: this restricts `--verify` and does
+    # nothing else, while `--init-time` reads like it sets the initialisation of
+    # the conversion output, which it does not. Three converters disagreeing on
+    # the name of the same argument was documented as a trap in
+    # `RUNBOOK_LOAD_ONE_RUN.md` before it was fixed (`NEXT_STEPS.md` §46).
+    parser.add_argument('--verify-init-time', '--init-time', dest='verify_init_time',
+                        help='the init_time those rows are stored under, which is '
+                             'not necessarily the one in the files; restricts '
+                             '--verify to that initialisation')
     parser.add_argument('--variable', default='precipitation',
                         help='database variable name for --verify (default precipitation)')
     parser.add_argument('--hours', type=int, nargs='*',
@@ -572,7 +584,7 @@ def main(argv=None):
 
     if args.verify:
         return 0 if verify(args.source, variable=args.variable,
-                           init_time=args.init_time,
+                           init_time=args.verify_init_time,
                            limit_hours=set(args.hours) if args.hours else None) else 1
 
     if not args.out:

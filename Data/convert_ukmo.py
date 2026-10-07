@@ -405,7 +405,9 @@ def main(argv=None):
     parser.add_argument('--out')
     parser.add_argument('--no-stats', action='store_true')
     parser.add_argument('--verify', action='store_true')
-    parser.add_argument('--verify-init-time')
+    parser.add_argument('--verify-init-time',
+                        help='the init_time those rows are stored under, which is '
+                             'not necessarily the one in the files')
     parser.add_argument('--variable', default='wind_u_10m',
                         help='database variable name for --verify')
     parser.add_argument('--hours', type=int, nargs='*')

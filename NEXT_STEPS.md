@@ -4617,10 +4617,10 @@ makes a wrong one more durable than a wrong open item.
 
 ### Two conventions the runbook records rather than smooths over
 
-The converters disagree: `convert_aifs.py` takes `--init-time` while
+~~The converters disagree: `convert_aifs.py` takes `--init-time` while
 `convert_gefs.py` and `convert_ukmo.py` take `--verify-init-time` for the same
-job. The runbook prints both and says the inconsistency is real, because a
-reader who assumes a typo will type the wrong one.
+job.~~ **Fixed 2026-10-06 (§46)** — all three take `--verify-init-time`, with
+`--init-time` kept on AIFS as an alias.
 
 And the whole document turns on one instruction: **decide the initialisation
 time first and pass it to every step.** §24's defect — four of six
@@ -4631,6 +4631,41 @@ against truth from eight days earlier.
 Step 7 is therefore the MAE-against-lead provenance check, not a row count. Row
 counts, grids, member counts and lead ranges were identical between the right
 run and the wrong one and told §24 nothing.
+
+---
+
+## 46. One name for one flag — 2026-10-06
+
+Surfaced by writing §45's runbook and documented there rather than fixed, which
+left the runbook carrying a warning instead of a command. Fixed now.
+
+`convert_aifs.py` took `--init-time`; `convert_gefs.py` and `convert_ukmo.py`
+took `--verify-init-time`. **Checked before renaming**, because two flags with
+different names might have done different things: all three pass the value
+straight to `verify(..., init_time=...)` and nothing else. Same job, three-to-one
+naming split.
+
+**`--verify-init-time` wins on accuracy, not on the vote.** It restricts
+`--verify` and does nothing else. `--init-time` reads like it sets the
+initialisation of the conversion output — which it never did, and which is
+exactly the misunderstanding that would file a run under the wrong timestamp
+(§24). AIFS's own help string already said "restrict --verify to one
+initialisation", so the name had been arguing with its own documentation.
+
+`--init-time` survives on AIFS as an alias through argparse's multiple option
+strings on one `dest`, so anything already written against it keeps working.
+Verified that both spellings land on `verify_init_time`, that the call site
+reads that attribute, and that no reference to the old one remains.
+
+`convert_ukmo.py`'s flag had no help text at all; it now has the same sentence
+as the other two.
+
+**Small, but it is the shape that costs most.** Nothing was broken — every
+script ran, every test passed, and the only symptom was a reader typing the
+wrong flag and getting an argparse error. That class does not show up in CI, in
+a row count, or in a network log; it shows up when someone follows the
+instructions. Which is why §45 found it: writing down a command is the only
+check that exercises its spelling.
 
 ---
 

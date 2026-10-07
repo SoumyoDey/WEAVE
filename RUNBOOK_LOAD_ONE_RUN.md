@@ -66,13 +66,19 @@ python convert_ukmo.py  --source <netcdf dir> --out <json dir> --variable precip
 the init time out of the file and refuses a directory whose files disagree:
 
 ```bash
-python convert_aifs.py --source <netcdf dir> --verify --init-time "2025-09-16 00:00:00"
+python convert_aifs.py --source <netcdf dir> --verify --verify-init-time "2025-09-16 00:00:00"
 python convert_gefs.py --source <netcdf dir> --verify --verify-init-time "2025-09-16 00:00:00"
 python convert_ukmo.py --source <netcdf dir> --verify --verify-init-time "2025-09-16 00:00:00"
 ```
 
-Note the flag is `--init-time` for AIFS and `--verify-init-time` for the other
-two. That inconsistency is real; it is not a typo here.
+One flag, same spelling, all three. Until 2026-10-06 AIFS called it
+`--init-time` and this runbook had to warn that the inconsistency was real
+rather than a typo; `--init-time` still works on AIFS as an alias so anything
+written against it keeps running (`NEXT_STEPS.md` §46).
+
+The name is the accurate one: it restricts `--verify` and does nothing else,
+where `--init-time` read like it set the initialisation of the conversion
+output, which it never did.
 
 Wind is two separate conversions, `wind_u_10m` and `wind_v_10m`. They are
 separate variables all the way through and nothing combines them until the API
