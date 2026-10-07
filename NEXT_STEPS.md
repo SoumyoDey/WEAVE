@@ -5023,6 +5023,102 @@ nobody waits 53 s for is worth more than 3 GB.
 
 ---
 
+## 52. The member-grid metrics, aggregated in the database — 2026-10-07
+
+§51 left the four member-grid map metrics at 33–56 s and costed two ways out.
+This is the second one, built: **the per-member arithmetic now happens in SQL**,
+so the full domain ships ~100k rows of pooled moments instead of 2.35M member
+rows.
+
+| map metric, full domain | before | after | |
+|---|---|---|---|
+| `brier` UKMO | 54.2 s | **9.0 s** | 6.0× |
+| `ssr_agg` UKMO | 51.8 s | **8.0 s** | 6.5× |
+| `crps` UKMO | 54.8 s | **12.0 s** | 4.6× |
+| `crps` GEFS | 37.0 s | **14.4 s** | 2.6× |
+| `crps` AIFS | 35.7 s | **26.0 s** | 1.4× |
+| `correlation` AIFS | 35.9 s | **30.4 s** | 1.2× |
+| `/api/compare/region-metrics` | 6.2 s | **4.4 s** | 1.4× |
+
+(Before-column measured with the new index already present, so these are the
+rewrite's own contribution; against §51's baseline the totals are 56 s → 9 s
+and 53 s → 12 s.)
+
+### It took three attempts, and the first two are the instructive part
+
+**Attempt 1 — aggregate in SQL: 15% faster.** Nowhere near the projection. The
+query worked and the numbers matched; it was simply not much quicker.
+
+**Attempt 2 — read the plan instead of guessing again.** Two findings:
+
+- **A CTE is inlined unless it says otherwise.** Writing the pass-through and
+  the tiling as separate `exact`/`tiled` CTEs joined by `NOT EXISTS` made
+  Postgres re-run the whole pipeline beneath each reference — the scan, the
+  window function, the lot, three times over. One request sat at **2 m 42 s**,
+  worse than the code it replaced. Rewritten as a single aggregation with
+  `max(...) FILTER (WHERE ...)` deciding pass-through against tiling.
+- **`round(latitude::numeric, 2)` as a partition key turns off every index.**
+  A function of a column cannot be matched against an index however monotonic
+  it is, so the window had to sort 5M rows — an external merge, 58 MB per
+  worker, on every request. The rounding moved to the outermost projection,
+  which is safe because the regridded grid has 41 distinct latitudes and 41
+  distinct *rounded* latitudes; they group identically.
+
+**Attempt 3 — the index the query is actually shaped like.**
+`idx_rfm_cell_member_hour`, on `(model_name, variable_name, init_time,
+latitude, longitude, ensemble_member, forecast_hour) INCLUDE (value)`, does
+three things at once: the scan becomes index-only (no heap fetch per row), the
+key order *is* the window's partition order (no sort), and the bbox lands
+directly on the lat/lon columns. 5.2 GB, 7 m 49 s to build concurrently, and it
+is in `regrid_members.py`'s `INDEXES` so any database that regrids gets it —
+an existing one needs it created once, which `RUNBOOK_LOAD_ONE_RUN.md` step 4
+now gives.
+
+The index alone (old code) takes `crps` AIFS from 53 s to 36 s; the rewrite
+alone takes it to ~42 s; together, 26 s. **Neither half was worth much without
+the other**, which is why the first measurement looked so discouraging.
+
+### What this cost in honesty, which is the part to read
+
+**Nine values out of 86,575 changed, all by ±0.0001.** Not the
+byte-identity the last two changes delivered, and the reason is worth knowing:
+psycopg2 parses the shortest decimal Postgres prints for a `real` (`2.4` →
+2.4), while SQL arithmetic widens the exact binary float4 (`2.4` →
+2.4000000953674316). Same stored value, two legitimate readings, differing by
+about float32 epsilon — and nine times in 86,575 that difference fell on a
+rounding boundary in the 4th decimal place the API prints. Two map cells
+(`crps wind` AIFS 0.4249 → 0.425, `ssr` AIFS 1.6318 → 1.6317) and seven
+spread-skill lead times.
+
+If anything the new reading is the more faithful one: the binary float4 *is*
+the datum, and the decimal is a round-trip of it. But it is a change, it is
+recorded here rather than described as "no change", and anyone re-deriving
+`METRICS_AUDIT.md` against an older figure should expect the last digit to move.
+
+Everything else matched exactly: **all 1,681 cells of every map, every value**,
+across three models, both variables and five metrics.
+
+### The reference implementation is kept on purpose
+
+`_member_moments_python` is still in `flask_api.py` and is on no request path.
+The SQL restates `_precip_member_rate_series`, `_increment_divisor` and
+`_rebin_member_to_common_window` in another language, and a restatement needs
+something to check it against: `test_member_moments.py` runs both over the
+fixture — which holds the cumulative model, the mixed 3 h/6 h bucket model and
+the hourly model at once — and compares every cell, lead time, mean, variance
+and member count. Delete one implementation and that test stops being able to
+catch the other drifting.
+
+**The fake-cursor tests lost something real here and it should be said.** Six
+of them fed invented member rows and watched the Python pool them; with the
+pooling in SQL a fake cursor can only hand back what the query declares, so
+they now pin the *contract* (the endpoint reports what the query returned,
+reads the member grid, snaps the cell) and no longer the arithmetic. The
+arithmetic moved to a better test — against a real database — but the trade is
+a real one rather than a free upgrade.
+
+---
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in

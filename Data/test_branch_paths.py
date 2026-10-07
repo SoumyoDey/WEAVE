@@ -74,16 +74,27 @@ class TestRowsThatGetSkipped:
                        f"&variable=precipitation&{BOX_QS}")
         assert r.status_code == 200
 
-    def test_a_member_row_with_no_value_is_dropped(self, client, fake_db):
+    def test_a_member_row_with_no_value_is_excluded_by_the_query(self):
+        """A NULL member must not reach the pooled mean. The filter moved into
+        SQL with the arithmetic (§52), so this pins the predicate rather than
+        feeding a NULL through a fake cursor that no longer computes anything.
+
+        Both variables, because wind takes a different branch entirely — and
+        wind reads two component scans, so it needs the guard twice."""
+        import flask_api as api
+        precip = api._member_rate_sql("AIFS", False, None)
+        assert "value IS NOT NULL" in precip
+        wind = api._member_rate_sql("AIFS", True, None)
+        assert wind.count("value IS NOT NULL") == 2, wind
+
+    def test_a_cell_the_moment_query_skipped_is_simply_absent(self, client, fake_db):
         fake_db({**RUN,
-                 "FROM regridded_forecast_member": [
-                     {"forecast_hour": 6, "latitude": 36.0, "longitude": -75.5,
-                      "ensemble_member": m, "value": (None if m == 0 else 1.0)}
-                     for m in range(3)],
+                 "FROM regridded_forecast_member": [],
                  "FROM regridded_observation": [obs(6)]})
         r = client.get("/api/spread-skill?model=AIFS&variable=precipitation"
                        "&lat=36&lon=-75.5")
         assert r.status_code == 200
+        assert r.get_json()["hours"] == []
 
 
 class TestTheFourthCellOfTheContingencyTable:
@@ -198,8 +209,8 @@ class TestNoDataEarlyReturns:
         fake_db({**RUN,
                  "FROM regridded_forecast_ens": [fcst(h) for h in (6, 12)],
                  "FROM regridded_forecast_member": [
-                     {"forecast_hour": 6, "latitude": 36.0, "longitude": -75.5,
-                      "ensemble_member": m, "value": 1.0} for m in range(3)],
+                     {"lat": 36.0, "lon": -75.5, "hour": 6, "ens_mean": 1.0,
+                      "spread_sq": 0.0, "n_members": 3}],
                  "FROM regridded_observation": []})
         r = client.post(path, json=body)
         assert r.status_code == 200, r.get_json()
@@ -325,9 +336,10 @@ class TestTheSpreadMetricsReadTheMemberGrid:
         # first matching route wins.
         "MAX(obs_time) AS t": [{"t": INIT + timedelta(hours=48)}],
         **RUN,
+        # The pooled moments the member query returns since §52.
         "FROM regridded_forecast_member": [
-            {"forecast_hour": 6, "latitude": 36.0, "longitude": -75.5,
-             "ensemble_member": m, "value": 1.0 + 0.1 * m} for m in range(4)],
+            {"lat": 36.0, "lon": -75.5, "hour": 6,
+             "ens_mean": 1.15, "spread_sq": 0.0125, "n_members": 4}],
         "FROM regridded_observation": [obs(6)],
     }
 

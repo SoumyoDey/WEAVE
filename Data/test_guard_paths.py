@@ -97,8 +97,8 @@ class TestRowsWithNothingInThem:
     def test_an_observation_row_with_a_null_value_is_skipped(self, client, fake_db):
         fake_db({**RUN,
                  "FROM regridded_forecast_member": [
-                     {"forecast_hour": 6, "latitude": 36.0, "longitude": -75.5,
-                      "ensemble_member": m, "value": 1.0} for m in range(3)],
+                     {"lat": 36.0, "lon": -75.5, "hour": 6, "ens_mean": 1.0,
+                      "spread_sq": 0.0, "n_members": 3}],
                  "FROM regridded_observation": [
                      {"obs_time": INIT + timedelta(hours=6), "latitude": 36.0,
                       "longitude": -75.5, "obs_val": None, "value": None}]})
@@ -210,8 +210,8 @@ class TestObservationCoverageEdges:
     def test_compare_skill_reports_when_nothing_was_observed(self, client, fake_db):
         fake_db({**RUN,
                  "FROM regridded_forecast_member": [
-                     {"forecast_hour": 6, "latitude": 36.0, "longitude": -75.5,
-                      "ensemble_member": m, "value": 1.0} for m in range(3)],
+                     {"lat": 36.0, "lon": -75.5, "hour": 6, "ens_mean": 1.0,
+                      "spread_sq": 0.0, "n_members": 3}],
                  "FROM regridded_observation": []})
         r = client.post("/api/compare/skill", json={
             "models": ["AIFS"], "variable": "precipitation",

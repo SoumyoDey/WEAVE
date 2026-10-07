@@ -56,8 +56,12 @@ class TestEveryRegriddedQueryIsRunScoped:
         offenders = []
         for stmt in _sql_statements(inspect.getsource(api)):
             # Either an equality against a bound run, or the multi-model tuple
-            # membership test that `_run_pairs_sql` produces.
+            # membership test that `_run_pairs_sql` produces. `%(init)s` is the
+            # same equality with a named parameter — the member-moment query
+            # binds by name because it passes the same run to several CTEs
+            # (§52), and this check read it as unscoped when it is not.
             scoped = ('init_time = %s' in stmt
+                      or 'init_time = %(init)s' in stmt
                       or 'init_time)' in stmt          # (model_name, init_time) IN ...
                       or '{_runw}' in stmt)
             if not scoped:

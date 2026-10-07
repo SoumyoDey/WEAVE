@@ -176,12 +176,14 @@ class TestCompareSkillContract:
     ROUTES = {
         "FROM forecast_runs fr": [{"initialization_time": INIT}],
         "ORDER BY POWER": [{"latitude": 36.0, "longitude": -75.5}],
-        # Verification runs on a common 6 h window, so an hourly model needs a
-        # full window present before anything is scored — hours 1-12, not 0-2.
-        "FROM regridded_forecast_member u": [
-            {"latitude": 36.0, "longitude": -75.5, "forecast_hour": h,
-             "ensemble_member": m, "value": 1.0 + 0.1 * m}
-            for h in range(1, 13) for m in range(4)
+        # The pooled moments the member query now returns, not raw member rows
+        # (NEXT_STEPS.md §52). Four members at 1.0 + 0.1m: mean 1.15,
+        # population variance 0.0125. Verification runs on a common 6 h window,
+        # so only the 6 h boundaries are scored.
+        "FROM regridded_forecast_member": [
+            {"lat": 36.0, "lon": -75.5, "hour": h,
+             "ens_mean": 1.15, "spread_sq": 0.0125, "n_members": 4}
+            for h in (6, 12)
         ],
         "FROM regridded_observation": _obs_rows(list(range(1, 13)), per_cell=True),
     }
@@ -381,14 +383,28 @@ class TestSpreadSkillSharedGrid:
     # Verification runs on a common 6 h window, so an hourly model needs the whole
     # window present — hours 1-6, not 0-2.
     #
-    # The member and observation rows carry lat/lon because one implementation now
-    # serves both this endpoint and the spatial ssr/correlation maps, so it reads a
-    # bounding box and keys cells at 2 dp (a degenerate box for a single cell).
-    def _member_rows(self, hours, members=4, value=lambda h, m: 1.0 + 0.1 * m,
+    # **These rows are the POOLED MOMENTS, not raw members** (NEXT_STEPS.md §52).
+    # The per-member differencing, re-binning and pooling now happen in SQL, so a
+    # fake cursor cannot exercise them — it can only hand back what the query is
+    # declared to return. The arithmetic they used to cover is covered better in
+    # `test_member_moments.py`, which runs the SQL and the Python reference
+    # against a real database and compares them value for value.
+    #
+    # What these tests still pin, and a fake cursor pins well: that the endpoint
+    # reads the member grid rather than the native tables, snaps the click to the
+    # shared cell, reports what the query returned rather than recomputing it, and
+    # answers rather than erroring when there is nothing.
+    def _moment_rows(self, hours, members=4, value=lambda h, m: 1.0 + 0.1 * m,
                      lat=36.0, lon=-75.5):
-        return [{"latitude": lat, "longitude": lon, "forecast_hour": h,
-                 "ensemble_member": m, "value": value(h, m)}
-                for h in hours for m in range(members)]
+        rows = []
+        for h in hours:
+            vals = [value(h, m) for m in range(members)]
+            mean = sum(vals) / len(vals)
+            rows.append({"lat": lat, "lon": lon, "hour": h,
+                         "ens_mean": mean,
+                         "spread_sq": sum((v - mean) ** 2 for v in vals) / len(vals),
+                         "n_members": members})
+        return rows
 
     ROUTES_BASE = {
         "FROM forecast_runs": [{"run_id": 1, "initialization_time": INIT}],
@@ -397,7 +413,7 @@ class TestSpreadSkillSharedGrid:
 
     def _routes(self, hours, members=4):
         r = dict(self.ROUTES_BASE)
-        r["FROM regridded_forecast_member"] = self._member_rows(hours, members)
+        r["FROM regridded_forecast_member"] = self._moment_rows(hours, members)
         r["FROM regridded_observation"] = _obs_rows(hours, per_cell=True)
         return r
 
@@ -418,9 +434,12 @@ class TestSpreadSkillSharedGrid:
                        "&lat=36.11&lon=-75.61").get_json()
         assert d["cell"] == [36.0, -75.5]
 
-    def test_spread_is_across_members_only(self, client, fake_db):
-        """n_members must equal the ensemble size, not members x cells — the
-        defect that had a 50-member AIFS run reporting ~1200 'members'."""
+    def test_it_reports_the_member_count_the_query_returned(self, client, fake_db):
+        """`n_members` must be the ensemble size, not members x cells — the
+        defect that had a 50-member AIFS run reporting ~1200 'members'. The
+        count is now `count(*)` over the pooled members in SQL; what this pins
+        is that the endpoint passes it through instead of deriving its own.
+        `test_member_moments.py` checks the count itself against a real run."""
         fake_db(self._routes(list(range(1, 7)), members=7))
         d = client.get("/api/spread-skill?model=UKMO&variable=precipitation"
                        "&lat=36.0&lon=-75.5").get_json()

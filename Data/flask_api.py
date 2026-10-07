@@ -2,6 +2,7 @@ from flask import Flask, jsonify, request, Response, g, has_request_context
 from flask_cors import CORS
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from collections import defaultdict
 import math
 import io
 import base64
@@ -1157,8 +1158,298 @@ def _point_summary(hours_list):
     }
 
 
+def _member_rate_sql(model_name, is_wind, exported):
+    """SQL that turns stored member values into mm/h (or m/s) on the common window.
+
+    One query doing in the database what `_member_moments_python` does in
+    Python, because the volume is the cost: the full domain is **2.35M member
+    rows** for one model, and shipping them was ~20 s of psycopg2 building row
+    dicts before any arithmetic ran (`NEXT_STEPS.md` §52).
+
+    The arithmetic is `metrics.py`'s, restated in SQL rather than reimplemented:
+
+    - `period` is `_precip_period_hours` — GEFS's bucket resets every 6 h, so
+      its `h%6==3` records cover 3 h and the rest 6 h.
+    - the divisor is `_increment_divisor`, resolved **in Python** and inlined as
+      a literal per period, because it depends on the run's export convention
+      and not on anything in the row.
+    - a cumulative model is differenced against the record one period earlier,
+      and `prev_hour = hour - period` is the guard that makes `lag()` mean what
+      `prev_hour in series` means. Without it a gap in the series would be
+      differenced against whatever record came before it, silently.
+    - re-binning is `_rebin_member_to_common_window`: a record already spanning
+      6 h passes through, otherwise records tiling `(target-6, target]` exactly
+      are combined weighted by their own periods, and a partial cover is
+      dropped. `exact` and `tiled` reproduce that precedence — GEFS at a 6 h
+      target has both a 6 h and a 3 h record, which sum to 9 and must not be
+      combined.
+
+    Wind is instantaneous: no differencing, no re-binning, and the speed is
+    per-member `sqrt(u^2 + v^2)`, joined on the natural key the unique index
+    already covers.
+    """
+    if is_wind:
+        # The two components are a join in the server rather than two result
+        # sets paired in Python. `uq_rfm_natural_key` leads with
+        # (model, variable, init_time, forecast_hour, ensemble_member), so both
+        # sides are index scans.
+        return """
+            WITH u AS (
+                SELECT latitude AS lat, longitude AS lon,
+                       ensemble_member AS member, forecast_hour AS hour,
+                       value::float8 AS value
+                FROM regridded_forecast_member
+                WHERE model_name = %(model)s AND variable_name = 'wind_u_10m'
+                  AND init_time = %(init)s
+                  AND latitude  BETWEEN %(min_lat)s AND %(max_lat)s
+                  AND longitude BETWEEN %(min_lon)s AND %(max_lon)s
+                  AND value IS NOT NULL {hour_pred}
+            ), v AS (
+                SELECT latitude AS lat, longitude AS lon,
+                       ensemble_member AS member, forecast_hour AS hour,
+                       value::float8 AS value
+                FROM regridded_forecast_member
+                WHERE model_name = %(model)s AND variable_name = 'wind_v_10m'
+                  AND init_time = %(init)s
+                  AND latitude  BETWEEN %(min_lat)s AND %(max_lat)s
+                  AND longitude BETWEEN %(min_lon)s AND %(max_lon)s
+                  AND value IS NOT NULL {hour_pred}
+            ), member_rate AS (
+                SELECT u.lat, u.lon, u.member, u.hour AS target,
+                       sqrt(u.value * u.value + v.value * v.value) AS rate
+                FROM u JOIN v ON v.lat = u.lat AND v.lon = u.lon
+                             AND v.member = u.member AND v.hour = u.hour
+            )
+            SELECT round(lat::numeric, 2) AS lat, round(lon::numeric, 2) AS lon,
+                   target AS hour, avg(rate) AS ens_mean,
+                   var_pop(rate) AS spread_sq, count(*) AS n_members
+            FROM member_rate
+            WHERE rate IS NOT NULL {target_pred}
+            GROUP BY lat, lon, target
+            ORDER BY lat, lon, target
+        """
+
+    if model_name == 'GEFS':
+        period = 'CASE WHEN r.hour %% 6 = 3 THEN 3 ELSE 6 END'
+        divisor = ('CASE WHEN r.hour %% 6 = 3 THEN %(div3)s ELSE %(div6)s END')
+    else:
+        period  = '%(period)s'
+        divisor = '%(div)s'
+
+    if model_name in CUMULATIVE_PRECIP_MODELS:
+        amount = """GREATEST(0.0, CASE WHEN r.hour - r.period <= 0 THEN r.value
+                                       ELSE r.value - r.prev_value END)"""
+        guard  = 'WHERE r.hour - r.period <= 0 OR r.prev_hour = r.hour - r.period'
+    else:
+        amount, guard = 'r.value', ''
+
+    return f"""
+        WITH raw AS (
+            -- **Not** `round(latitude::numeric, 2) AS lat` here, though that is
+            -- the key the result is reported under. Rounding inside the query
+            -- makes the window's partition key a function of the column, and a
+            -- function of a column cannot be served by an index however
+            -- monotonic it is — which cost a sort of 5M rows to disk (§52).
+            -- Rounding moved to the outermost projection; it is safe because
+            -- the regridded grid has 41 distinct latitudes and 41 distinct
+            -- rounded latitudes, so the two group the same way.
+            SELECT latitude AS lat, longitude AS lon,
+                   ensemble_member AS member, forecast_hour AS hour,
+                   value::float8 AS value
+            FROM regridded_forecast_member
+            WHERE model_name = %(model)s AND variable_name = %(variable)s
+              AND init_time = %(init)s
+              AND latitude  BETWEEN %(min_lat)s AND %(max_lat)s
+              AND longitude BETWEEN %(min_lon)s AND %(max_lon)s
+              AND value IS NOT NULL {{hour_pred}}
+        ), seq AS (
+            SELECT r.*, {period} AS period,
+                   lag(value) OVER w AS prev_value,
+                   lag(hour)  OVER w AS prev_hour
+            FROM raw r
+            WINDOW w AS (PARTITION BY lat, lon, member ORDER BY hour)
+        ), rates AS (
+            SELECT r.lat, r.lon, r.member, r.hour, r.period,
+                   ({amount}) / ({divisor}) AS rate
+            FROM seq r
+            {guard}
+        ), tgt AS (
+            -- Integer ceiling to the next 6 h boundary: the one target a record
+            -- can contribute to.
+            SELECT lat, lon, member, hour, period, rate,
+                   ((hour + 5) / 6) * 6 AS target
+            FROM rates WHERE hour > 0
+        ), binned AS (
+            -- Pass-through and tiling decided in ONE aggregation. Writing them
+            -- as two CTEs and an anti-join cost 2m42s instead of seconds: a CTE
+            -- is inlined unless it says otherwise, so each reference re-ran the
+            -- whole pipeline beneath it, and the NOT EXISTS ran it again (§52).
+            SELECT lat, lon, member, target,
+                   max(rate) FILTER (WHERE hour = target AND period = 6)
+                       AS exact_rate,
+                   sum(rate * period) / 6.0 AS tiled_rate,
+                   sum(period)              AS covered
+            FROM tgt
+            WHERE hour - period >= target - 6
+            GROUP BY lat, lon, member, target
+        ), member_rate AS (
+            -- A record already spanning the window wins, which is what
+            -- `_rebin_to_common_window` does before it considers tiling: GEFS
+            -- has both a 6 h and a 3 h record at a 6 h target, and they must
+            -- not be added together.
+            SELECT lat, lon, member, target,
+                   coalesce(exact_rate,
+                            CASE WHEN covered = 6 THEN tiled_rate END) AS rate
+            FROM binned
+        )
+        SELECT round(lat::numeric, 2) AS lat, round(lon::numeric, 2) AS lon,
+               target AS hour, avg(rate) AS ens_mean,
+               var_pop(rate) AS spread_sq, count(*) AS n_members
+        FROM member_rate
+        WHERE rate IS NOT NULL {{target_pred}}
+        GROUP BY lat, lon, target
+        -- Deterministic output. The old path's order came from Python dict
+        -- insertion and this one's from the index, so without this the same
+        -- request returns the same cells in a different sequence — which is
+        -- invisible until a point list is truncated and the cap keeps a
+        -- different subset.
+        ORDER BY lat, lon, target
+    """
+
+
+def _member_moments_sql(cursor, model_name, variable, init_time,
+                        min_lat, max_lat, min_lon, max_lon,
+                        source_hours=None, targets=None):
+    """{(lat, lon): {hour: (ens_mean, spread_sq, n_members)}} from the database.
+
+    The pooled moments are all the callers need — no metric here reads the
+    individual members — so the 2.35M rows collapse to one row per scored
+    (cell, lead time) in the server. `_member_moments_python` is the reference
+    this is pinned against, value for value.
+    """
+    is_wind = (variable == 'wind')
+    params = {'model': model_name, 'variable': variable, 'init': init_time,
+              'min_lat': min_lat, 'max_lat': max_lat,
+              'min_lon': min_lon, 'max_lon': max_lon}
+    if not is_wind:
+        exported = _export_divisor(model_name, init_time)
+        if model_name == 'GEFS':
+            params['div3'] = _increment_divisor(model_name, 3, exported)
+            params['div6'] = _increment_divisor(model_name, 6, exported)
+        else:
+            period = _precip_period_hours(model_name, 6)
+            params['period'] = period
+            params['div'] = _increment_divisor(model_name, period, exported)
+
+    hour_pred = target_pred = ''
+    if source_hours is not None:
+        hour_pred = ' AND forecast_hour = ANY(%(source_hours)s)'
+        params['source_hours'] = list(source_hours)
+    if targets is not None:
+        target_pred = ' AND target = ANY(%(targets)s)'
+        params['targets'] = list(targets)
+
+    sql = _member_rate_sql(model_name, is_wind, None).format(
+        hour_pred=hour_pred, target_pred=target_pred)
+    cursor.execute(sql, params)
+    out = defaultdict(dict)
+    for row in cursor.fetchall():
+        out[(float(row['lat']), float(row['lon']))][row['hour']] = (
+            float(row['ens_mean']), float(row['spread_sq']), int(row['n_members']))
+    return dict(out)
+
+
+def _member_moments_python(cursor, model_name, variable, init_time,
+                           min_lat, max_lat, min_lon, max_lon,
+                           source_hours=None, targets=None):
+    """**The reference implementation of `_member_moments_sql`.**
+
+    Same signature, same return — {(lat, lon): {hour: (ens_mean, spread_sq,
+    n_members)}} — computed by fetching every member row and doing the
+    arithmetic in Python with `metrics.py`'s own helpers.
+
+    It is not on any request path. It is kept because the SQL version restates
+    `_precip_member_rate_series`, `_increment_divisor` and
+    `_rebin_member_to_common_window` in another language, and a restatement
+    needs something to be checked against:
+    `test_member_moments.py` runs both over the fixture and fails on any cell,
+    lead time or member count that differs. Change one of them and that test
+    tells you the other has drifted — which is the whole point of keeping it
+    (`NEXT_STEPS.md` §52).
+    """
+    is_wind = (variable == 'wind')
+
+    def _member_rows(var_name):
+        hour_pred, hour_param = '', ()
+        if source_hours is not None:
+            hour_pred = ' AND u.forecast_hour = ANY(%s)'
+            hour_param = (list(source_hours),)
+        cursor.execute(f"""
+            SELECT u.latitude, u.longitude, u.forecast_hour, u.ensemble_member,
+                   u.value
+            FROM regridded_forecast_member u
+            WHERE u.model_name = %s AND u.variable_name = %s
+              AND u.init_time = %s
+              AND u.latitude BETWEEN %s AND %s AND u.longitude BETWEEN %s AND %s
+              {hour_pred}
+        """, (model_name, var_name, init_time,
+              min_lat, max_lat, min_lon, max_lon, *hour_param))
+        return cursor.fetchall()
+
+    # Cells are keyed at 2 dp, the same key the regridded pairs path uses — NOT a
+    # 0.25° snap, which silently collapsed several of UKMO's 0.1875° native cells
+    # onto one key and then kept one cell's coordinates with another's values.
+    def _key(row):
+        return (round(float(row['latitude']), 2), round(float(row['longitude']), 2),
+                row['forecast_hour'], row['ensemble_member'])
+
+    if is_wind:
+        v_value = {_key(r): float(r['value'])
+                   for r in _member_rows('wind_v_10m') if r['value'] is not None}
+        rows = [(r, v_value.get(_key(r))) for r in _member_rows('wind_u_10m')]
+        values = [(r, math.sqrt(float(r['value']) ** 2 + v ** 2))
+                  for r, v in rows if r['value'] is not None and v is not None]
+    else:
+        values = [(r, float(r['value']))
+                  for r in _member_rows(variable) if r['value'] is not None]
+
+    raw = defaultdict(lambda: defaultdict(dict))
+    for r, val in values:
+        cell = (round(float(r['latitude']), 2), round(float(r['longitude']), 2))
+        raw[cell][r['ensemble_member']][r['forecast_hour']] = val
+    if not raw:
+        return {}
+
+    out = {}
+    for cell, members in raw.items():
+        by_hour = defaultdict(list)
+        for series in members.values():
+            rates = _precip_member_rate_series(
+                model_name, series, is_wind=is_wind,
+                exported=_export_divisor(model_name, init_time))
+            if not is_wind:
+                # Members are re-binned individually and only then pooled, so the
+                # spread is of 6 h means rather than of a mixture of windows.
+                rates = _rebin_member_to_common_window(rates)
+            for hour, (rate, _period) in rates.items():
+                if targets is not None and hour not in targets:
+                    continue
+                by_hour[hour].append(rate)
+        moments = {}
+        for hour, pooled in by_hour.items():
+            n = len(pooled)
+            ens_mean = sum(pooled) / n
+            moments[hour] = (ens_mean,
+                             sum((x - ens_mean) ** 2 for x in pooled) / n,
+                             n)
+        if moments:
+            out[cell] = moments
+    return out
+
+
 def _member_cases_by_cell(cursor, model_name, variable, init_time,
-                          min_lat, max_lat, min_lon, max_lon, hours=None):
+                          min_lat, max_lat, min_lon, max_lon, hours=None,
+                          _moments=None):
     """Per-cell, per-lead-time ensemble spread and error, from the MEMBER grid.
 
     Returns {(lat, lon): {hour: case}}, where each case carries `ens_mean`,
@@ -1169,6 +1460,14 @@ def _member_cases_by_cell(cursor, model_name, variable, init_time,
     ssr/correlation maps, so the point panel and the map cannot answer the same
     question two different ways — which they did until this replaced a second
     implementation reading `ensemble_statistics` + `observation_data`.
+
+    **The forecast moments are computed in the database** (`_member_moments_sql`)
+    and the observation half here, which is the split that matters for cost: the
+    member grid is members x cells x hours and the moments are one row per
+    scored cell and lead time, so the full domain ships ~47k rows instead of
+    2.35M (`NEXT_STEPS.md` §52). `_moments` injects a different implementation —
+    `_member_moments_python` — and exists so the equivalence test can drive this
+    function both ways.
 
     Why the member grid, precisely — the earlier version of this note said the
     aggregate `std_dev` carries within-cell spatial variance and runs ~23% high.
@@ -1197,16 +1496,19 @@ def _member_cases_by_cell(cursor, model_name, variable, init_time,
     the same rule every other scored endpoint uses — not the instantaneous match
     against the sparse `observation_data` the old path used.
     """
-    from collections import defaultdict
     is_wind = (variable == 'wind')
     obs_var = 'wind_speed' if is_wind else 'precipitation'
     obs_src = 'ERA5_WIND'  if is_wind else 'GPM_IMERG_V07B'
+    # Every re-binned precipitation record spans the common window; wind is
+    # instantaneous. The per-record period the old pooling carried could only
+    # ever have been one of these two.
+    period = 1 if is_wind else COMMON_VERIFICATION_WINDOW_HOURS
 
     # Prune the query to the lead times that can actually produce a score: the
     # records each target is built from, and nothing past the end of the
     # observation record. The member grid is members x cells x hours, so fetching
     # every hour to score one is the difference between a 5 s map and a 55 s one.
-    hour_pred, hour_param = '', ()
+    source_hours = targets = None
     if hours is not None:
         obs_end = _observation_record_end(cursor, obs_var, obs_src)
         targets = sorted(h for h in hours
@@ -1214,75 +1516,16 @@ def _member_cases_by_cell(cursor, model_name, variable, init_time,
                          or init_time + timedelta(hours=h) <= obs_end)
         if not targets:
             return {}
-        hour_pred  = ' AND u.forecast_hour = ANY(%s)'
-        hour_param = (_window_source_hours(model_name, targets, is_wind),)
+        source_hours = _window_source_hours(model_name, targets, is_wind)
 
-    def _member_rows(var_name):
-        cursor.execute(f"""
-            SELECT u.latitude, u.longitude, u.forecast_hour, u.ensemble_member,
-                   u.value
-            FROM regridded_forecast_member u
-            WHERE u.model_name = %s AND u.variable_name = %s
-              AND u.init_time = %s
-              AND u.latitude BETWEEN %s AND %s AND u.longitude BETWEEN %s AND %s
-              {hour_pred}
-        """, (model_name, var_name, init_time,
-              min_lat, max_lat, min_lon, max_lon, *hour_param))
-        return cursor.fetchall()
-
-    # Cells are keyed at 2 dp, the same key the regridded pairs path uses — NOT a
-    # 0.25° snap, which silently collapsed several of UKMO's 0.1875° native cells
-    # onto one key and then kept one cell's coordinates with another's values.
-    def _key(row):
-        return (round(float(row['latitude']), 2), round(float(row['longitude']), 2),
-                row['forecast_hour'], row['ensemble_member'])
-
-    # Wind: per-member SPEED, which is exact — unlike the |mean vector|
-    # approximation the aggregate tables force. The two components are fetched
-    # separately and paired here rather than self-joined in SQL: the join predicate
-    # includes ensemble_member, which idx_rfm_lookup does not cover, so the planner
-    # rescans every member of a cell for each probe (~11 s on the full domain
-    # against ~0.4 s for two index range scans and a dict).
-    if is_wind:
-        v_value = {_key(r): float(r['value'])
-                   for r in _member_rows('wind_v_10m') if r['value'] is not None}
-        rows = [(r, v_value.get(_key(r))) for r in _member_rows('wind_u_10m')]
-        values = [(r, math.sqrt(float(r['value']) ** 2 + v ** 2))
-                  for r, v in rows if r['value'] is not None and v is not None]
-    else:
-        values = [(r, float(r['value']))
-                  for r in _member_rows(variable) if r['value'] is not None]
-
-    raw = defaultdict(lambda: defaultdict(dict))
-    for r, val in values:
-        cell = (round(float(r['latitude']), 2), round(float(r['longitude']), 2))
-        raw[cell][r['ensemble_member']][r['forecast_hour']] = val
-    if not raw:
-        return {}
-
-    pooled = {}
-    for cell, members in raw.items():
-        by_hour, periods = defaultdict(list), {}
-        for series in members.values():
-            rates = _precip_member_rate_series(
-                model_name, series, is_wind=is_wind,
-                exported=_export_divisor(model_name, init_time))
-            if not is_wind:
-                # Members are re-binned individually and only then pooled, so the
-                # spread is of 6 h means rather than of a mixture of windows.
-                rates = _rebin_member_to_common_window(rates)
-            for hour, (rate, period) in rates.items():
-                if hours is not None and hour not in hours:
-                    continue
-                by_hour[hour].append(rate)
-                periods[hour] = period
-        if by_hour:
-            pooled[cell] = (by_hour, periods)
+    moments_of = _moments or _member_moments_sql
+    pooled = moments_of(cursor, model_name, variable, init_time,
+                        min_lat, max_lat, min_lon, max_lon,
+                        source_hours=source_hours, targets=targets)
     if not pooled:
         return {}
 
-    max_period  = max(p for _b, periods in pooled.values() for p in periods.values())
-    scored      = {h for by_hour, _p in pooled.values() for h in by_hour}
+    scored      = {h for by_hour in pooled.values() for h in by_hour}
     valid_times = [init_time + timedelta(hours=h) for h in scored]
     cursor.execute("""
         SELECT obs_time, latitude, longitude, AVG(value) AS obs_val
@@ -1293,7 +1536,7 @@ def _member_cases_by_cell(cursor, model_name, variable, init_time,
           AND longitude BETWEEN %s AND %s
         GROUP BY obs_time, latitude, longitude
     """, (obs_var, obs_src,
-          min(valid_times) - timedelta(hours=max_period), max(valid_times),
+          min(valid_times) - timedelta(hours=period), max(valid_times),
           min_lat, max_lat, min_lon, max_lon))
     obs_by_cell = defaultdict(dict)
     for r in cursor.fetchall():
@@ -1304,22 +1547,18 @@ def _member_cases_by_cell(cursor, model_name, variable, init_time,
 
     out = {}
     candidates = matched = 0
-    for cell, (by_hour, periods) in pooled.items():
+    for cell, by_hour in pooled.items():
         cell_obs = obs_by_cell.get(cell)
         cases = {}
         for hour in sorted(by_hour):
-            members = by_hour[hour]
-            period  = periods[hour]
+            ens_mean, spread_sq, n = by_hour[hour]
             candidates += 1
             # A partially observed window is rejected, not averaged.
             obs, covered, n_obs = _obs_window_mean(
                 cell_obs, init_time + timedelta(hours=hour), period)
-            if not members or obs is None or covered < period:
+            if not n or obs is None or covered < period:
                 continue
-            matched  += 1
-            n         = len(members)
-            ens_mean  = sum(members) / n
-            spread_sq = sum((x - ens_mean) ** 2 for x in members) / n  # population
+            matched += 1
             cases[hour] = {
                 'hour':      hour,
                 'ens_mean':  ens_mean,

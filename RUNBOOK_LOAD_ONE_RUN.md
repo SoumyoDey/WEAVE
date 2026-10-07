@@ -131,6 +131,20 @@ Re-running is safe: `clear_slice` deletes the (model, variable, run, hour) it is
 about to write in the same transaction as the `COPY`, so a repeat does not
 double (§13).
 
+**This step also creates the indexes**, `IF NOT EXISTS`, including
+`idx_rfm_cell_member_hour` — the covering index the spread metrics are shaped
+around (`NEXT_STEPS.md` §52). A database that already holds every run it needs
+never runs this step, so it will not have that index and CRPS, Brier,
+aggregate-SSR and correlation maps will take three to four times as long. Create
+it once, concurrently so nothing is locked out:
+
+```bash
+psql -d weave_weather -c "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_rfm_cell_member_hour ON regridded_forecast_member (model_name, variable_name, init_time, latitude, longitude, ensemble_member, forecast_hour) INCLUDE (value);"
+psql -d weave_weather -c "ANALYZE regridded_forecast_member;"
+```
+
+It took **7 m 49 s** and **5.2 GB** on the three-run database (2026-10-07).
+
 Verify the coordinates land on the grid:
 
 ```bash

@@ -140,6 +140,27 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_rfm_natural_key
 CREATE UNIQUE INDEX IF NOT EXISTS uq_rfe_natural_key
     ON regridded_forecast_ens(model_name, variable_name, init_time,
                               forecast_hour, latitude, longitude);
+
+-- The index the member-moment query is shaped around (NEXT_STEPS.md §52).
+-- Three things make it the one that path needs, and none of the indexes above
+-- supply even two of them:
+--
+--   1. `INCLUDE (value)` makes the scan index-only. The others carry no value,
+--      so every row costs a heap fetch, and the full domain is 5M rows.
+--   2. The key order IS the window's partition order — (latitude, longitude,
+--      ensemble_member) then forecast_hour — so the per-member differencing
+--      needs no sort. Without it the planner sorted 5M rows to disk
+--      (58 MB per worker) on every request.
+--   3. The bbox lands on `latitude`/`longitude` directly after the run
+--      columns, so a region query reads only its own cells.
+--
+-- It costs about 5 GB. `uq_rfm_natural_key` leads with forecast_hour and
+-- therefore cannot serve 2 or 3; keep both.
+CREATE INDEX IF NOT EXISTS idx_rfm_cell_member_hour
+    ON regridded_forecast_member(model_name, variable_name, init_time,
+                                 latitude, longitude, ensemble_member,
+                                 forecast_hour)
+    INCLUDE (value);
 """
 
 
