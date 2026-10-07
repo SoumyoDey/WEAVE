@@ -155,14 +155,16 @@ class TestTheEndpointItself:
         assert set(config['region_spread_metrics']) == \
             set(api.COMPARE_REGION_SPREAD_METRICS)
 
-    def test_fss_is_named_as_having_no_map(self, config):
-        """It is a property of a field at a lead time, so it has a region value
-        and no per-cell map. Stated by the endpoint so the UI need not carry the
-        special case — and so a reader who finds it missing from the metric map
-        list has an answer rather than a puzzle."""
-        assert config['region_no_cell_value'] == ['fss']
-        assert 'fss' not in config['metrics']
-        assert 'fss' in config['region_metrics']
+    @pytest.mark.parametrize('key', ['fbi', 'fss'])
+    def test_the_metrics_with_no_map_are_named(self, config, key):
+        """FSS is a property of a field at a lead time; FBI is a ratio of
+        pooled counts that degenerates to 0/1/undefined at one cell. Both have
+        a region value and no per-cell map, and the endpoint says so, so the UI
+        need not carry the special case — and so a reader who finds one missing
+        from the metric map list has an answer rather than a puzzle."""
+        assert config['region_no_cell_value'] == ['fbi', 'fss']
+        assert key not in config['metrics']
+        assert key in config['region_metrics']
 
     def test_the_verification_window_is_served(self, config):
         from metrics import COMMON_VERIFICATION_WINDOW_HOURS

@@ -1214,6 +1214,43 @@ class TestFbiIsInBothSurfaces:
         assert hours, 'no per-hour rows to check'
         assert all('fbi' in h for h in hours)
 
+    def test_the_comparison_region_surface_reports_it(self, db_client):
+        """**The half §43 missed, found on 2026-10-07.**
+
+        FBI went into the point surface and the Comparison tab's *region*
+        metric group on 2026-10-06, and into `_region_pooled_metrics` not at
+        all — so the region panel drew an FBI bar for every model with nothing
+        in it, and asking the endpoint for `fbi` outright was a 400. Nothing
+        failed: the UI reads `regionData.models[m][key] ?? null` and an absent
+        key renders the same as a model with no data.
+        """
+        d = region_metrics(db_client, 'AIFS', ['csi', 'pod', 'far', 'fbi'])
+        assert 'fbi' in d['models']['AIFS']
+        assert d['models']['AIFS']['fbi'] is not None
+        assert d['n_points']['AIFS']['fbi'] > 0
+
+    def test_the_region_value_is_the_ratio_of_its_own_pooled_counts(self, db_client):
+        """Pooled, not averaged per cell — the estimator §41 settled on.
+
+        POD is hits/obs_yes and FAR is false_alarms/fcst_yes over the same
+        pooled sample, so FBI = fcst_yes/obs_yes is recoverable from the two:
+        POD / (1 − FAR). If FBI were ever computed from a different sample than
+        its neighbours, this identity is what would break.
+        """
+        d = region_metrics(db_client, 'AIFS', ['pod', 'far', 'fbi'])
+        v = d['models']['AIFS']
+        if v['pod'] and v['far'] is not None and v['far'] < 1:
+            assert v['fbi'] == pytest.approx(v['pod'] / (1 - v['far']), rel=1e-3)
+
+    def test_it_is_offered_as_a_region_number_and_not_as_a_map(self, db_client):
+        """At one cell both counts are 0 or 1, so a per-cell FBI is only ever
+        0, 1 or undefined. It belongs in the region suite and in neither map
+        registry, and `/api/config` says so rather than the UI guessing."""
+        cfg = db_client.get('/api/config').get_json()
+        assert 'fbi' in cfg['region_metrics']
+        assert 'fbi' in cfg['region_no_cell_value']
+        assert 'fbi' not in cfg['metrics']
+
     def test_the_composite_stays_out_of_the_comparison_surface(self, db_client):
         """**A deliberate absence, pinned so it is not "fixed" by accident.**
 

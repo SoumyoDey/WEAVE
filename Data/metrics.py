@@ -766,6 +766,11 @@ def _region_pooled_metrics(pairs, metrics, threshold_rate, n_members=None,
         'csi':   round(hits / csi_den,  4) if csi_den  else None,
         'pod':   round(hits / obs_yes,  4) if obs_yes  else None,
         'far':   round(false_alarms / fcst_yes, 4) if fcst_yes else None,
+        # Same pooled counts as CSI/POD/FAR, so it is a ratio of sums like they
+        # are. Added 2026-10-07: the point surface got FBI on 2026-10-06 and
+        # this one did not, so the region panel rendered an FBI bar the backend
+        # never filled (`NEXT_STEPS.md` §49).
+        'fbi':   round(fcst_yes / obs_yes, 4) if obs_yes else None,
         'ssr_agg': (_ssr_from_variances(sum(variances) / len(variances),
                                         sum(spread_sq_errs) / len(spread_sq_errs),
                                         n_members)

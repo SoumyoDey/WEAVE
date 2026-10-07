@@ -82,9 +82,12 @@ const REGION_METRIC_GROUPS = [
       { key: 'csi',   label: 'CSI',   hint: 'higher is better', decimals: 3, bounded: true },
       { key: 'pod',   label: 'POD',   hint: 'higher is better', decimals: 3, bounded: true },
       { key: 'far',   label: 'FAR',   hint: 'lower is better',  decimals: 3, bounded: true },
-      // Unbounded with an ideal of 1 — see CAT_METRICS above.
+      // Unbounded with an ideal of 1 — see CAT_METRICS above. `noMap` for the
+      // same reason as FSS but a different mechanism: at one cell the two
+      // counts are each 0 or 1, so a per-cell FBI is only ever 0, 1 or
+      // undefined, and the backend has no dispatcher for it (§49).
       { key: 'fbi',   label: 'FBI',   hint: '1 = right number of events',
-        decimals: 3, refLine: 1 },
+        decimals: 3, refLine: 1, noMap: true },
       { key: 'brier', label: 'Brier', hint: '0 is perfect',     decimals: 4, bounded: true },
       // FSS is a property of the whole field at a lead time, so it has a
       // region value but no per-cell value — hence no map (noMap).
@@ -1202,7 +1205,7 @@ export function ComparisonTab({
                 <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: t.fontSize.sm }}>{thresholdUnit}</span>
               </div>
               <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.micro, marginTop: '5px' }}>
-                CSI · POD · FAR · Brier · FSS only
+                CSI · POD · FAR · FBI · Brier · FSS only
               </div>
             </div>
           )}

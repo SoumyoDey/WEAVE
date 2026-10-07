@@ -5363,7 +5363,7 @@ COMPARE_REGION_METRIC_FNS = {
     'brier':   _compute_brier_points_rf,
 }
 COMPARE_REGION_METRICS = ['ssr_agg', 'correlation', 'bias', 'mae', 'rmse',
-                          'crps', 'csi', 'pod', 'far', 'brier', 'fss']
+                          'crps', 'csi', 'pod', 'far', 'fbi', 'brier', 'fss']
 
 # The metrics here that need a SPREAD, and so must come from the member grid
 # rather than the regridded mean/spread table.
@@ -5381,9 +5381,15 @@ COMPARE_REGION_METRICS = ['ssr_agg', 'correlation', 'bias', 'mae', 'rmse',
 # `correlation` is not here because it already runs the member path itself.
 COMPARE_REGION_SPREAD_METRICS = frozenset({'crps', 'ssr_agg', 'brier'})
 
-# FSS is a property of a whole field at a lead time, so unlike the others it has
-# no per-cell value: no map, and no entry in `cell_means`.
-COMPARE_REGION_NO_CELL_VALUE = {'fss'}
+# The region metrics with no per-cell value: no map, and no entry in
+# `cell_means`.
+#
+# FSS is a property of a whole field at a lead time. FBI is a ratio of pooled
+# counts, and at one cell both counts are 0 or 1, so a per-cell FBI takes the
+# values 0, 1 and undefined and nothing else — a map of it would be a map of
+# three colours that looks like a measurement. It is reported as a region
+# number, the same treatment the point surface gives it.
+COMPARE_REGION_NO_CELL_VALUE = {'fbi', 'fss'}
 
 
 def _single_metric_points(cursor, model_name, variable, metric,
