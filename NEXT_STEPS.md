@@ -362,9 +362,13 @@ are old, the last two came out of phase 6.
 - ~~**`fbi` and `composite_confidence` are Analysis-only and nobody decided
   that.**~~ **DECIDED 2026-10-06 (§43):** FBI is in both surfaces; the composite
   stays Analysis-only on purpose, with a test pinning the absence.
-- **UKMO's wind and precipitation coordinates differ** in `ensemble_statistics`
-  (`35.1562` vs `35.15625`, two loaders). Nothing joins across variables, so
-  nothing is broken; a test pins the difference so it cannot surprise anyone.
+- **UKMO coordinates are stored at two precisions** in `ensemble_statistics`
+  (`35.1562` vs `35.15625`). **Re-characterised 2026-10-07 (§48)** — this used
+  to read "wind and precipitation coordinates differ", which is a side effect
+  rather than the thing. The split is **per load, not per variable**: the two
+  09-08 precipitation loads wrote 5-decimal coordinates and everything loaded
+  since wrote 4. Every run is internally consistent at 107 latitudes, and
+  wind's runs all agree with each other.
 - **The two tabs pool the point categorical metrics differently.** Analysis scores
   CSI/POD/FAR on the clicked cell alone; Comparison pools them over the whole
   `box_cells` box (default 9×9). Each says what it does and neither is wrong, but
@@ -4324,9 +4328,11 @@ stops trusting the list:
 
 *Known and deliberately not acted on:*
 
-6. **UKMO wind and precipitation coordinates differ** — confirmed still true:
-   `35.1562` and `35.15625` both exist in `ensemble_statistics`, from two
-   loaders. Nothing joins across variables, and a test pins it.
+6. **UKMO coordinates are stored at two precisions** — still true, and
+   **re-characterised 2026-10-07 (§48)**: the split is per load, not per
+   variable, every run is internally consistent, and the regridded tables every
+   scored endpoint reads are on the 0.5° grid and unaffected. Harmless, but not
+   for the reason the old note gave.
 7. ~~**No "load one run" runbook.**~~ **WRITTEN 2026-10-06 — §45**,
    `RUNBOOK_LOAD_ONE_RUN.md`. Writing it broke two things documented as working.
 
@@ -4719,6 +4725,56 @@ a finding is not re-checking it.
 wrong run's truth; this is a *verification script* comparing against the wrong
 run and reporting the discrepancy as a property of the data. The tool built to
 catch run mix-ups contained one.
+
+---
+
+## 48. The UKMO coordinate split is per load, not per variable — 2026-10-07
+
+Checked because §47 had just shown that a long-listed item can be a phantom, and
+this one carried a load-bearing claim nobody had tested: *"nothing joins across
+variables, so nothing is broken."* **Wind speed joins across variables** — it is
+√(u²+v²) — so that sentence deserved a query rather than a nod.
+
+The join is safe, and the rest of the description was wrong.
+
+| | |
+|---|---|
+| `wind_u_10m` latitudes == `wind_v_10m` | **yes** — the speed join is unaffected |
+| UKMO precipitation, distinct latitudes | **214** |
+| … distinct to 3 decimal places | **107** |
+| … positions carrying two spellings | **all 107** |
+
+214 is not a finer grid. It is 107 positions stored twice, once as `25.03125`
+and once as `25.0312`. That looked much worse than the note — precipitation
+split against itself — until the per-run breakdown:
+
+| variable | run | lowest latitude as stored |
+|---|---|---|
+| precipitation | 2025-09-08 00Z | `25.03125` |
+| precipitation | 2025-09-08 06Z | `25.03125` |
+| precipitation | 2025-09-16 00Z | `25.0312` |
+| wind u / v | both runs | `25.0312` |
+
+**Every run holds exactly 107 latitudes and is internally consistent.** The two
+09-08 precipitation loads wrote five decimals; everything loaded since writes
+four. So it is a change in loader behaviour over time, and "wind and
+precipitation differ" is the shadow it casts — wind happens to have been loaded
+entirely after the change.
+
+**Still harmless, for a better reason than the old note gave.** Queries are
+run-scoped throughout, and within a run the coordinates agree. More to the
+point, `regridded_forecast_ens` — which every scored endpoint reads — holds **39**
+latitudes on the 0.5° analysis grid and never sees the native precision at all.
+
+The residual risk is narrow and worth stating: a query that filters
+`latitude = <literal>` **across** runs silently returns only the runs whose load
+used that spelling. Nothing does that today.
+
+**The lesson is the one §47 just taught, applied deliberately rather than by
+luck.** "Nothing joins across variables" was the kind of claim that sounds like
+a conclusion and is actually an assumption; it was one query away from being
+checked, and it had been sitting unchecked while the item was listed as
+understood.
 
 ---
 
