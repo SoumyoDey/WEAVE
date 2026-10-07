@@ -1998,16 +1998,15 @@ exactly the shape this converter produces: **61 h × 50 members × 6,561 cells =
 20,011,050 rows**, every cell kept (zeros and negatives are real readings, so no
 threshold), 3 decimals. The cell sets match perfectly.
 
-**The values do not.** At `2025-09-08 00Z` +120h, cell (25.0, −85.0), the
+~~**The values do not.** At `2025-09-08 00Z` +120h, cell (25.0, −85.0), the
 database holds **−5.567** where the source has **−4.050**, and no member index
-reproduces it. Both variables were extracted minutes apart on 2025-10-09, so
-staleness does not explain it — the loaded AIFS wind has some other provenance
-that is not on the cluster under that name.
+reproduces it.~~ **WRONG, and resolved 2026-10-07 — see §47.** The values match
+exactly. −5.567 is the **2025-09-16** run's value at that cell; −4.050 is the
+09-08 run's, and it is what the 09-08 source holds. `verify()` was comparing one
+source directory against *every* loaded run, so a second run made the comparison
+meaningless. 768 of 768 sampled values reproduce the source.
 
-So wind conversion here is **structurally right and numerically unconfirmed**.
-The script prints that when handed a non-accumulated variable rather than
-leaving it to be discovered. Anyone loading AIFS wind for a new run should know
-they cannot check it against the old one.
+So wind conversion here is **structurally right and numerically confirmed.**
 
 ### A new run will not be bit-identical to the old one, by design
 
@@ -2032,7 +2031,9 @@ legacy 3 dp deliberately, because it is checking against what is stored.
   rebuilt from source"). This line outlived it; found in the 2026-10-06 sweep
   (§44). The window conventions it names are still the awkward part: 3 h buckets
   at `h%6==3`, 6 h at `h%6==0`.
-- **Unresolved:** where the loaded AIFS wind came from. **Still open 2026-10-06.**
+- ~~**Unresolved:** where the loaded AIFS wind came from.~~ **RESOLVED
+  2026-10-07 (§47): it came from the cluster, exactly.** The mystery was a
+  comparison across two runs.
 
 ~~`netCDF4` is imported lazily and is not in `Data/requirements.txt`~~ — it was
 added in §30 (`netCDF4==1.7.4`), which is what unskipped the file-reading tests
@@ -4317,8 +4318,9 @@ stops trusting the list:
 4. **"AIFS beats GEFS by ~21%" rests on n=1** (§39). 2025-09-16 is still the only
    loaded run with GEFS wind — re-checked 2026-10-06. Closes when a second
    three-model run is loaded.
-5. **Where the loaded AIFS wind came from** is unresolved (§16). Staleness does
-   not explain it; the provenance is simply unknown.
+5. ~~**Where the loaded AIFS wind came from** is unresolved (§16).~~
+   **RESOLVED 2026-10-07 — §47.** It came from the cluster, exactly; the
+   mystery was a comparison spanning two runs.
 
 *Known and deliberately not acted on:*
 
@@ -4666,6 +4668,57 @@ wrong flag and getting an argparse error. That class does not show up in CI, in
 a row count, or in a network log; it shows up when someone follows the
 instructions. Which is why §45 found it: writing down a command is the only
 check that exercises its spelling.
+
+---
+
+## 47. The AIFS wind provenance mystery was a two-run comparison — 2026-10-07
+
+§16 recorded that the loaded AIFS wind *"has some other provenance that is not
+on the cluster under that name"*, on the strength of one cell: at `2025-09-08
+00Z` +120 h, (25.0, −85.0), the database held **−5.567** where the source had
+**−4.050**, and "no member index reproduces it". It sat on the open list for
+weeks as the item that might never close.
+
+**The data was never wrong.** Checked against the cluster:
+
+| | |
+|---|---|
+| source, 09-08 file, member 0 | **−4.050** |
+| database, run `2025-09-08 00Z`, member 0 | **−4.050** |
+| database, run `2025-09-16 00Z`, member 0 | **−5.567** |
+
+−5.567 is the **other run**. `verify()` took `init_time` as optional and, when
+omitted, compared the source directory — which is exactly one run — against
+*every* run in the database. With one run loaded that was harmless; a second run
+made it meaningless, and §16 was written in that window.
+
+**Sampled properly before declaring**, because one cell is how this started:
+768 of 768 values agree, across both wind components, six lead times (0, 24, 60,
+120, 240, 360), sixteen cells and four members. Zero differ, zero missing.
+
+`verify()` now **refuses** an ambiguous comparison rather than producing a
+confusing one, naming the loaded runs and telling the caller to pass the one the
+files belong to — the same rule `_resolve_init_time` reached independently for
+the API.
+
+### Three things worth keeping
+
+**The hypothesis that cracked it was wrong.** The suggestion was that u and v
+might be stored separately and combined into speed afterwards, so the stored
+number might be √(u²+v²). It is not — speed at that cell is 6.609, not 5.567.
+But testing it meant printing the stored values beside each other, and member 0
+read −4.050: the value §16 said was absent. **A wrong hypothesis that makes you
+look at the data beats a right-sounding note that stops you.**
+
+**"No member index reproduces it" was checkable in one query and nobody ran
+it.** Including me — I listed this item three times in a day, described it at
+length when asked, and only looked when someone proposed a mechanism. Re-stating
+a finding is not re-checking it.
+
+**This is §24's defect wearing a lab coat.** §24 was forecasts scored against the
+wrong run's truth; this is a *verification script* comparing against the wrong
+run and reporting the discrepancy as a property of the data. The tool built to
+catch run mix-ups contained one.
 
 ---
 

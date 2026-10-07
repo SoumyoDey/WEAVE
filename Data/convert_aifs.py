@@ -451,6 +451,40 @@ def verify(source, model='AIFS', variable='precipitation', init_time=None,
     if limit_hours:
         files = [p for p in files if forecast_hour(p.name) in limit_hours]
 
+    # **Refuse an ambiguous comparison rather than producing a confusing one.**
+    #
+    # Without `init_time` this compared the source directory — which is exactly
+    # one run — against *every* run in the database. With one run loaded that was
+    # harmless. With two it is how `NEXT_STEPS.md` §16 concluded that the loaded
+    # AIFS wind had "some other provenance that is not on the cluster": it
+    # reported -5.567 stored where the 09-08 source has -4.050, and -5.567 is
+    # the **09-16** run's value at that cell. Two runs, one comparison.
+    #
+    # The data was never wrong. 768 of 768 sampled values across both wind
+    # components, six lead times, sixteen cells and four members reproduce the
+    # 09-08 source exactly (§47). The mismatch was the question, not the answer.
+    #
+    # Same rule the API reached independently: `_resolve_init_time` raises when
+    # more than one run could be meant rather than picking one.
+    if not init_time:
+        cur.execute(
+            """SELECT r.initialization_time FROM forecast_runs r
+                 JOIN models m ON m.model_id = r.model_id
+                WHERE m.model_name = %s
+                  AND EXISTS (SELECT 1 FROM forecast_data f
+                               JOIN variables v ON v.variable_id = f.variable_id
+                              WHERE f.run_id = r.run_id AND v.variable_name = %s)
+                ORDER BY 1""", (model, variable))
+        runs = [r[0] for r in cur.fetchall()]
+        if len(runs) > 1:
+            listed = ', '.join(t.strftime('%Y-%m-%d %H:%M:%S') for t in runs)
+            print(f'REFUSING an ambiguous comparison: {model} {variable} has '
+                  f'{len(runs)} loaded runs ({listed}) and --verify-init-time was '
+                  f'not given, so this would compare one source directory against '
+                  f'all of them. Pass the run these files belong to.')
+            cur.close(); conn.close()
+            return False
+
     where_run = 'and r.initialization_time = %s' if init_time else ''
     member_rows = stat_rows = 0
     bad_slices, bad_stats = [], []
