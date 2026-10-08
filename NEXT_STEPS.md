@@ -5555,6 +5555,66 @@ question from the other side.
 
 ---
 
+## 60. S4, fourth piece: the Analysis tab — 2026-10-08
+
+`AnalysisTab.jsx`: **1,376 → 1,040 lines**, with four modules beside it.
+
+| | | lines |
+|---|---|---|
+| `analysis/metrics.js` | which metrics the region maps draw and what each needs | 19 |
+| `analysis/chartExport.js` | save a Recharts SVG as a PNG, over the app's background | 33 |
+| `analysis/ConeOfUncertaintyPanel.jsx` | the cone **and the band mode it owns** | 146 |
+| `analysis/SpreadSkillPanel.jsx` | spread against error, its chart ref and the SSR colour scale | 252 |
+
+The cone is the stateful one: it takes `coneMode` — Gaussian ±σ against
+empirical P10–P90 — and its chart ref with it. That toggle is not cosmetic and
+is worth keeping together with the panel that explains it: ±σ assumes a shape
+the ensemble may not have, P10–P90 is what the members actually did, and a
+skewed precipitation distribution shows the difference plainly.
+
+### What §55 constrained, and why that is the interesting part
+
+The obvious next extraction — the Verification Metrics panel — is **not** done,
+and deliberately. It reads `threshold` and `hourMin`/`hourMax`, which §55
+merged into one copy each *for the whole tab* three commits ago, precisely
+because two copies disagreed. Giving that panel its own state would re-split
+them; passing all four down as value-and-setter pairs would move the lines
+without moving the behaviour. **A seam that would undo a fix is not a seam**,
+so it stays until the panel can take the shared settings as a single owned
+object, which is a design question rather than a move.
+
+### `no-undef` is the check that matters here, and the project's lint has it off
+
+Three references broke in the move — `fmtLat`, `fmtLon` and `yAxisUnit`, all
+used inside extracted JSX and all left behind in the parent. The suite passed,
+and `npx eslint` with the project's config reported **only unused-variable
+warnings**, because `no-undef` is not enabled there. Running it explicitly
+named all three in one pass:
+
+```bash
+npx eslint --no-eslintrc --env browser,es2022 \
+  --parser-options=ecmaVersion:2022,sourceType:module,ecmaFeatures:{jsx:true} \
+  --rule '{"no-undef":"error"}' src/components/analysis/*.jsx
+```
+
+§59 found the same class of break by rendering in a browser and reading a
+compile error off the screen. This is the cheaper version of that check, and it
+is worth running on any file that has just had code moved into it — the failure
+is always the same shape and never appears in a unit test.
+
+Verified live afterwards: both panels render for a clicked point, the
+Gaussian/Empirical toggle switches the band and switches back, the spread-skill
+summary carries its units, and the console is clean.
+
+### Where the two tabs stand
+
+`ComparisonTab.jsx` 2,373 → 1,775. `AnalysisTab.jsx` 1,376 → 1,040. Neither is
+small, and the remaining bulk in both is the verification/categorical
+machinery — which is the same shared-settings question in each. Measure rather
+than quote: `wc -l src/components/*.jsx`.
+
+---
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in
