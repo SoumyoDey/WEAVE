@@ -1,5 +1,5 @@
 /**
- * One threshold for the Analysis tab.
+ * One threshold and one lead range for the Analysis tab.
  *
  * It used to hold two: `catThreshold` behind the Verification Metrics panel and
  * `regionThreshold` behind the spatial maps. Both scored **the same region**,
@@ -12,6 +12,12 @@
  * `threshold_mm_6h` for precipitation and `threshold_ms` for wind, in native
  * units. That is checked here too, because it is the assumption the merge rests
  * on and it is not visible from either call site.
+ *
+ * The lead range was the same defect in the same tab, merged straight after
+ * (§55): `catHour*` behind the panel, `regionHour*` behind the maps, both sent
+ * as plain `hour_min`/`hour_max` lead bounds. Their cleared-field fallbacks had
+ * even drifted apart — emptying the box snapped the panel to 240 h and the maps
+ * to 168.
  *
  * These render the component rather than reading its source: the point is that
  * typing in one box changes what the other box shows, which source cannot say.
@@ -111,5 +117,47 @@ describe('the assumption the merge rests on', () => {
       expect(source).toContain('threshold_mm_6h');
       expect(source).toMatch(/wind.*threshold_ms|threshold_ms.*wind/s);
     }
+  });
+});
+
+describe('the Analysis tab has one lead range', () => {
+  /** The lead-range inputs on screen, in whichever mode is open. */
+  const rangeInputs = () =>
+    screen.getAllByText('Lead times')
+      .flatMap((label) =>
+        [...(label.parentElement?.querySelectorAll('input[type=number]') ?? [])]);
+
+  it('starts at the shared default in both modes', async () => {
+    await renderTab();
+    expect(rangeInputs().map((i) => i.value)).toEqual(['0', '168']);
+    switchTo('Region');
+    expect(rangeInputs().map((i) => i.value)).toEqual(['0', '168']);
+  });
+
+  it('carries a change in one mode over to the other', async () => {
+    await renderTab();
+    const [min, max] = rangeInputs();
+    fireEvent.change(min, { target: { value: '24' } });
+    fireEvent.change(max, { target: { value: '72' } });
+    expect(rangeInputs().map((i) => i.value)).toEqual(['24', '72']);
+
+    switchTo('Region');
+    expect(rangeInputs().map((i) => i.value)).toEqual(['24', '72']);
+    switchTo('Point');
+    expect(rangeInputs().map((i) => i.value)).toEqual(['24', '72']);
+  });
+
+  it('falls back to the same default from either box when cleared', async () => {
+    // The two used to disagree about this: emptying the panel's box snapped to
+    // 240 h and emptying the maps' box to 168, so the recovery value depended
+    // on which mode you happened to be in.
+    await renderTab();
+    const [, max] = rangeInputs();
+    fireEvent.change(max, { target: { value: '' } });
+    expect(rangeInputs()[1].value).toBe('168');
+    switchTo('Region');
+    const [, regionMax] = rangeInputs();
+    fireEvent.change(regionMax, { target: { value: '' } });
+    expect(rangeInputs()[1].value).toBe('168');
   });
 });

@@ -5230,10 +5230,9 @@ than removing it.
 ### Still open, and it is the deeper version of the same thing
 
 ~~**Analysis holds two thresholds and two lead ranges for one region.**~~
-**The thresholds were merged on 2026-10-08 — §55.** The two lead ranges remain:
-the verification panel uses `catHour*` and the spatial maps `regionHour*`. They
-start equal and diverge the moment either is changed, exactly as the thresholds
-did.
+**Both merged on 2026-10-08 — §55.** One `threshold` and one `hourMin`/
+`hourMax` for the tab; the verification panel and the spatial maps read the
+same two.
 
 ### A phantom, recorded because it nearly reached this document
 
@@ -5277,6 +5276,29 @@ silent edit, because the next reader will otherwise find one of the two commits
 inexplicable.
 
 Five of the fourteen tests across the two files fail against the unmerged code.
+
+### And then the lead ranges, the same way
+
+Asked for straight after, and the same shape: `catHour*` behind the panel,
+`regionHour*` behind the maps, both sent as plain `hour_min`/`hour_max` lead
+bounds — the same quantity kept in two places. (`hour`, the single-lead
+parameter some metrics take, is explicitly unused on this path, so there was no
+second meaning to reconcile.) Now one `hourMin`/`hourMax`.
+
+**The merge turned up a third disagreement nobody had noticed: the two boxes
+recovered differently from being cleared.** Emptying the panel's maximum
+snapped it to 240 h; emptying the maps' maximum snapped it to 168. Both were
+written before `VERIFICATION_DEFAULTS` existed and neither was updated when
+§54 harmonised the starting values, so the defaults agreed on load and
+disagreed the moment a field was blanked. Both now fall back to the shared
+constant, and a test covers it — that one would never have been found by
+reading either handler on its own, only by putting them side by side.
+
+Verified live: typing 24 and 72 into the Point-mode range and switching to
+Region shows 24 and 72. Two of the three new range tests fail against the
+unmerged code; the third — that both modes *start* at the same value — passes
+against it, because §54 had already fixed the starting values and only the
+sharing is new.
 
 ---
 

@@ -105,8 +105,13 @@ export function AnalysisTab({
   const [threshold, setThreshold] = useState(defaultThreshold);
   const parsedThreshold = parseFloat(threshold);
   const thresholdNum = Number.isFinite(parsedThreshold) ? parsedThreshold : defaultThreshold;
-  const [catHourMin,   setCatHourMin]     = useState(VD.HOUR_MIN);
-  const [catHourMax,   setCatHourMax]     = useState(VD.HOUR_MAX);
+  // **One lead range for the whole tab**, like the threshold above and for the
+  // same reason (`NEXT_STEPS.md` §55). The verification panel and the spatial
+  // maps scored the same region over `catHour*` and `regionHour*`
+  // respectively; both send `hour_min`/`hour_max` as plain lead-hour bounds, so
+  // the two were always the same quantity kept in two places.
+  const [hourMin, setHourMin] = useState(VD.HOUR_MIN);
+  const [hourMax, setHourMax] = useState(VD.HOUR_MAX);
 
   const [catLoading,   setCatLoading]     = useState(false);
   const [catData,      setCatData]        = useState(null);  // full API response
@@ -145,8 +150,6 @@ export function AnalysisTab({
 
   // ── Region mode state ────────────────────────────────────────────────────────
   const [analysisMode,       setAnalysisMode]       = useState('point');
-  const [regionHourMin,      setRegionHourMin]      = useState(VD.HOUR_MIN);
-  const [regionHourMax,      setRegionHourMax]      = useState(VD.HOUR_MAX);
   const [spatialMaps,        setSpatialMaps]        = useState({});
   const [regionRunning,      setRegionRunning]      = useState(false);
   // per-card share feedback: { [key]: 'idle' | 'copied' }
@@ -190,8 +193,8 @@ export function AnalysisTab({
         lat:          clickedPoint.lat,
         lon:          clickedPoint.lon,
         thresholdMm6h: thresholdNum,
-        hourMin:      catHourMin,
-        hourMax:      catHourMax,
+        hourMin,
+        hourMax,
         boxCells:     catBoxCells,
         fssWindow,
       });
@@ -218,8 +221,8 @@ export function AnalysisTab({
         minLon:        b.minLon ?? b.min_lon,
         maxLon:        b.maxLon ?? b.max_lon,
         thresholdMm6h: thresholdNum,
-        hourMin:       catHourMin,
-        hourMax:       catHourMax,
+        hourMin,
+        hourMax,
         fssWindow,
       });
       setRegCatData(data);
@@ -248,8 +251,8 @@ export function AnalysisTab({
           variable:  selectedVariable,
           hour:      undefined,
           threshold: m.requiresThreshold ? thresholdNum : undefined,
-          hourMin:   regionHourMin,
-          hourMax:   regionHourMax,
+          hourMin,
+          hourMax,
           bounds,
         });
         // Nothing to draw is not an error, and asking the renderer to draw it
@@ -861,12 +864,12 @@ export function AnalysisTab({
                     {/* Hour range */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }}>Lead times</span>
-                      <input type="number" min="0" step="6" value={catHourMin}
-                        onChange={e => setCatHourMin(parseInt(e.target.value, 10) || 0)}
+                      <input type="number" min="0" step="6" value={hourMin}
+                        onChange={e => setHourMin(parseInt(e.target.value, 10) || VD.HOUR_MIN)}
                         style={{ width: '60px', padding: '4px 6px', fontSize: t.fontSize.sm, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'center', outline: 'none' }} />
                       <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.sm }}>–</span>
-                      <input type="number" min="0" step="24" value={catHourMax}
-                        onChange={e => { const n = parseInt(e.target.value, 10); setCatHourMax(Number.isNaN(n) ? 240 : n); }}
+                      <input type="number" min="0" step="24" value={hourMax}
+                        onChange={e => { const n = parseInt(e.target.value, 10); setHourMax(Number.isNaN(n) ? VD.HOUR_MAX : n); }}
                         style={{ width: '60px', padding: '4px 6px', fontSize: t.fontSize.sm, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'center', outline: 'none' }} />
                       <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.sm }}>h</span>
                     </div>
@@ -1251,12 +1254,12 @@ export function AnalysisTab({
                   {/* Hour range */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: t.fontSize.xs, whiteSpace: 'nowrap' }}>Lead times</span>
-                    <input type="number" min="0" step="6" value={regionHourMin}
-                      onChange={e => setRegionHourMin(parseInt(e.target.value, 10) || 0)}
+                    <input type="number" min="0" step="6" value={hourMin}
+                      onChange={e => setHourMin(parseInt(e.target.value, 10) || VD.HOUR_MIN)}
                       style={{ width: '52px', padding: '4px 6px', fontSize: t.fontSize.sm, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'center', outline: 'none' }} />
                     <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.xs }}>–</span>
-                    <input type="number" min="0" step="24" value={regionHourMax}
-                      onChange={e => { const n = parseInt(e.target.value, 10); setRegionHourMax(Number.isNaN(n) ? 168 : n); }}
+                    <input type="number" min="0" step="24" value={hourMax}
+                      onChange={e => { const n = parseInt(e.target.value, 10); setHourMax(Number.isNaN(n) ? VD.HOUR_MAX : n); }}
                       style={{ width: '52px', padding: '4px 6px', fontSize: t.fontSize.sm, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'center', outline: 'none' }} />
                     <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.xs }}>h</span>
                   </div>
