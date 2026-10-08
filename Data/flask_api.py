@@ -1,4 +1,5 @@
 from flask import Flask, jsonify, request, Response, g, has_request_context
+import functools
 from flask_cors import CORS
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -611,6 +612,68 @@ def return_db_connection(conn):
         connection_pool.putconn(conn, close=bool(broken))
     except Exception:
         pass
+
+
+# ── The connection, handed to a view and guaranteed back ──────────────────────
+def with_db_cursor(view):
+    """Give the view a `RealDictCursor` and return the connection afterwards.
+
+    Twenty-odd endpoints opened a connection, built a cursor, wrapped the body
+    in `try`, and closed both in a `finally` — the same lines each time
+    (`NEXT_STEPS.md` §58). The pool is **8 connections per worker**, so getting
+    that wrong does not fail at the call site: it is the eighth later request
+    hanging, and it reads as load.
+
+    The view signature gains `cursor` as its first argument. None of these
+    routes take URL parameters, so nothing else about dispatch changes.
+
+    **Three places deliberately do not use this, and all three are about the
+    acquisition itself rather than about data:**
+
+      `/api/ready`      must answer **503** when the pool is exhausted. A
+                        decorator acquires before the view body runs, so that
+                        failure would escape as a 500 — the opposite of what a
+                        load balancer needs.
+      `/api/health`     the same: it reports "unhealthy" rather than raising.
+      `_export_divisor` not a view. It is called from scoring paths and at
+                        startup, outside any request context.
+
+    Two endpoints hand the connection back early — see `release_db_cursor`.
+    """
+    @functools.wraps(view)
+    def wrapper(*args, **kwargs):
+        conn   = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        g._weave_db = (conn, cursor)
+        try:
+            return view(cursor, *args, **kwargs)
+        finally:
+            release_db_cursor()
+    return wrapper
+
+
+def release_db_cursor():
+    """Hand the connection back now rather than at the end of the view.
+
+    For the two map endpoints: rendering is CPU-bound and holding a pooled
+    connection across it starves concurrent requests — the same argument
+    `_map_figure_png`'s docstring makes. They did this by hand; now they say it
+    in one line and the decorator's `finally` finds nothing left to do.
+
+    **Idempotent**, which is what makes it safe to call from a view the
+    decorator will also clean up after. Returning a connection twice puts it in
+    the pool twice, and the second borrower then shares a connection with
+    whoever already has it.
+    """
+    held = g.pop('_weave_db', None) if has_request_context() else None
+    if held is None:
+        return
+    conn, cursor = held
+    try:
+        cursor.close()
+    except Exception:
+        pass
+    return_db_connection(conn)
 
 
 # ── Request-parameter validation helpers ──────────────────────────────────────
@@ -2219,7 +2282,8 @@ VARIABLE_UNITS = {
 
 
 @app.route('/api/forecast-data', methods=['GET'])
-def get_forecast_data():
+@with_db_cursor
+def get_forecast_data(cursor):
     model_name    = request.args.get('model', 'AIFS')
     variable_name = request.args.get('variable', 'precipitation')
     if _bad_token(model_name, variable_name):
@@ -2234,9 +2298,6 @@ def get_forecast_data():
 
     if variable_name == 'wind':
         return get_wind_data()
-
-    conn   = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
 
     try:
         run_id = get_model_run_id(cursor, model_name)
@@ -2337,13 +2398,11 @@ def get_forecast_data():
     except Exception as e:
         log.exception(f"❌ Error in forecast-data: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
-    finally:
-        cursor.close()
-        return_db_connection(conn)
 
 
 @app.route('/api/wind-data', methods=['GET'])
-def get_wind_data():
+@with_db_cursor
+def get_wind_data(cursor):
     model_name    = request.args.get('model', 'AIFS')
     if _bad_token(model_name):
         return jsonify({'error': 'Invalid model'}), 400
@@ -2354,9 +2413,6 @@ def get_wind_data():
     member        = request.args.get('member', 'mean')
     if not _valid_member(member):
         return jsonify({'error': "member must be 'mean', 'std', or an integer"}), 400
-
-    conn   = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
 
     try:
         run_id = get_model_run_id(cursor, model_name)
@@ -2458,14 +2514,12 @@ def get_wind_data():
     except Exception as e:
         log.exception(f"❌ Error in wind-data: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
-    finally:
-        cursor.close()
-        return_db_connection(conn)
 
 
 # ── NEW: Point time-series for Cone of Uncertainty chart ─────────────────────
 @app.route('/api/point-timeseries', methods=['GET'])
-def point_timeseries():
+@with_db_cursor
+def point_timeseries(cursor):
     """
     Returns mean, std, min, max, and percentiles across all ensemble members
     for every forecast hour at the nearest grid point to (lat, lon).
@@ -2483,9 +2537,6 @@ def point_timeseries():
         radius = float(request.args.get('radius', 0.5))  # degrees search radius
     except (TypeError, ValueError):
         return jsonify({'error': 'lat and lon are required and must be numeric'}), 400
-
-    conn   = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
 
     try:
         run_id = get_model_run_id(cursor, model_name)
@@ -2595,14 +2646,12 @@ def point_timeseries():
     except Exception as e:
         log.exception(f"❌ Error in point-timeseries: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
-    finally:
-        cursor.close()
-        return_db_connection(conn)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 @app.route('/api/spread-skill', methods=['GET'])
-def get_spread_skill():
+@with_db_cursor
+def get_spread_skill(cursor):
     """
     Spread-Skill Ratio and Spread-Skill Correlation for one clicked grid cell.
 
@@ -2628,9 +2677,6 @@ def get_spread_skill():
         radius = float(request.args.get('radius', 0.5))
     except (TypeError, ValueError):
         return jsonify({'error': 'lat and lon are required and must be numeric'}), 400
-
-    conn   = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
 
     try:
         run_id = get_model_run_id(cursor, model_name)
@@ -2697,13 +2743,11 @@ def get_spread_skill():
     except Exception as e:
         log.exception(f"❌ Error in spread-skill: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
-    finally:
-        cursor.close()
-        return_db_connection(conn)
 
 
 @app.route('/api/spatial-metric', methods=['GET'])
-def get_spatial_metric():
+@with_db_cursor
+def get_spatial_metric(cursor):
     """Per-cell metric maps over a bounding box.
 
     Eleven metrics, not the two this docstring used to name: the authority is
@@ -2760,8 +2804,6 @@ def get_spatial_metric():
     obs_col    = 'wind_speed' if variable == 'wind' else 'precipitation'
     var_lookup = 'wind_u_10m' if variable == 'wind' else variable
 
-    conn   = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
         run_id = get_model_run_id(cursor, model_name)
         if not run_id:
@@ -2824,9 +2866,6 @@ def get_spatial_metric():
     except Exception as e:
         log.exception(f"❌ Error in spatial-metric: {e}")
         return jsonify({'error': 'Internal server error'}), 500
-    finally:
-        cursor.close()
-        return_db_connection(conn)
 
 
 # ── Plot style registry ────────────────────────────────────────────────────────
@@ -3329,34 +3368,24 @@ def get_config():
 
 
 @app.route('/api/models', methods=['GET'])
-def get_models():
-    conn   = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-    try:
-        cursor.execute("""
-            SELECT DISTINCT m.model_name, m.model_id
-            FROM models m
-            JOIN forecast_runs fr ON m.model_id = fr.model_id
-            ORDER BY m.model_name
-        """)
-        models = cursor.fetchall()
-        return jsonify([{'name': m['model_name'], 'id': m['model_id']} for m in models])
-    finally:
-        cursor.close()
-        return_db_connection(conn)
+@with_db_cursor
+def get_models(cursor):
+    cursor.execute("""
+        SELECT DISTINCT m.model_name, m.model_id
+        FROM models m
+        JOIN forecast_runs fr ON m.model_id = fr.model_id
+        ORDER BY m.model_name
+    """)
+    models = cursor.fetchall()
+    return jsonify([{'name': m['model_name'], 'id': m['model_id']} for m in models])
 
 
 @app.route('/api/variables', methods=['GET'])
-def get_variables():
-    conn   = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-    try:
-        cursor.execute("SELECT variable_name FROM variables ORDER BY variable_name")
-        variables = cursor.fetchall()
-        return jsonify([v['variable_name'] for v in variables])
-    finally:
-        cursor.close()
-        return_db_connection(conn)
+@with_db_cursor
+def get_variables(cursor):
+    cursor.execute("SELECT variable_name FROM variables ORDER BY variable_name")
+    variables = cursor.fetchall()
+    return jsonify([v['variable_name'] for v in variables])
 
 
 # ── Tropical cyclone tracks ───────────────────────────────────────────────────
@@ -3366,7 +3395,8 @@ def get_variables():
 # variant of the forecast ones.
 
 @app.route('/api/cyclones', methods=['GET'])
-def list_cyclones():
+@with_db_cursor
+def list_cyclones(cursor):
     """What storms are loaded — the `/api/runs` of the cyclone tab.
 
     One row per (storm, centre, initialisation), because that is what a user
@@ -3376,27 +3406,21 @@ def list_cyclones():
     deliberately excludes rather than guessing (TC_DATA_ACCESS.md).
     """
     basin = request.args.get('basin')
-    conn = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-    try:
-        cursor.execute(f"""
-            SELECT storm_name, centre, system, init_time, basin, basin_source,
-                   nominal_members, tracked_members, genesis_variants,
-                   lead_min, lead_max
-            FROM cyclone_run_registry
-            {'WHERE basin = %s' if basin else ''}
-            ORDER BY init_time DESC, storm_name, centre
-        """, (basin,) if basin else ())
-        rows = [{**r, 'init_time': r['init_time'].isoformat()}
-                for r in cursor.fetchall()]
-        storms = []
-        for r in rows:
-            if r['storm_name'] not in storms:
-                storms.append(r['storm_name'])
-        return jsonify({'storms': storms, 'runs': rows})
-    finally:
-        cursor.close()
-        return_db_connection(conn)
+    cursor.execute(f"""
+        SELECT storm_name, centre, system, init_time, basin, basin_source,
+               nominal_members, tracked_members, genesis_variants,
+               lead_min, lead_max
+        FROM cyclone_run_registry
+        {'WHERE basin = %s' if basin else ''}
+        ORDER BY init_time DESC, storm_name, centre
+    """, (basin,) if basin else ())
+    rows = [{**r, 'init_time': r['init_time'].isoformat()}
+            for r in cursor.fetchall()]
+    storms = []
+    for r in rows:
+        if r['storm_name'] not in storms:
+            storms.append(r['storm_name'])
+    return jsonify({'storms': storms, 'runs': rows})
 
 
 # ── One track per member ──────────────────────────────────────────────────────
@@ -3433,7 +3457,8 @@ _PRIMARY_TRACK_JOIN = """
 
 
 @app.route('/api/cyclone/tracks', methods=['GET'])
-def cyclone_tracks():
+@with_db_cursor
+def cyclone_tracks(cursor):
     """Every member's track for one storm, from one centre, at one init.
 
     The spaghetti map. Returns the members as separate polylines rather than a
@@ -3454,94 +3479,89 @@ def cyclone_tracks():
     if not storm or not centre:
         return jsonify({'error': 'storm and centre are required'}), 400
 
-    conn = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-    try:
-        cursor.execute("""
-            SELECT storm_name, centre, system, init_time, basin, basin_source,
-                   nominal_members, tracked_members, genesis_variants
-            FROM cyclone_run_registry
-            WHERE storm_name = %s AND centre = %s
-              AND (%s::timestamp IS NULL OR init_time = %s::timestamp)
-            ORDER BY init_time DESC LIMIT 1
-        """, (storm, centre, init, init))
-        run = cursor.fetchone()
-        if run is None:
-            return jsonify({'error': f'no run for {storm} from {centre}'}), 404
+    cursor.execute("""
+        SELECT storm_name, centre, system, init_time, basin, basin_source,
+               nominal_members, tracked_members, genesis_variants
+        FROM cyclone_run_registry
+        WHERE storm_name = %s AND centre = %s
+          AND (%s::timestamp IS NULL OR init_time = %s::timestamp)
+        ORDER BY init_time DESC LIMIT 1
+    """, (storm, centre, init, init))
+    run = cursor.fetchone()
+    if run is None:
+        return jsonify({'error': f'no run for {storm} from {centre}'}), 404
 
-        cursor.execute(_PRIMARY_TRACK_CTE + """
-            SELECT t.member_id, t.lead_hours, t.valid_time, t.latitude,
-                   t.longitude, t.pressure_hpa, t.wind_ms
-            FROM cyclone_track_member t""" + _PRIMARY_TRACK_JOIN + """
-            WHERE t.storm_name = %s AND t.centre = %s AND t.init_time = %s
-            ORDER BY t.member_id, t.lead_hours
-        """, (storm, centre, run['init_time'], storm, centre, run['init_time']))
-        members = {}
-        for r in cursor.fetchall():
-            members.setdefault(r['member_id'], []).append({
-                'lead': r['lead_hours'],
-                'valid_time': r['valid_time'].isoformat(),
-                'lat': r['latitude'], 'lon': r['longitude'],
-                'pressure_hpa': r['pressure_hpa'], 'wind_ms': r['wind_ms'],
-            })
-
-        # How many members had a second candidate cyclone that the selection
-        # above discarded. Reported rather than assumed-zero: it is zero for
-        # every run in this archive, and a response that quietly stopped saying
-        # so would be indistinguishable from one where it had stopped being
-        # true. Cheap — it reads the same rows the planner has just scanned.
-        cursor.execute("""
-            SELECT count(*) AS n FROM (
-                SELECT member_id FROM cyclone_track_member
-                WHERE storm_name=%s AND centre=%s AND init_time=%s
-                GROUP BY member_id HAVING count(DISTINCT cyclone_id) > 1) x
-        """, (storm, centre, run['init_time']))
-        variant_members = cursor.fetchone()['n']
-
-        # The observed track over the same window, so the map can show what
-        # actually happened beside what was forecast.
-        cursor.execute("""
-            SELECT valid_time, latitude, longitude, wmo_wind, wmo_pressure, nature
-            FROM cyclone_best_track
-            WHERE storm_name = %s
-              AND valid_time BETWEEN
-                  (SELECT min(valid_time) FROM cyclone_track_member
-                    WHERE storm_name=%s AND centre=%s AND init_time=%s)
-              AND (SELECT max(valid_time) FROM cyclone_track_member
-                    WHERE storm_name=%s AND centre=%s AND init_time=%s)
-            ORDER BY valid_time
-        """, (storm, storm, centre, run['init_time'],
-              storm, centre, run['init_time']))
-        best = [{'valid_time': r['valid_time'].isoformat(),
-                 'lat': r['latitude'], 'lon': r['longitude'],
-                 'wind_ms': r['wmo_wind'], 'pressure_hpa': r['wmo_pressure'],
-                 'nature': r['nature']} for r in cursor.fetchall()]
-
-        return jsonify({
-            'storm':   run['storm_name'],
-            'centre':  run['centre'],
-            'system':  run['system'],
-            'init_time': run['init_time'].isoformat(),
-            'basin':   run['basin'],
-            'basin_source': run['basin_source'],
-            # Both counts, always. See the docstring.
-            'nominal_members': run['nominal_members'],
-            'tracked_members': run['tracked_members'],
-            'genesis_variants': run['genesis_variants'],
-            # Members for which a second candidate cyclone was dropped so that
-            # one member draws one line. 0 everywhere in this archive.
-            'variant_members': variant_members,
-            'members': [{'member_id': m, 'points': pts}
-                        for m, pts in sorted(members.items())],
-            'best_track': best,
+    cursor.execute(_PRIMARY_TRACK_CTE + """
+        SELECT t.member_id, t.lead_hours, t.valid_time, t.latitude,
+               t.longitude, t.pressure_hpa, t.wind_ms
+        FROM cyclone_track_member t""" + _PRIMARY_TRACK_JOIN + """
+        WHERE t.storm_name = %s AND t.centre = %s AND t.init_time = %s
+        ORDER BY t.member_id, t.lead_hours
+    """, (storm, centre, run['init_time'], storm, centre, run['init_time']))
+    members = {}
+    for r in cursor.fetchall():
+        members.setdefault(r['member_id'], []).append({
+            'lead': r['lead_hours'],
+            'valid_time': r['valid_time'].isoformat(),
+            'lat': r['latitude'], 'lon': r['longitude'],
+            'pressure_hpa': r['pressure_hpa'], 'wind_ms': r['wind_ms'],
         })
-    finally:
-        cursor.close()
-        return_db_connection(conn)
+
+    # How many members had a second candidate cyclone that the selection
+    # above discarded. Reported rather than assumed-zero: it is zero for
+    # every run in this archive, and a response that quietly stopped saying
+    # so would be indistinguishable from one where it had stopped being
+    # true. Cheap — it reads the same rows the planner has just scanned.
+    cursor.execute("""
+        SELECT count(*) AS n FROM (
+            SELECT member_id FROM cyclone_track_member
+            WHERE storm_name=%s AND centre=%s AND init_time=%s
+            GROUP BY member_id HAVING count(DISTINCT cyclone_id) > 1) x
+    """, (storm, centre, run['init_time']))
+    variant_members = cursor.fetchone()['n']
+
+    # The observed track over the same window, so the map can show what
+    # actually happened beside what was forecast.
+    cursor.execute("""
+        SELECT valid_time, latitude, longitude, wmo_wind, wmo_pressure, nature
+        FROM cyclone_best_track
+        WHERE storm_name = %s
+          AND valid_time BETWEEN
+              (SELECT min(valid_time) FROM cyclone_track_member
+                WHERE storm_name=%s AND centre=%s AND init_time=%s)
+          AND (SELECT max(valid_time) FROM cyclone_track_member
+                WHERE storm_name=%s AND centre=%s AND init_time=%s)
+        ORDER BY valid_time
+    """, (storm, storm, centre, run['init_time'],
+          storm, centre, run['init_time']))
+    best = [{'valid_time': r['valid_time'].isoformat(),
+             'lat': r['latitude'], 'lon': r['longitude'],
+             'wind_ms': r['wmo_wind'], 'pressure_hpa': r['wmo_pressure'],
+             'nature': r['nature']} for r in cursor.fetchall()]
+
+    return jsonify({
+        'storm':   run['storm_name'],
+        'centre':  run['centre'],
+        'system':  run['system'],
+        'init_time': run['init_time'].isoformat(),
+        'basin':   run['basin'],
+        'basin_source': run['basin_source'],
+        # Both counts, always. See the docstring.
+        'nominal_members': run['nominal_members'],
+        'tracked_members': run['tracked_members'],
+        'genesis_variants': run['genesis_variants'],
+        # Members for which a second candidate cyclone was dropped so that
+        # one member draws one line. 0 everywhere in this archive.
+        'variant_members': variant_members,
+        'members': [{'member_id': m, 'points': pts}
+                    for m, pts in sorted(members.items())],
+        'best_track': best,
+    })
 
 
 @app.route('/api/cyclone/strike-probability', methods=['GET'])
-def cyclone_strike_probability():
+@with_db_cursor
+def cyclone_strike_probability(cursor):
     """§37 feature 2: the fraction of the ensemble passing within R of each cell.
 
     A dimensionless field in [0, 1] on the 0.5° lattice — **the same shape as
@@ -3573,71 +3593,66 @@ def cyclone_strike_probability():
     if not 1 <= radius_km <= 2000:
         return jsonify({'error': 'radius_km must be between 1 and 2000'}), 400
 
-    conn = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-    try:
-        cursor.execute("""
-            SELECT init_time, nominal_members, tracked_members, system
-            FROM cyclone_run_registry
-            WHERE storm_name = %s AND centre = %s
-              AND (%s::timestamp IS NULL OR init_time = %s::timestamp)
-            ORDER BY init_time DESC LIMIT 1
-        """, (storm, centre, init, init))
-        run = cursor.fetchone()
-        if run is None:
-            return jsonify({'error': f'no run for {storm} from {centre}'}), 404
+    cursor.execute("""
+        SELECT init_time, nominal_members, tracked_members, system
+        FROM cyclone_run_registry
+        WHERE storm_name = %s AND centre = %s
+          AND (%s::timestamp IS NULL OR init_time = %s::timestamp)
+        ORDER BY init_time DESC LIMIT 1
+    """, (storm, centre, init, init))
+    run = cursor.fetchone()
+    if run is None:
+        return jsonify({'error': f'no run for {storm} from {centre}'}), 404
 
-        cursor.execute(_PRIMARY_TRACK_CTE + """
-            SELECT t.member_id, t.latitude, t.longitude
-            FROM cyclone_track_member t""" + _PRIMARY_TRACK_JOIN + """
-            WHERE t.storm_name=%s AND t.centre=%s AND t.init_time=%s
-              AND t.lead_hours BETWEEN %s AND %s
-            ORDER BY t.member_id, t.lead_hours
-        """, (storm, centre, run['init_time'],
-              storm, centre, run['init_time'], hour_min, hour_max))
-        rows = cursor.fetchall()
-        if not rows:
-            # An honest empty rather than a field of zeros: no track in the
-            # window is a different statement from "nowhere was struck".
-            return jsonify({'points': [], 'radius_km': radius_km,
-                            'nominal_members': run['nominal_members'],
-                            'tracked_members': 0,
-                            'reason': 'no track points in this lead window'})
+    cursor.execute(_PRIMARY_TRACK_CTE + """
+        SELECT t.member_id, t.latitude, t.longitude
+        FROM cyclone_track_member t""" + _PRIMARY_TRACK_JOIN + """
+        WHERE t.storm_name=%s AND t.centre=%s AND t.init_time=%s
+          AND t.lead_hours BETWEEN %s AND %s
+        ORDER BY t.member_id, t.lead_hours
+    """, (storm, centre, run['init_time'],
+          storm, centre, run['init_time'], hour_min, hour_max))
+    rows = cursor.fetchall()
+    if not rows:
+        # An honest empty rather than a field of zeros: no track in the
+        # window is a different statement from "nowhere was struck".
+        return jsonify({'points': [], 'radius_km': radius_km,
+                        'nominal_members': run['nominal_members'],
+                        'tracked_members': 0,
+                        'reason': 'no track points in this lead window'})
 
-        # Unwrapped against the first point, so a storm across ±180 is one
-        # field rather than two with a gap. Wrapped again on the way out.
-        reference = rows[0]['longitude']
-        tracks = {}
-        for r in rows:
-            lon = r['longitude']
-            previous = tracks.get(r['member_id'], [(None, reference)])[-1][1]
-            while lon - previous > 180:
-                lon -= 360
-            while previous - lon > 180:
-                lon += 360
-            tracks.setdefault(r['member_id'], []).append((r['latitude'], lon))
+    # Unwrapped against the first point, so a storm across ±180 is one
+    # field rather than two with a gap. Wrapped again on the way out.
+    reference = rows[0]['longitude']
+    tracks = {}
+    for r in rows:
+        lon = r['longitude']
+        previous = tracks.get(r['member_id'], [(None, reference)])[-1][1]
+        while lon - previous > 180:
+            lon -= 360
+        while previous - lon > 180:
+            lon += 360
+        tracks.setdefault(r['member_id'], []).append((r['latitude'], lon))
 
-        field = cyclone_metrics.strike_probability(
-            tracks, run['nominal_members'], radius_km=radius_km)
-        peak, cells = cyclone_metrics.summarise(field)
-        return jsonify({
-            'storm': storm, 'centre': centre, 'system': run['system'],
-            'init_time': run['init_time'].isoformat(),
-            'radius_km': radius_km,
-            'hour_min': hour_min, 'hour_max': hour_max,
-            'nominal_members': run['nominal_members'],
-            'tracked_members': run['tracked_members'],
-            'peak': round(peak, 4), 'cells': cells,
-            'points': [{'lat': lat, 'lon': cyclone_metrics.wrap(lon),
-                        'value': round(v, 4)} for lat, lon, v in field],
-        })
-    finally:
-        cursor.close()
-        return_db_connection(conn)
+    field = cyclone_metrics.strike_probability(
+        tracks, run['nominal_members'], radius_km=radius_km)
+    peak, cells = cyclone_metrics.summarise(field)
+    return jsonify({
+        'storm': storm, 'centre': centre, 'system': run['system'],
+        'init_time': run['init_time'].isoformat(),
+        'radius_km': radius_km,
+        'hour_min': hour_min, 'hour_max': hour_max,
+        'nominal_members': run['nominal_members'],
+        'tracked_members': run['tracked_members'],
+        'peak': round(peak, 4), 'cells': cells,
+        'points': [{'lat': lat, 'lon': cyclone_metrics.wrap(lon),
+                    'value': round(v, 4)} for lat, lon, v in field],
+    })
 
 
 @app.route('/api/cyclone/error-by-lead', methods=['GET'])
-def cyclone_error_by_lead():
+@with_db_cursor
+def cyclone_error_by_lead(cursor):
     """Track error and ensemble spread against lead time, for one run.
 
     `TC_TAB_DESIGN.md` §6 view 2, and the data for view 3. This is the existing
@@ -3658,58 +3673,53 @@ def cyclone_error_by_lead():
     if not storm or not centre:
         return jsonify({'error': 'storm and centre are required'}), 400
 
-    conn = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-    try:
-        cursor.execute("""
-            SELECT init_time, system, nominal_members, tracked_members
-            FROM cyclone_run_registry
-            WHERE storm_name = %s AND centre = %s
-              AND (%s::timestamp IS NULL OR init_time = %s::timestamp)
-            ORDER BY init_time DESC LIMIT 1
-        """, (storm, centre, init, init))
-        run = cursor.fetchone()
-        if run is None:
-            return jsonify({'error': f'no run for {storm} from {centre}'}), 404
+    cursor.execute("""
+        SELECT init_time, system, nominal_members, tracked_members
+        FROM cyclone_run_registry
+        WHERE storm_name = %s AND centre = %s
+          AND (%s::timestamp IS NULL OR init_time = %s::timestamp)
+        ORDER BY init_time DESC LIMIT 1
+    """, (storm, centre, init, init))
+    run = cursor.fetchone()
+    if run is None:
+        return jsonify({'error': f'no run for {storm} from {centre}'}), 404
 
-        cursor.execute(_PRIMARY_TRACK_CTE + """
-            SELECT t.member_id, t.lead_hours, t.valid_time, t.latitude,
-                   t.longitude
-            FROM cyclone_track_member t""" + _PRIMARY_TRACK_JOIN + """
-            WHERE t.storm_name=%s AND t.centre=%s AND t.init_time=%s
-            ORDER BY t.lead_hours, t.member_id
-        """, (storm, centre, run['init_time'], storm, centre, run['init_time']))
-        points = [(r['member_id'], r['lead_hours'], r['valid_time'],
-                   r['latitude'], r['longitude']) for r in cursor.fetchall()]
+    cursor.execute(_PRIMARY_TRACK_CTE + """
+        SELECT t.member_id, t.lead_hours, t.valid_time, t.latitude,
+               t.longitude
+        FROM cyclone_track_member t""" + _PRIMARY_TRACK_JOIN + """
+        WHERE t.storm_name=%s AND t.centre=%s AND t.init_time=%s
+        ORDER BY t.lead_hours, t.member_id
+    """, (storm, centre, run['init_time'], storm, centre, run['init_time']))
+    points = [(r['member_id'], r['lead_hours'], r['valid_time'],
+               r['latitude'], r['longitude']) for r in cursor.fetchall()]
 
-        cursor.execute("""
-            SELECT valid_time, latitude, longitude
-            FROM cyclone_best_track WHERE storm_name = %s
-        """, (storm,))
-        best = {r['valid_time']: (r['latitude'], r['longitude'])
-                for r in cursor.fetchall()}
+    cursor.execute("""
+        SELECT valid_time, latitude, longitude
+        FROM cyclone_best_track WHERE storm_name = %s
+    """, (storm,))
+    best = {r['valid_time']: (r['latitude'], r['longitude'])
+            for r in cursor.fetchall()}
 
-        rows = cyclone_metrics.error_by_lead(points, best)
-        return jsonify({
-            'storm': storm, 'centre': centre, 'system': run['system'],
-            'init_time': run['init_time'].isoformat(),
-            'nominal_members': run['nominal_members'],
-            'tracked_members': run['tracked_members'],
-            # The lead beyond which the observation record stops. Named rather
-            # than left for a reader to infer from a line that simply ends:
-            # "the forecast outruns the truth" is a live behaviour here, not an
-            # error (NEXT_STEPS.md item 4).
-            'last_verified_lead': max((r['lead'] for r in rows
-                                       if r['verified']), default=None),
-            'points': rows,
-        })
-    finally:
-        cursor.close()
-        return_db_connection(conn)
+    rows = cyclone_metrics.error_by_lead(points, best)
+    return jsonify({
+        'storm': storm, 'centre': centre, 'system': run['system'],
+        'init_time': run['init_time'].isoformat(),
+        'nominal_members': run['nominal_members'],
+        'tracked_members': run['tracked_members'],
+        # The lead beyond which the observation record stops. Named rather
+        # than left for a reader to infer from a line that simply ends:
+        # "the forecast outruns the truth" is a live behaviour here, not an
+        # error (NEXT_STEPS.md item 4).
+        'last_verified_lead': max((r['lead'] for r in rows
+                                   if r['verified']), default=None),
+        'points': rows,
+    })
 
 
 @app.route('/api/runs', methods=['GET'])
-def get_runs():
+@with_db_cursor
+def get_runs(cursor):
     """What forecast data is actually loaded, per model, variable and run.
 
     DATA_EXPANSION_DESIGN.md phase 2 asks for this so the UI can populate a run
@@ -3720,46 +3730,41 @@ def get_runs():
     `runs` is the distinct initialisation times, newest first, which is what a
     selector needs; `entries` is the per-(model, variable) detail behind them.
     """
-    conn   = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-    try:
-        entries = available_runs(cursor)
-        runs = []
-        for e in entries:
-            t = e['init_time'].isoformat()
-            if t not in runs:
-                runs.append(t)
-        by_run = {}
-        for e in entries:
-            t = e['init_time'].isoformat()
-            by_run.setdefault(t, {'init_time': t, 'models': {}, 'variables': []})
-            by_run[t]['models'].setdefault(e['model_name'], {
-                'n_members': e['n_members'],
-                'variables': [],
-            })
-            m = by_run[t]['models'][e['model_name']]
-            m['variables'].append({
-                'variable': e['variable_name'],
-                'hour_min': e['hour_min'],
-                'hour_max': e['hour_max'],
-                'export_divisor_h': e['export_divisor_h'],
-            })
-            if e['variable_name'] not in by_run[t]['variables']:
-                by_run[t]['variables'].append(e['variable_name'])
-        return jsonify({
-            'runs':    runs,
-            'latest':  runs[0] if runs else None,
-            'detail':  [by_run[t] for t in runs],
-            'entries': [{**e, 'init_time': e['init_time'].isoformat()}
-                        for e in entries],
+    entries = available_runs(cursor)
+    runs = []
+    for e in entries:
+        t = e['init_time'].isoformat()
+        if t not in runs:
+            runs.append(t)
+    by_run = {}
+    for e in entries:
+        t = e['init_time'].isoformat()
+        by_run.setdefault(t, {'init_time': t, 'models': {}, 'variables': []})
+        by_run[t]['models'].setdefault(e['model_name'], {
+            'n_members': e['n_members'],
+            'variables': [],
         })
-    finally:
-        cursor.close()
-        return_db_connection(conn)
+        m = by_run[t]['models'][e['model_name']]
+        m['variables'].append({
+            'variable': e['variable_name'],
+            'hour_min': e['hour_min'],
+            'hour_max': e['hour_max'],
+            'export_divisor_h': e['export_divisor_h'],
+        })
+        if e['variable_name'] not in by_run[t]['variables']:
+            by_run[t]['variables'].append(e['variable_name'])
+    return jsonify({
+        'runs':    runs,
+        'latest':  runs[0] if runs else None,
+        'detail':  [by_run[t] for t in runs],
+        'entries': [{**e, 'init_time': e['init_time'].isoformat()}
+                    for e in entries],
+    })
 
 
 @app.route('/api/forecast-hours', methods=['GET'])
-def forecast_hours():
+@with_db_cursor
+def forecast_hours(cursor):
     """The lead times a run actually holds, for one model and variable.
 
     The timeline used a constant: `for (let h = 0; h <= 360; h += 6)` in
@@ -3790,43 +3795,38 @@ def forecast_hours():
     if _bad_token(model_name, variable):
         return jsonify({'error': 'Invalid model or variable'}), 400
 
-    conn   = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-    try:
-        requested = request.args.get('init_time', _UNSET)
-        init_time = _resolve_init_time(cursor, model_name, requested)
-        # `None` means no run is loaded for this model at all — an unknown name,
-        # or a model this database does not have. Answered as 404 rather than an
-        # empty list, because "no such run" and "this run holds no hours for
-        # that variable" are different facts and a client that conflates them
-        # cannot tell a typo from a gap. Without this guard the `.isoformat()`
-        # below raised and the endpoint 500ed; a test caught it.
-        if init_time is None:
-            return jsonify({'error': f'no loaded run for {model_name}',
-                            'hint': 'GET /api/runs lists what is loaded'}), 404
-        cursor.execute("""
-            SELECT array_agg(DISTINCT forecast_hour ORDER BY forecast_hour) AS hours
-            FROM regridded_forecast_ens
-            WHERE model_name = %s AND variable_name = %s AND init_time = %s
-        """, (model_name, variable, init_time))
-        hours = cursor.fetchone()['hours'] or []
-        return jsonify({
-            'model':     model_name,
-            'variable':  variable,
-            'init_time': init_time.isoformat(),
-            'hours':     hours,
-            # Stated so a caller can tell "this run holds nothing for this
-            # variable" from "the request was wrong", which an empty list alone
-            # does not distinguish.
-            'count':     len(hours),
-        })
-    finally:
-        cursor.close()
-        return_db_connection(conn)
+    requested = request.args.get('init_time', _UNSET)
+    init_time = _resolve_init_time(cursor, model_name, requested)
+    # `None` means no run is loaded for this model at all — an unknown name,
+    # or a model this database does not have. Answered as 404 rather than an
+    # empty list, because "no such run" and "this run holds no hours for
+    # that variable" are different facts and a client that conflates them
+    # cannot tell a typo from a gap. Without this guard the `.isoformat()`
+    # below raised and the endpoint 500ed; a test caught it.
+    if init_time is None:
+        return jsonify({'error': f'no loaded run for {model_name}',
+                        'hint': 'GET /api/runs lists what is loaded'}), 404
+    cursor.execute("""
+        SELECT array_agg(DISTINCT forecast_hour ORDER BY forecast_hour) AS hours
+        FROM regridded_forecast_ens
+        WHERE model_name = %s AND variable_name = %s AND init_time = %s
+    """, (model_name, variable, init_time))
+    hours = cursor.fetchone()['hours'] or []
+    return jsonify({
+        'model':     model_name,
+        'variable':  variable,
+        'init_time': init_time.isoformat(),
+        'hours':     hours,
+        # Stated so a caller can tell "this run holds nothing for this
+        # variable" from "the request was wrong", which an empty list alone
+        # does not distinguish.
+        'count':     len(hours),
+    })
 
 
 @app.route('/api/observation-coverage', methods=['GET'])
-def observation_coverage():
+@with_db_cursor
+def observation_coverage(cursor):
     """How far the observation record reaches, in lead-time terms.
 
     Every scored endpoint already reports when a *particular* query found no
@@ -3859,8 +3859,6 @@ def observation_coverage():
     # Wind is instantaneous, so its window is the hour it is valid for.
     window  = 1 if is_wind else COMMON_VERIFICATION_WINDOW_HOURS
 
-    conn   = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
         init_time = _resolve_init_time(cursor, model_name)
         cursor.execute("""
@@ -3899,9 +3897,6 @@ def observation_coverage():
     except Exception as e:
         log.exception(f"❌ Error in observation-coverage: {e}")
         return jsonify({'error': 'Internal server error'}), 500
-    finally:
-        cursor.close()
-        return_db_connection(conn)
 
 
 def _check_export_convention(cursor, model_name='GEFS', init_time=None):
@@ -4148,7 +4143,8 @@ def health_check():
 
 
 @app.route('/api/compare/timeseries', methods=['POST'])
-def compare_timeseries():
+@with_db_cursor
+def compare_timeseries(cursor):
     """
     Returns ensemble mean and std per forecast hour for multiple models at a
     single lat/lon point, queried from regridded_forecast_ens.
@@ -4188,8 +4184,6 @@ def compare_timeseries():
     if not models:
         return jsonify({'error': 'No models specified'}), 400
 
-    conn   = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
         _key = _body_cache_key('cmp-ts', cursor, body, (
             'models', 'variable', 'lat', 'lon', 'hour_min', 'hour_max',
@@ -4266,13 +4260,11 @@ def compare_timeseries():
     except Exception as e:
         log.exception(f"❌ Error in compare/timeseries: {e}")
         return jsonify({'error': 'Internal server error'}), 500
-    finally:
-        cursor.close()
-        return_db_connection(conn)
 
 
 @app.route('/api/compare/skill', methods=['POST'])
-def compare_skill():
+@with_db_cursor
+def compare_skill(cursor):
     """
     Computes per-hour and summary skill metrics (SSR, CRPS, Bias, MAE, RMSE)
     by matching regridded_forecast_ens values against regridded_observation at the
@@ -4310,8 +4302,6 @@ def compare_skill():
     if not models:
         return jsonify({'error': 'No models specified'}), 400
 
-    conn   = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
         # Deterministic, and 2.7 s for three models over the full lead-time
         # range. The Comparison point panel re-requests it on every parameter
@@ -4456,12 +4446,13 @@ def compare_skill():
         traceback.print_exc()
         log.exception(f"❌ Error in compare/skill: {e}")
         return jsonify({'error': 'Internal server error'}), 500
-    finally:
-        cursor.close()
-        return_db_connection(conn)
 
 
 @app.route('/api/compare/spatial-agreement', methods=['POST'])
+# NOT `@with_db_cursor`, and the reason is three lines below: this endpoint
+# answers a cache hit WITHOUT taking a connection, and the decorator acquires
+# before the view body runs. `test_a_cached_render_short_circuits_before_any
+# _query` pins that and caught the regression when this was decorated (§58).
 def compare_spatial_agreement():
     """
     Renders a Cartopy/matplotlib map of model disagreement (STDDEV of ensemble
@@ -4686,7 +4677,8 @@ def compare_spatial_agreement():
 
 
 @app.route('/api/categorical-metrics', methods=['POST'])
-def categorical_metrics_endpoint():
+@with_db_cursor
+def categorical_metrics_endpoint(cursor):
     """
     Computes categorical and probabilistic verification metrics at a point.
 
@@ -4769,8 +4761,6 @@ def categorical_metrics_endpoint():
     except (TypeError, ValueError):
         return jsonify({'error': 'threshold must be numeric'}), 400
 
-    conn   = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
         # ── 1. Forecast rows ─────────────────────────────────────────────────
         init_time_val = _resolve_init_time(cursor, model_name)
@@ -5075,13 +5065,11 @@ def categorical_metrics_endpoint():
         import traceback; traceback.print_exc()
         log.exception(f"❌ Error in categorical-metrics: {e}")
         return jsonify({'error': 'Internal server error'}), 500
-    finally:
-        cursor.close()
-        return_db_connection(conn)
 
 
 @app.route('/api/region-categorical-metrics', methods=['POST'])
-def region_categorical_metrics_endpoint():
+@with_db_cursor
+def region_categorical_metrics_endpoint(cursor):
     """
     Computes categorical + probabilistic verification metrics aggregated over
     a spatial bounding box, plus FSS (Fractions Skill Score).
@@ -5120,8 +5108,6 @@ def region_categorical_metrics_endpoint():
     except (TypeError, ValueError):
         return jsonify({'error': 'threshold must be numeric'}), 400
 
-    conn   = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
         # ── 1. Fetch all forecast grid points in bbox ─────────────────────────
         init_time_val = _resolve_init_time(cursor, model_name)
@@ -5372,9 +5358,6 @@ def region_categorical_metrics_endpoint():
         import traceback; traceback.print_exc()
         log.exception(f"❌ Error in region-categorical-metrics: {e}")
         return jsonify({'error': 'Internal server error'}), 500
-    finally:
-        cursor.close()
-        return_db_connection(conn)
 
 
 def _categorical_hours_for_box(cursor, model_name, fcst_var, obs_var, obs_src,
@@ -5503,7 +5486,8 @@ def _categorical_hours_for_box(cursor, model_name, fcst_var, obs_var, obs_src,
 
 
 @app.route('/api/compare/categorical', methods=['POST'])
-def compare_categorical():
+@with_db_cursor
+def compare_categorical(cursor):
     """Per-model categorical skill (CSI/POD/FAR/FSS) over lead time, evaluated
     over a small neighbourhood around a point so FSS is meaningful.
 
@@ -5566,8 +5550,6 @@ def compare_categorical():
     min_lat, max_lat = lat - hw, lat + hw
     min_lon, max_lon = lon - hw, lon + hw
 
-    conn   = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
         per_model  = {}
         summaries  = {}
@@ -5615,9 +5597,6 @@ def compare_categorical():
         import traceback; traceback.print_exc()
         log.exception(f"❌ Error in compare/categorical: {e}")
         return jsonify({'error': 'Internal server error'}), 500
-    finally:
-        cursor.close()
-        return_db_connection(conn)
 
 
 # ── Region-level model comparison ─────────────────────────────────────────────
@@ -5759,7 +5738,8 @@ def _region_metric_points(cursor, model_name, variable, metrics,
 
 
 @app.route('/api/compare/region-metrics', methods=['POST'])
-def compare_region_metrics():
+@with_db_cursor
+def compare_region_metrics(cursor):
     """Region-mean verification metrics for several models over one bbox.
 
     Request JSON:
@@ -5826,8 +5806,6 @@ def compare_region_metrics():
 
     need_corr = 'correlation' in metrics
 
-    conn   = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
         # The most expensive endpoint in the app, and the Comparison tab
         # requests it on every parameter change. Deterministic, so cacheable.
@@ -5955,15 +5933,13 @@ def compare_region_metrics():
         import traceback; traceback.print_exc()
         log.exception(f"❌ Error in compare/region-metrics: {e}")
         return jsonify({'error': 'Internal server error'}), 500
-    finally:
-        cursor.close()
-        return_db_connection(conn)
 
 
 
 
 @app.route('/api/compare/spatial-diff', methods=['POST'])
-def compare_spatial_diff():
+@with_db_cursor
+def compare_spatial_diff(cursor):
     """Per-cell difference (model A − model B) of one metric, rendered as a PNG.
 
     Request JSON:
@@ -6015,8 +5991,6 @@ def compare_spatial_diff():
     except (TypeError, ValueError):
         return jsonify({'error': 'threshold must be numeric'}), 400
 
-    conn   = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
         pts_a = _single_metric_points(cursor, model_a, variable, metric,
                                       min_lat, max_lat, min_lon, max_lon,
@@ -6034,9 +6008,9 @@ def compare_spatial_diff():
         return jsonify({'error': 'Internal server error'}), 500
     finally:
         # Release before rendering: Cartopy work is CPU-bound and would
-        # otherwise hold a pooled connection for the whole render.
-        cursor.close()
-        return_db_connection(conn)
+        # otherwise hold a pooled connection for the whole render. Idempotent,
+        # so the decorator's release afterwards finds nothing to do.
+        release_db_cursor()
 
     diff_points, n_a, n_b = _spatial_diff_points(pts_a, pts_b)
 

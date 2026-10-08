@@ -1021,6 +1021,52 @@ class TestRendering:
 class TestConnectionPool:
     """Pool behaviour is invisible to a fake cursor by construction."""
 
+    def test_the_decorator_returns_the_connection_when_a_view_raises(self, db_client):
+        """`@with_db_cursor`'s whole job (§58).
+
+        The pool is 8 per worker, so a view that raises past its cleanup does
+        not fail at the call site — it fails as the ninth later request
+        hanging, which reads as load. Nine endpoints had no `except` at all
+        and relied on a bare `try/finally` for this; now one `finally` covers
+        every decorated view.
+        """
+        import flask_api as api
+
+        @api.with_db_cursor
+        def exploding(cursor):
+            cursor.execute('SELECT 1')
+            raise RuntimeError('boom')
+
+        before = len(api.connection_pool._used)
+        with api.app.test_request_context('/'):
+            with pytest.raises(RuntimeError):
+                exploding()
+        assert len(api.connection_pool._used) == before, 'connection not returned'
+
+    def test_releasing_early_twice_does_not_return_it_twice(self, db_client):
+        """`release_db_cursor` is called by hand in the two render endpoints
+        and again by the decorator's `finally`. Returning a connection twice
+        puts it in the pool twice, and the second borrower then shares it with
+        whoever already has it — a corruption that would surface far from here.
+        """
+        import flask_api as api
+
+        seen = []
+
+        @api.with_db_cursor
+        def releases_early(cursor):
+            cursor.execute('SELECT 1')
+            seen.append(cursor.fetchone())
+            api.release_db_cursor()
+            api.release_db_cursor()      # idempotent
+            return 'done'
+
+        before = len(api.connection_pool._used)
+        with api.app.test_request_context('/'):
+            assert releases_early() == 'done'
+        assert seen, 'the view never ran a query'
+        assert len(api.connection_pool._used) == before
+
     def test_a_failed_statement_does_not_poison_the_pool(self, db_client):
         """Without autocommit, psycopg2 opens an implicit transaction on the
         first statement; a failure leaves the connection in an aborted state and

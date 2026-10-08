@@ -5425,6 +5425,75 @@ either grows a private copy again, it stops arriving and the test fails.
 
 ---
 
+## 58. S4, second piece: `@with_db_cursor` — 2026-10-08
+
+Twenty-one endpoints now take their cursor from a decorator instead of opening
+a connection, building a cursor and closing both by hand. The pool is **8 per
+worker**, so the failure mode of getting that wrong is not an error where the
+mistake is: it is the ninth later request hanging, and it reads as load.
+
+**Nine of the twenty-one had no `except` at all** — a bare `try:` whose only
+purpose was to carry the `finally`. Those unwrap completely: the decorator owns
+the cleanup, so the `try` has nothing left to do and the body loses a level of
+indentation.
+
+### Four things deliberately do not use it
+
+Each is about the acquisition itself rather than about data, and each would be
+made worse by a decorator that acquires before the view body runs:
+
+| | why |
+|---|---|
+| `/api/ready` | must answer **503** when the pool is exhausted; acquiring outside the view turns that into a 500 — the opposite of what a load balancer needs |
+| `/api/health` | the same: it reports "unhealthy" rather than raising |
+| `/api/compare/spatial-agreement` | **answers a cache hit without taking a connection at all** |
+| `_export_divisor` | not a view; called from scoring paths and at startup, outside any request context |
+
+**The third was found by the suite, not by me.** I decorated it, and
+`test_a_cached_render_short_circuits_before_any_query` failed — a test written
+for exactly this property, pinning that a cached render never reaches the pool.
+It is restored to its manual form with the reason written above it, which is
+the honest outcome: the decorator is not universal and the exception is a real
+property rather than an oversight.
+
+### Early release, said once
+
+`/api/compare/spatial-diff` hands its connection back before the Cartopy
+render, because that work is CPU-bound and holding a pooled connection through
+it starves everything else. That was five lines of manual teardown inside a
+`finally`; it is now `release_db_cursor()`, which is **idempotent** — so the
+decorator's own release afterwards finds nothing to do. Returning a connection
+twice puts it in the pool twice and the next two borrowers share one, which is
+a corruption that would surface a long way from its cause, so the idempotence
+has a test.
+
+### How this went, which is worth recording
+
+**Two scripted mass edits corrupted the file and were reverted** before
+anything was committed. The first missed that a view's `finally` can be its
+`try`'s only clause, so removing one left a bare `try:`; the second tripped on
+section-comment banners and module-level constants between functions. The
+third attempt converted **one function per invocation**, asserted the exact
+shape it expected before touching anything, refused what it did not recognise,
+and parsed the result before writing — so a refusal cost a message rather than
+a broken file. Five endpoints were refused and handled by hand.
+
+A regex that rewrites 20 functions is a regex that has to be right 20 times.
+The per-function version was slower and never once left the file unparseable.
+
+1,113 backend tests pass, plus two new ones for the decorator's own guarantees:
+the connection comes back when a view raises, and a doubled early release does
+not return it twice. Verified live as well — eleven endpoints answered 200 and
+the pool went back to zero in use.
+
+### What is left on S4
+
+Shared chart primitives and decomposing the two tab components, both frontend;
+and config-driving the hardcoded extent / candidate hours / obs sources, which
+is §49's domain question from the other side.
+
+---
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in
