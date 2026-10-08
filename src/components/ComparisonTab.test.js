@@ -10,7 +10,10 @@
  * share a precipitation convention and a single client-side divisor was wrong
  * for two of them.
  */
-import { buildMergedTimeseries, computeScaleRatio, axisTick } from './ComparisonTab';
+import { buildMergedTimeseries, computeScaleRatio } from './ComparisonTab';
+// `axisTick` moved to the tab's chart module in §59; same function, same
+// behaviour, so this file follows it rather than the tab re-exporting it.
+import { axisTick } from './comparison/charts';
 
 const MODELS = ['AIFS', 'GEFS'];
 
