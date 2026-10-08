@@ -43,6 +43,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 jest.mock('leaflet', () => require('./testing/leafletStub'));
 import App from './App';
 import { RunProvider } from './state/RunContext';
+import { VerificationProvider } from './state/VerificationContext';
 import { resetRun } from './api/run';
 
 const RUN = '2025-09-16T00:00:00';
@@ -99,7 +100,7 @@ const installFetch = () => {
 
 const to = (fragment) => calls.filter((u) => u.includes(fragment));
 
-const renderApp = () => render(<RunProvider><App /></RunProvider>);
+const renderApp = () => render(<RunProvider><VerificationProvider><App /></VerificationProvider></RunProvider>);
 
 beforeEach(() => { resetRun(); installFetch(); });
 afterEach(() => { resetRun(); jest.restoreAllMocks(); });

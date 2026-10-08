@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import App from './App';
 import { RunProvider } from './state/RunContext';
+import { VerificationProvider } from './state/VerificationContext';
 
 /**
  * App reads the selected run from context, so it has to be rendered inside the
@@ -10,7 +11,7 @@ import { RunProvider } from './state/RunContext';
  * against one run and 400 against two. Mirroring production here is the fix;
  * softening the guard would not be.
  */
-const renderApp = () => render(<RunProvider><App /></RunProvider>);
+const renderApp = () => render(<RunProvider><VerificationProvider><App /></VerificationProvider></RunProvider>);
 
 test('renders the WEAVE application shell', () => {
   renderApp();

@@ -27,6 +27,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { AnalysisTab } from './AnalysisTab';
+import { VerificationProvider } from '../state/VerificationContext';
 
 const PROPS = {
   clickedPoint: { lat: 36.0, lon: -75.5 },
@@ -54,7 +55,12 @@ const thresholdInputs = () =>
  * that frame or it asserts against an empty document.
  */
 const renderTab = async (props = {}) => {
-  const view = render(<AnalysisTab {...PROPS} {...props} />);
+  // The settings live above the tab now (§62), so a test that renders the tab
+  // has to supply them the way `index.js` does — the same bargain `useRun`
+  // already struck. Softening the hook to default instead would reintroduce
+  // exactly what the context removes.
+  const view = render(
+    <VerificationProvider><AnalysisTab {...PROPS} {...props} /></VerificationProvider>);
   await waitFor(() => expect(thresholdInputs().length).toBeGreaterThan(0));
   return view;
 };
@@ -98,7 +104,10 @@ describe('the Analysis tab has one threshold', () => {
 
   it('switches the default with the variable, in one place', async () => {
     const { rerender } = await renderTab();
-    rerender(<AnalysisTab {...PROPS} selectedVariable="wind" />);
+    rerender(
+      <VerificationProvider>
+        <AnalysisTab {...PROPS} selectedVariable="wind" />
+      </VerificationProvider>);
     await waitFor(() =>
       expect(thresholdInputs().every((i) => i.value === '10')).toBe(true));
   });

@@ -8,6 +8,7 @@ import { fetchCategoricalMetrics, fetchRegionCategoricalMetrics } from '../api/a
 import { fetchSpatialMetric, fetchSpatialMetricPlot } from '../api/spatialApi';
 import { METRIC_CONFIG, VERIFICATION_DEFAULTS as VD } from '../constants';
 import { t } from '../theme';
+import { useVerification } from '../state/VerificationContext';
 import { fmtLat, fmtLon } from '../utils/geoUtils';
 import { EmptyState } from './ui/PanelState';
 import { REGION_METRICS } from './analysis/metrics';
@@ -52,30 +53,22 @@ export function AnalysisTab({
   const catChartRef   = useRef(null);
 
   // ── Verification Metrics state ──────────────────────────────────────────────
-  // Default threshold: 25 mm/6h for precip, 10 m/s for wind.
+  // **The settings come from the app, not from this tab** (`NEXT_STEPS.md`
+  // §62). §55 merged this tab's duplicate threshold and lead range into one
+  // copy each; this takes the last step and shares that copy with the
+  // Comparison tab, which held its own. Two tabs answering one question with
+  // different thresholds is the defect, and it survived every earlier fix
+  // because each fix made one tab internally consistent.
   //
-  // **One threshold for the whole tab** (`NEXT_STEPS.md` §55). It used to be
-  // two — one for the verification panel and one for the spatial maps — so the
-  // same region could be scored at two different thresholds with only one of
-  // them visible in each mode. They started equal and diverged the moment
-  // either was touched, which meant the disagreement only ever appeared to a
-  // user who had changed something.
-  //
-  // Merging them is safe because the units already matched: both paths send
-  // `threshold_mm_6h` for precipitation and `threshold_ms` for wind, in native
-  // units. Held as a string so the field can be empty mid-typing; readers take
+  // `threshold` is a string so a field can be empty mid-typing; readers take
   // `thresholdNum`.
-  const defaultThreshold = selectedVariable === 'wind' ? 10 : 25;
-  const [threshold, setThreshold] = useState(defaultThreshold);
-  const parsedThreshold = parseFloat(threshold);
-  const thresholdNum = Number.isFinite(parsedThreshold) ? parsedThreshold : defaultThreshold;
-  // **One lead range for the whole tab**, like the threshold above and for the
-  // same reason (`NEXT_STEPS.md` §55). The verification panel and the spatial
-  // maps scored the same region over `catHour*` and `regionHour*`
-  // respectively; both send `hour_min`/`hour_max` as plain lead-hour bounds, so
-  // the two were always the same quantity kept in two places.
-  const [hourMin, setHourMin] = useState(VD.HOUR_MIN);
-  const [hourMax, setHourMax] = useState(VD.HOUR_MAX);
+  const {
+    threshold, thresholdNum, setThreshold,
+    hourMin, setHourMin, hourMax, setHourMax,
+    fssWindow, setFssWindow,
+    boxCells: catBoxCells, setBoxCells: setCatBoxCells,
+    resetThresholdFor,
+  } = useVerification();
 
   const [catLoading,   setCatLoading]     = useState(false);
   const [catData,      setCatData]        = useState(null);  // full API response
@@ -84,17 +77,11 @@ export function AnalysisTab({
 
   // ── Region categorical state ────────────────────────────────────────────────
   const [catMode,        setCatMode]        = useState('point');  // 'point' | 'region'
-  // FSS neighbourhood width in grid cells. FSS only means something relative to
-  // a spatial scale — "skilful at 2.5 degrees" — so this is a parameter of the
-  // score, not a display option. Odd values centre cleanly on a cell.
-  // Defaults match the Comparison tab so the same score is asked the same
-  // question in both places.
-  const [fssWindow,      setFssWindow]      = useState(VD.FSS_WINDOW);
-  // The field FSS is evaluated over, in cells. It affects FSS and nothing else:
-  // the contingency table reads the centre cell at every width (verified — hits,
-  // misses and false alarms are identical at 1, 3, 5 and 9). It was 1, which made
-  // FSS structurally undefined and therefore invisible in this tab.
-  const [catBoxCells,    setCatBoxCells]    = useState(VD.BOX_CELLS);
+  // `fssWindow` and `catBoxCells` come from the same context as the threshold
+  // above. FSS only means something relative to a spatial scale — "skilful at
+  // 2.5 degrees" — and the scored area affects FSS and nothing else: the
+  // contingency table reads the centre cell at every width (verified — hits,
+  // misses and false alarms are identical at 1, 3, 5 and 9).
   const [regCatLoading,  setRegCatLoading]  = useState(false);
   const [regCatData,     setRegCatData]     = useState(null);
   const [regCatError,    setRegCatError]    = useState(null);
@@ -103,8 +90,7 @@ export function AnalysisTab({
   // Reset the threshold to the variable-appropriate default and clear stale
   // results on variable switch.
   useEffect(() => {
-    const def = selectedVariable === 'wind' ? 10 : 25;
-    setThreshold(def);
+    resetThresholdFor(selectedVariable);
     setCatData(null);
     setCatHasRun(false);
     setRegCatData(null);

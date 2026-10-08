@@ -18,6 +18,7 @@ import userEvent from '@testing-library/user-event';
 import { ComparisonTab } from './ComparisonTab';
 import { RunSelector } from './RunSelector';
 import { RunProvider } from '../state/RunContext';
+import { VerificationProvider } from '../state/VerificationContext';
 import { resetRun } from '../api/run';
 
 const FULL = '2025-09-08T00:00:00';     // AIFS, GEFS, UKMO
@@ -55,8 +56,12 @@ const renderTab = async () => {
   // the context directly.
   render(
     <RunProvider>
-      <RunSelector />
-      <ComparisonTab selectedVariable="precipitation" />
+      {/* The verification settings live above the tabs since §62, so a test
+          that renders a tab supplies them as `index.js` does. */}
+      <VerificationProvider>
+        <RunSelector />
+        <ComparisonTab selectedVariable="precipitation" />
+      </VerificationProvider>
     </RunProvider>,
   );
   await waitFor(() => expect(global.fetch).toHaveBeenCalled());

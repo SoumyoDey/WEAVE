@@ -5647,6 +5647,59 @@ so.
 
 ---
 
+## 62. One set of verification settings for the app — 2026-10-08
+
+`VERIFICATION_SETTINGS_DESIGN.md` option B, built. Stages 1–3 of four.
+
+### What it closes
+
+The same defect, found and half-fixed four times: §41 made the two surfaces use
+the same estimator, §54 made their defaults one copy, §55 merged Analysis's
+internal duplicates. Each fix made one layer consistent and left the next in
+place. The last layer was that **the two tabs held their own live copies**, so
+Analysis could sit at 5 mm/6h over 24–72 h while Comparison, one click away,
+read 0–168 h — measured in the running app before this change.
+
+Now measured after it: setting **threshold 5, leads 24–72 h, FSS 7** in
+Analysis and switching to Comparison shows 24–72 h in point mode and
+`Threshold=5, FSS neighbourhood=7` in region mode. The settings crossed the tab
+boundary because there is only one of them.
+
+| stage | |
+|---|---|
+| 1 | Comparison's own pairs merged — it still held two thresholds and two FSS windows, the defect §55 fixed in Analysis |
+| 2 | `VerificationProvider` beside `RunProvider`, `useVerification()` throwing outside it |
+| 3 | both tabs moved onto it, their local state deleted |
+| 4 | **not done**: extract `VerificationPanel` once and use it in both tabs |
+
+### The guard did its job before any user saw it
+
+`useVerification()` throws outside its provider, like `useRun()`, and the
+moment the tabs started using it **twenty tests failed** — every file that
+renders a tab or the app. That is the design working: each of those renders was
+a component that would otherwise have scored at private defaults nothing on
+screen reports. The fix is to supply the provider as `index.js` does, never to
+soften the hook.
+
+### A test that changed sides, again
+
+`verificationDefaults.test.js` asserted that each tab's settings *start* from
+`VERIFICATION_DEFAULTS` — the most that could be asked while each tab held its
+own. With one copy the question becomes "is there more than one copy", so it
+now asserts that **neither tab declares any of these as local state** and that
+the context seeds them from the constant. The old assertion is quoted in the
+docstring with why it was right at the time. That is the second test this week
+to flip (§55 was the first), and both flips mean the same thing: the property
+worth pinning moved because the design did.
+
+### What is left
+
+Stage 4 — one `VerificationPanel`, used by both tabs — is what the whole
+sequence was for. It is now a plain extraction: the panel reads context, so it
+takes no settings props at all, which is the thing §60 could not do.
+
+---
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in

@@ -34,26 +34,51 @@ const read = (file) =>
 
 const SOURCES = { AnalysisTab: read('AnalysisTab.jsx'), ComparisonTab: read('ComparisonTab.jsx') };
 
-/** Every `useState(...)` for a verification setting, with its initialiser. */
-const settingsIn = (source) => {
-  const out = {};
-  const re = /const \[(\w*(?:[Hh]our(?:Min|Max)|[Ff]ssWindow|[Bb]oxCells))[,\]][^=]*=\s*useState\(([^)]*)\)/g;
+/** Any `useState(...)` a file declares for a verification setting. */
+const localSettingsIn = (source) => {
+  const out = [];
+  const re = /const \[(\w*(?:[Hh]our(?:Min|Max)|[Tt]hreshold|[Ff]ssWindow|[Bb]oxCells))[,\]][^=]*=\s*useState\(/g;
   let m;
-  while ((m = re.exec(source))) out[m[1]] = m[2].trim();
+  while ((m = re.exec(source))) out.push(m[1]);
   return out;
 };
 
-describe('the scored surfaces start at the same settings', () => {
-  it.each(Object.keys(SOURCES))('%s has verification settings to check', (file) => {
-    // Guard against the regex silently matching nothing, which would make
-    // every test below vacuously true.
-    expect(Object.keys(settingsIn(SOURCES[file])).length).toBeGreaterThanOrEqual(4);
+describe('the scored surfaces share one set of settings', () => {
+  /**
+   * **This describe block asserted the opposite until §62, and was right to.**
+   * While each tab held its own copies, the most that could be asked was that
+   * they all *started* from `VERIFICATION_DEFAULTS` — which is what §54 fixed,
+   * after the two tabs were found 18% apart on CSI from drifted defaults
+   * alone.
+   *
+   * §62 moved the settings above the tabs into `VerificationProvider`, so the
+   * question is no longer "do the copies agree at the start" but "is there
+   * more than one copy". A tab declaring any of these as local state has
+   * stepped back out of the shared one, which is the regression worth
+   * catching — the numbers would look perfectly reasonable and simply answer a
+   * different question from the tab beside them.
+   */
+  it.each(Object.keys(SOURCES))('%s declares none of its own', (file) => {
+    expect(localSettingsIn(SOURCES[file])).toEqual([]);
   });
 
-  it.each(Object.keys(SOURCES))('%s takes every one from the shared constant', (file) => {
-    const literals = Object.entries(settingsIn(SOURCES[file]))
-      .filter(([, init]) => !init.startsWith('VD.'));
-    expect(literals).toEqual([]);
+  it('reads all four from the context', () => {
+    // The replacement for the old "takes every one from the shared constant":
+    // both tabs now get them from one provider rather than four initialisers.
+    for (const source of Object.values(SOURCES)) {
+      expect(source).toContain('useVerification()');
+    }
+  });
+
+  it('seeds the context from the shared constant', () => {
+    const context = fs.readFileSync(
+      path.join(__dirname, 'state', 'VerificationContext.jsx'), 'utf8');
+    for (const key of ['HOUR_MIN', 'HOUR_MAX', 'FSS_WINDOW', 'BOX_CELLS']) {
+      expect(context).toContain(`VD.${key}`);
+    }
+    // The threshold is the exception and cannot come from the constant: it is
+    // variable-specific (mm/6h against m/s).
+    expect(context).toContain('defaultThresholdFor');
   });
 
   it('is one range, one neighbourhood and one box for the whole app', () => {
@@ -67,7 +92,6 @@ describe('the scored surfaces start at the same settings', () => {
   it('no longer scores one surface over ten days and the rest over seven', () => {
     const all = Object.values(SOURCES).join('\n');
     expect(all).not.toMatch(/useState\(240\)/);
-    expect(all).not.toMatch(/setCatHourMax\]\s*=\s*useState\(\d/);
   });
 });
 

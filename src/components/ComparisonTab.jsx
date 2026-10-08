@@ -12,9 +12,9 @@ import {
 } from '../api/comparisonApi';
 import { fetchSpatialMetric, fetchSpatialMetricPlot } from '../api/spatialApi';
 import { SpatialAgreementPanel } from './comparison/SpatialAgreementPanel';
-import { VERIFICATION_DEFAULTS as VD } from '../constants';
 import { t } from '../theme';
 import { useRun } from '../state/RunContext';
+import { useVerification } from '../state/VerificationContext';
 import { EmptyState } from './ui/PanelState';
 import {
   MODEL_COLORS, MODEL_NAMES, PRECIP_RECORD_NOTE,
@@ -107,27 +107,25 @@ export function ComparisonTab({
   // What the user has ticked. Not what gets used — see `selectedModels` below,
   // which narrows this to the models the selected run actually holds.
   const [pickedModels, setSelectedModels] = useState(['AIFS', 'GEFS', 'UKMO']);
-  const [hourMin, setHourMin] = useState(VD.HOUR_MIN);
-  const [hourMax, setHourMax] = useState(VD.HOUR_MAX);
   const [showSpreadBands, setShowSpreadBands] = useState(true);
   const [normalizeScales, setNormalizeScales] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  // **One threshold and one FSS neighbourhood for the tab**, as Analysis has
-  // had since §55 and for the same reason (`NEXT_STEPS.md` §62). Point mode and
-  // region mode each used to keep their own: they started equal, because §54
-  // made the defaults one copy, and diverged the moment either was touched —
-  // with only one of each visible in each mode, so the tab disagreed with
-  // itself in a way only a user who had changed something could see.
+  // **The settings come from the app, not from this tab** (`NEXT_STEPS.md`
+  // §62). Point mode and region mode each kept their own threshold and FSS
+  // neighbourhood until earlier today, and the tab kept its own copies of all
+  // four separately from Analysis — so the same question could be asked at two
+  // thresholds in one tab, and at two more in the other.
   //
-  // Safe to merge because the units already matched: both paths send
-  // `threshold_mm_6h` for precipitation and `threshold_ms` for wind, in native
-  // units (`comparisonApi.js`).
-  const [threshold, setThreshold] = useState(selectedVariable === 'wind' ? 10 : 25);
-  const [fssWindow, setFssWindow] = useState(VD.FSS_WINDOW);
-  // The area scored around the point, in grid cells. Deliberately separate from
-  // fssWindow: widening the neighbourhood used to widen the box too, which moved
-  // CSI/POD/FAR when only the FSS scale was meant to change.
-  const [boxCells, setBoxCells] = useState(VD.BOX_CELLS);
+  // `boxCells` stays deliberately separate from `fssWindow`: widening the
+  // neighbourhood used to widen the box too, which moved CSI/POD/FAR when only
+  // the FSS scale was meant to change.
+  const {
+    threshold, setThreshold,
+    hourMin, setHourMin, hourMax, setHourMax,
+    fssWindow, setFssWindow,
+    boxCells, setBoxCells,
+    resetThresholdFor,
+  } = useVerification();
 
   // Loading
   const [tsLoading, setTsLoading] = useState(false);
@@ -170,14 +168,13 @@ export function ComparisonTab({
   // Thresholds are variable-specific (mm/6h vs m/s), so reset them to a sane
   // default and drop now-stale results whenever the variable changes.
   useEffect(() => {
-    const def = selectedVariable === 'wind' ? 10 : 25;
-    setThreshold(def);
+    resetThresholdFor(selectedVariable);
     setCatData(null);
     setRegionData(null);
     setModelMaps({});
     setDiffData(null);
     setHasRunRegion(false);   // back to the "click Run" prompt, not an empty section
-  }, [selectedVariable]);
+  }, [selectedVariable, resetThresholdFor]);
 
   // Derived
   const parsedLat = parseFloat(lat);

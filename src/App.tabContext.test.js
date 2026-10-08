@@ -24,6 +24,7 @@ jest.mock('leaflet', () => require('./testing/leafletStub'));
 
 import App from './App';
 import { RunProvider } from './state/RunContext';
+import { VerificationProvider } from './state/VerificationContext';
 import { resetRun } from './api/run';
 
 const RUN = '2025-09-16T00:00:00';
@@ -67,7 +68,7 @@ const openTab = async (name) => {
 };
 
 const renderApp = async () => {
-  render(<RunProvider><App /></RunProvider>);
+  render(<RunProvider><VerificationProvider><App /></VerificationProvider></RunProvider>);
   // The selector renders nothing until /api/runs answers, so every assertion
   // about its absence would otherwise pass before it had a chance to appear.
   await waitFor(() => expect(screen.getByRole('combobox', { name: 'Initialisation time' }))
