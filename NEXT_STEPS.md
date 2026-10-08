@@ -5378,6 +5378,53 @@ exists to catch.
 
 ---
 
+## 57. S4, first piece: one map renderer — 2026-10-08
+
+S4's deferred-refactor list, started. `_render_map()` was on it and turned out
+to be half-done already: `_render_metric_map_png` existed and was shared by
+`/api/spatial-metric-plot` and `/api/compare/spatial-diff`, while
+`/api/compare/spatial-agreement` carried **70 lines of the same drawing code
+inline**, under the comment *"same order as spatial_metric_plot"* — a comment
+holding two copies in step by hand.
+
+Both now draw through `_map_figure_png`: projection, figure size, the six
+Natural Earth features and their zorders, gridline styling, colourbar geometry,
+the watermark and the savefig arguments, in one place. What legitimately
+differs is passed: the colour mapping, the title, the colourbar label and ticks,
+and the margin — the agreement map sits tighter to its data (1.5/0.12) than the
+metric maps (2.0/0.18), and **both call sites now state their margin rather
+than one of them relying on a default**, so the difference is visible where you
+read it.
+
+**Verified byte-for-byte, which is the only standard worth using here.** Four
+PNGs rendered against the live database before and after — two metric maps
+(`mae`, `csi`) and two agreement maps (+6 h, +24 h) — identical SHA-256 and
+identical length, 221,556 to 237,804 bytes each. A refactor of drawing code
+either produces the same image or it does not, and "looks the same" is not a
+check.
+
+**The test pins the route, not the pixels.** Two maps disagreeing about their
+coastline weight is not something any assertion in this suite would have
+caught; nothing fails, the image just looks slightly different from the other
+one, and only to someone holding both. So the test records which calls reach
+`_map_figure_png` and asserts both endpoints arrive with their own margin — if
+either grows a private copy again, it stops arriving and the test fails.
+
+`flask_api.py` is 68 lines shorter. 1,113 backend tests pass.
+
+### What is left on S4
+
+- `@with_db_cursor`: 27 endpoints open a connection, build a cursor and close
+  both in a `finally`. The most mechanical of the remaining items and the one
+  with a correctness argument behind it, not just line count.
+- Shared chart primitives, and decomposing the two tab components — the large
+  items, both frontend.
+- Config-driving the hardcoded extent / candidate hours / obs sources / base
+  date, which is the same item as §49's domain question seen from the other
+  side.
+
+---
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in

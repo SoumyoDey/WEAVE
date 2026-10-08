@@ -2996,6 +2996,107 @@ def _plot_style(metric, variable):
 
 
 
+def _map_figure_png(lon_mesh, lat_mesh, values, lat_arr, lon_arr, *,
+                    cmap, norm, title, cbar_label,
+                    cbar_ticks=None, cbar_ticklabels=None, cbar_fontsize=9,
+                    pad_min, pad_frac):
+    """Every map this app draws, from the meshes up: base64 PNG.
+
+    **The furniture is the shared part, not the data.** Projection, figure size,
+    the six Natural Earth features and their zorders, gridline styling,
+    colourbar geometry, the watermark and the savefig arguments were written out
+    twice — once here and once inline in `/api/compare/spatial-agreement` — and
+    the second copy carried the comment "same order as spatial_metric_plot",
+    which is a comment that cannot enforce itself. Two maps differing in their
+    coastline weight or colourbar width is not a bug anything would fail on; it
+    just looks careless, and only to someone holding both.
+
+    What legitimately differs is passed in. `pad_min`/`pad_frac` size the margin
+    around the data — the agreement map uses a tighter 1.5/0.12 against this
+    one's 2.0/0.18, and keeping both parameterised is what makes the extraction
+    byte-for-byte rather than approximately right.
+
+    `lat_arr`/`lon_arr` are the cell CENTRES and the extent is computed from
+    them, not from the edge meshes: the two differ by half a cell and the
+    original arithmetic used the centres.
+
+    Callers must release their DB connection first — rendering is CPU-bound and
+    holding a pooled connection across it starves concurrent requests.
+    """
+    lat_range = lat_arr.max() - lat_arr.min()
+    lon_range = lon_arr.max() - lon_arr.min()
+    pad = max(pad_min, min(lat_range, lon_range) * pad_frac)
+    extent = [
+        lon_arr.min() - pad, lon_arr.max() + pad,
+        lat_arr.min() - pad, lat_arr.max() + pad,
+    ]
+
+    # OO API — no pyplot global state; see the import note.
+    proj = ccrs.PlateCarree()
+    fig  = Figure(figsize=(13, 7), dpi=130)
+    FigureCanvasAgg(fig)
+    ax   = fig.add_subplot(111, projection=proj)
+    ax.set_extent(extent, crs=proj)
+
+    # Geographic features, under the overlay.
+    ax.add_feature(cfeature.OCEAN.with_scale('50m'),
+                   facecolor='#cce4f5', zorder=0)
+    ax.add_feature(cfeature.LAND.with_scale('50m'),
+                   facecolor='#f2ede4', zorder=0)
+    ax.add_feature(cfeature.LAKES.with_scale('50m'),
+                   facecolor='#cce4f5', edgecolor='#4a7ea5', linewidth=0.4, zorder=1)
+    ax.add_feature(cfeature.RIVERS.with_scale('50m'),
+                   edgecolor='#8ab4cc', linewidth=0.3, zorder=1)
+
+    mesh = ax.pcolormesh(
+        lon_mesh, lat_mesh, values,
+        cmap=cmap, norm=norm,
+        transform=proj, alpha=0.85, zorder=2,
+    )
+
+    # Borders, coastlines, states drawn on top of the overlay.
+    ax.add_feature(cfeature.STATES.with_scale('50m'),
+                   linewidth=0.35, edgecolor='#999999', zorder=3)
+    ax.add_feature(cfeature.BORDERS.with_scale('50m'),
+                   linewidth=0.65, edgecolor='#444444', zorder=3)
+    ax.add_feature(cfeature.COASTLINE.with_scale('50m'),
+                   linewidth=0.8,  edgecolor='#1a1a1a', zorder=3)
+
+    gl = ax.gridlines(
+        draw_labels=True, linewidth=0.4, color='gray',
+        alpha=0.55, linestyle='--',
+        x_inline=False, y_inline=False,
+    )
+    gl.top_labels   = False
+    gl.right_labels = False
+    gl.xlabel_style = {'size': 9,  'color': '#333333'}
+    gl.ylabel_style = {'size': 9,  'color': '#333333'}
+
+    cbar = fig.colorbar(mesh, ax=ax, orientation='vertical',
+                        pad=0.025, shrink=0.82, aspect=26)
+    cbar.set_label(cbar_label, fontsize=10, labelpad=10, color='#222222')
+    if cbar_ticks is not None:
+        cbar.set_ticks(cbar_ticks)
+    if cbar_ticklabels is not None:
+        cbar.set_ticklabels(cbar_ticklabels, fontsize=cbar_fontsize)
+    cbar.ax.tick_params(labelcolor='#333333')
+
+    ax.set_title(title, fontsize=10.5, fontweight='bold', pad=10, color='#1a1a1a')
+
+    ax.text(0.995, 0.005, 'WEAVE', transform=ax.transAxes,
+            fontsize=7, color='gray', alpha=0.55, ha='right', va='bottom')
+
+    fig.tight_layout(pad=0.4)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=130, bbox_inches='tight',
+                facecolor='white', edgecolor='none')
+    buf.seek(0)
+    # No plt.close(): this Figure was never registered with pyplot, so it
+    # carries no global state to release and is freed on scope exit.
+    return base64.b64encode(buf.read()).decode('utf-8')
+
+
 def _render_metric_map_png(points, cmap, norm, cbar_label, title,
                            cbar_ticks=None, cbar_ticklabels=None,
                            cbar_fontsize=9):
@@ -3041,84 +3142,14 @@ def _render_metric_map_png(points, cmap, norm, cbar_label, title,
     lon_edges = np.append(lon_arr - lon_step / 2, lon_arr[-1] + lon_step / 2)
     lon_mesh, lat_mesh = np.meshgrid(lon_edges, lat_edges)
 
-    # ── Map extent ────────────────────────────────────────────────────
-    lat_range = lat_arr.max() - lat_arr.min()
-    lon_range = lon_arr.max() - lon_arr.min()
-    pad = max(2.0, min(lat_range, lon_range) * 0.18)
-    extent = [
-        lon_arr.min() - pad, lon_arr.max() + pad,
-        lat_arr.min() - pad, lat_arr.max() + pad,
-    ]
-
-    # ── Figure (OO API — no pyplot global state; see import note) ──────
-    proj = ccrs.PlateCarree()
-    fig  = Figure(figsize=(13, 7), dpi=130)
-    FigureCanvasAgg(fig)
-    ax   = fig.add_subplot(111, projection=proj)
-    ax.set_extent(extent, crs=proj)
-
-    # Geographic features
-    ax.add_feature(cfeature.OCEAN.with_scale('50m'),
-                   facecolor='#cce4f5', zorder=0)
-    ax.add_feature(cfeature.LAND.with_scale('50m'),
-                   facecolor='#f2ede4', zorder=0)
-    ax.add_feature(cfeature.LAKES.with_scale('50m'),
-                   facecolor='#cce4f5', edgecolor='#4a7ea5', linewidth=0.4, zorder=1)
-    ax.add_feature(cfeature.RIVERS.with_scale('50m'),
-                   edgecolor='#8ab4cc', linewidth=0.3, zorder=1)
-
-    # Metric overlay
-    mesh = ax.pcolormesh(
-        lon_mesh, lat_mesh, val_masked,
-        cmap=cmap, norm=norm,
-        transform=proj, alpha=0.85, zorder=2,
-    )
-
-    # Borders, coastlines, states drawn on top of overlay
-    ax.add_feature(cfeature.STATES.with_scale('50m'),
-                   linewidth=0.35, edgecolor='#999999', zorder=3)
-    ax.add_feature(cfeature.BORDERS.with_scale('50m'),
-                   linewidth=0.65, edgecolor='#444444', zorder=3)
-    ax.add_feature(cfeature.COASTLINE.with_scale('50m'),
-                   linewidth=0.8,  edgecolor='#1a1a1a', zorder=3)
-
-    # Gridlines with degree labels
-    gl = ax.gridlines(
-        draw_labels=True, linewidth=0.4, color='gray',
-        alpha=0.55, linestyle='--',
-        x_inline=False, y_inline=False,
-    )
-    gl.top_labels   = False
-    gl.right_labels = False
-    gl.xlabel_style = {'size': 9,  'color': '#333333'}
-    gl.ylabel_style = {'size': 9,  'color': '#333333'}
-
-    # Colourbar
-    cbar = fig.colorbar(mesh, ax=ax, orientation='vertical',
-                        pad=0.025, shrink=0.82, aspect=26)
-    cbar.set_label(cbar_label, fontsize=10, labelpad=10, color='#222222')
-    if cbar_ticks is not None:
-        cbar.set_ticks(cbar_ticks)
-    if cbar_ticklabels is not None:
-        cbar.set_ticklabels(cbar_ticklabels, fontsize=cbar_fontsize)
-    cbar.ax.tick_params(labelcolor='#333333')
-
-    ax.set_title(title, fontsize=10.5, fontweight='bold', pad=10, color='#1a1a1a')
-
-    # Small watermark
-    ax.text(0.995, 0.005, 'WEAVE', transform=ax.transAxes,
-            fontsize=7, color='gray', alpha=0.55, ha='right', va='bottom')
-
-    fig.tight_layout(pad=0.4)
-
-    # ── Encode PNG → base64 ───────────────────────────────────────────
-    buf = io.BytesIO()
-    fig.savefig(buf, format='png', dpi=130, bbox_inches='tight',
-                facecolor='white', edgecolor='none')
-    buf.seek(0)
-    # No plt.close(): this Figure was never registered with pyplot, so it
-    # carries no global state to release and is freed on scope exit.
-    return base64.b64encode(buf.read()).decode('utf-8')
+    return _map_figure_png(
+        lon_mesh, lat_mesh, val_masked, lat_arr, lon_arr,
+        cmap=cmap, norm=norm, title=title, cbar_label=cbar_label,
+        cbar_ticks=cbar_ticks, cbar_ticklabels=cbar_ticklabels,
+        cbar_fontsize=cbar_fontsize,
+        # Stated rather than defaulted: the margin is the one thing the two
+        # maps differ in, so both call sites say which they want.
+        pad_min=2.0, pad_frac=0.18)
 
 
 VAR_LABELS = {
@@ -4606,88 +4637,28 @@ def compare_spatial_agreement():
         cmap = plt.cm.Reds
         norm = mcolors.Normalize(vmin=0, vmax=max_disag if max_disag > 0 else 1.0)
 
-        # ── Map extent ────────────────────────────────────────────────────
-        lat_range = lat_arr.max() - lat_arr.min()
-        lon_range = lon_arr.max() - lon_arr.min()
-        pad = max(1.5, min(lat_range, lon_range) * 0.12)
-        extent = [
-            lon_arr.min() - pad, lon_arr.max() + pad,
-            lat_arr.min() - pad, lat_arr.max() + pad,
-        ]
-
-        # ── Figure (OO API — no pyplot global state; see import note) ──────
-        proj = ccrs.PlateCarree()
-        fig  = Figure(figsize=(13, 7), dpi=130)
-        FigureCanvasAgg(fig)
-        ax   = fig.add_subplot(111, projection=proj)
-        ax.set_extent(extent, crs=proj)
-
-        # Geographic features (same order as spatial_metric_plot)
-        ax.add_feature(cfeature.OCEAN.with_scale('50m'),
-                       facecolor='#cce4f5', zorder=0)
-        ax.add_feature(cfeature.LAND.with_scale('50m'),
-                       facecolor='#f2ede4', zorder=0)
-        ax.add_feature(cfeature.LAKES.with_scale('50m'),
-                       facecolor='#cce4f5', edgecolor='#4a7ea5', linewidth=0.4, zorder=1)
-        ax.add_feature(cfeature.RIVERS.with_scale('50m'),
-                       edgecolor='#8ab4cc', linewidth=0.3, zorder=1)
-
-        mesh = ax.pcolormesh(
-            lon_mesh, lat_mesh, val_masked,
-            cmap=cmap, norm=norm,
-            transform=proj, alpha=0.85, zorder=2,
-        )
-
-        ax.add_feature(cfeature.STATES.with_scale('50m'),
-                       linewidth=0.35, edgecolor='#999999', zorder=3)
-        ax.add_feature(cfeature.BORDERS.with_scale('50m'),
-                       linewidth=0.65, edgecolor='#444444', zorder=3)
-        ax.add_feature(cfeature.COASTLINE.with_scale('50m'),
-                       linewidth=0.8,  edgecolor='#1a1a1a', zorder=3)
-
-        gl = ax.gridlines(
-            draw_labels=True, linewidth=0.4, color='gray',
-            alpha=0.55, linestyle='--',
-            x_inline=False, y_inline=False,
-        )
-        gl.top_labels   = False
-        gl.right_labels = False
-        gl.xlabel_style = {'size': 9, 'color': '#333333'}
-        gl.ylabel_style = {'size': 9, 'color': '#333333'}
-
-        cbar = fig.colorbar(mesh, ax=ax, orientation='vertical',
-                            pad=0.025, shrink=0.82, aspect=26)
-        cbar.set_label(
-            f'Ensemble Mean Std Dev across Models ({unit})',
-            fontsize=10, labelpad=10, color='#222222',
-        )
-        cbar.ax.tick_params(labelcolor='#333333')
-
-        VAR_LABELS = {
+        # Same furniture as every other map (`_map_figure_png`). Only the
+        # margin differs — this one sits tighter to the data, 1.5/0.12 against
+        # the metric maps' 2.0/0.18 — and that is a parameter rather than a
+        # second copy of the drawing code.
+        #
+        # This block was that second copy until 2026-10-08, 70 lines carrying
+        # the comment "same order as spatial_metric_plot" to hold the two in
+        # step by hand (`NEXT_STEPS.md` §57).
+        VAR_LABELS_AGREEMENT = {
             'precipitation': 'Precipitation',
             'wind':          'Wind Speed',
             'wind_u_10m':    'Wind (u-component)',
             'wind_v_10m':    'Wind (v-component)',
         }
-        var_label = VAR_LABELS.get(variable, variable)
-        ax.set_title(
-            f"Model Disagreement — {var_label} — +{hour}h"
-            f" | {n_models} models | {n_points} pts",
-            fontsize=10.5, fontweight='bold', pad=10, color='#1a1a1a',
-        )
-
-        # WEAVE watermark
-        ax.text(0.995, 0.005, 'WEAVE', transform=ax.transAxes,
-                fontsize=7, color='gray', alpha=0.55, ha='right', va='bottom')
-
-        fig.tight_layout(pad=0.4)
-
-        buf = io.BytesIO()
-        fig.savefig(buf, format='png', dpi=130, bbox_inches='tight',
-                    facecolor='white', edgecolor='none')
-        buf.seek(0)
-        img_b64 = base64.b64encode(buf.read()).decode('utf-8')
-        # No plt.close() — OO Figure, no pyplot global state to release.
+        var_label = VAR_LABELS_AGREEMENT.get(variable, variable)
+        img_b64 = _map_figure_png(
+            lon_mesh, lat_mesh, val_masked, lat_arr, lon_arr,
+            cmap=cmap, norm=norm,
+            title=(f"Model Disagreement — {var_label} — +{hour}h"
+                   f" | {n_models} models | {n_points} pts"),
+            cbar_label=f'Ensemble Mean Std Dev across Models ({unit})',
+            pad_min=1.5, pad_frac=0.12)
 
         log.info(f"✅ compare/spatial-agreement: {n_points} pts, "
               f"{n_models} models, +{hour}h, {variable}")

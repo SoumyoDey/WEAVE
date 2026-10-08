@@ -973,6 +973,41 @@ class TestRendering:
             'threshold_ms': 4.5,
             'points': [{'lat': 36.0, 'lon': -75.0, 'value': 0.75}]}))
 
+    def test_both_map_endpoints_draw_through_the_one_renderer(self, db_client, monkeypatch):
+        """The furniture — projection, the six Natural Earth features and their
+        zorders, gridlines, colourbar geometry, the watermark, the savefig
+        arguments — is drawn once in `_map_figure_png` and shared (§57).
+
+        It was written out twice until 2026-10-08, the second copy carrying the
+        comment "same order as spatial_metric_plot" to hold them in step by
+        hand. Two maps that disagree about their coastline weight is not
+        something any assertion here would have caught, which is why this pins
+        the *route* rather than the pixels: if either endpoint grows its own
+        copy again, it stops going through this function and this fails.
+        """
+        import flask_api as api
+
+        seen = []
+        real = api._map_figure_png
+
+        def recording(*a, **kw):
+            seen.append(kw.get('pad_min'))
+            return real(*a, **kw)
+
+        monkeypatch.setattr(api, '_map_figure_png', recording)
+
+        db_client.post('/api/spatial-metric-plot', json={
+            'metric': 'mae', 'model': 'AIFS', 'variable': 'precipitation',
+            'points': [{'lat': lat, 'lon': lon, 'value': 1.25}
+                       for lat in fx.LATS for lon in fx.LONS]})
+        db_client.post('/api/compare/spatial-agreement', json={
+            'models': list(fx.MODELS), 'variable': 'precipitation',
+            'hour': 6, **BOX})
+
+        # Both arrived, and each kept its own margin — the one thing that
+        # legitimately differs between the two maps.
+        assert seen == [2.0, 1.5], seen
+
     def test_an_identical_request_is_served_from_cache(self, db_client):
         body = {'metric': 'bias', 'model': 'AIFS', 'variable': 'precipitation',
                 'points': [{'lat': 35.5, 'lon': -75.5, 'value': 0.8}]}
