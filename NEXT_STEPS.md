@@ -5848,12 +5848,10 @@ the push. Run all three.
 - ~~**The transport buttons do nothing while the Controls drawer is open.**~~
   **That reading was wrong — see §65.** It is a fault, and the half I looked at
   was the half that was not the fault.
-- **Four `ERR_CONNECTION_REFUSED` on one `spatial-metric` request.** Seen once,
-  in one tab, early in the session. The backend access log has no record of
-  them arriving and no reloader restart; the identical request then succeeded
-  alone and four-ways concurrent, and a fresh tab loaded with an empty console
-  and every request at 200. Recorded as unexplained-and-not-reproduced rather
-  than diagnosed, because nothing was found to diagnose.
+- ~~**Four `ERR_CONNECTION_REFUSED` on one `spatial-metric` request**, recorded
+  as unexplained-and-not-reproduced.~~ **Diagnosed — see §66.** "Nothing was
+  found to diagnose" meant I had not yet asked the one question the evidence
+  was pointing at.
 
 **The lesson is the one §49 and §63 keep teaching from the other direction.**
 The test suite checks what someone thought to assert; it does not read the
@@ -5925,7 +5923,68 @@ yet evidence; it has to fail for the reason you think it does.**
 
 ---
 
-## Standing decisions — do not undo these by accident
+## 66. The refused connections: `localhost` is two addresses — 2026-10-08
+
+§64 filed four `ERR_CONNECTION_REFUSED` as unexplained. They have a cause, it
+is exact, and the evidence that identified it was already in the §64 writeup.
+
+**The dev server binds IPv4 only.** `flask_api.py` runs
+`app.run(host='0.0.0.0')`, and `0.0.0.0` is the IPv4 wildcard —
+`lsof -nP -iTCP:5000 -sTCP:LISTEN` shows IPv4 sockets and no IPv6 one. **And
+`localhost` resolves to `::1` first:**
+
+```
+$ python -c "import socket; print(socket.getaddrinfo('localhost',5000,type=socket.SOCK_STREAM))"
+  IPv6 ('::1', 5000, 0, 0)      <- tried first
+  IPv4 ('127.0.0.1', 5000)
+```
+
+`src/api/base.js` asked for `http://localhost:5000/api`. So **every** dev
+request began by connecting to an address where nothing was listening. Chrome's
+Happy Eyeballs fallback to IPv4 hides that almost always. When it does not —
+a burst of parallel requests against an origin with no cached address-family
+preference, which is exactly a cold page load — the refusal reaches the page.
+
+Measured in the browser, which is what closed it:
+
+| URL | result |
+|---|---|
+| `http://[::1]:5000/api/health` | `TypeError: Failed to fetch` in **13 ms** |
+| `http://127.0.0.1:5000/api/health` | 200 |
+| `http://localhost:5000/api/health` | 200 *(fallback, or cached preference)* |
+
+`TypeError: Failed to fetch` is the console text §64 recorded verbatim, and the
+13 ms is why it looked like nothing happened. **The missing access-log entry
+was the whole clue and it was treated as a mystery instead of a measurement:**
+a request that never reaches the server is not a server problem, and there are
+only so many ways for a connection to fail before it arrives.
+
+**Fix:** the dev fallback is `http://127.0.0.1:5000/api`. One address, the one
+the server binds, with no resolver in the path to choose differently. Verified
+on a fresh tab — every call now goes to `127.0.0.1` and the console is empty.
+The production path was already correct: `deploy/Caddyfile` proxies to
+`127.0.0.1:5000`, so nothing shipped was affected. (`REVIEW_DEPLOY_PREREQS.md`
+§1 shows `reverse_proxy localhost:5000` in an illustrative snippet; the real
+Caddyfile does not.)
+
+### Why "could not reproduce" was worth nothing
+
+§64 leaned on three negative results. Two were sound — the single startup
+banner really does rule out a reloader restart, and 1,569 connections at up to
+300-way concurrency really do rule out the accept queue, whose backlog is 128
+against a `kern.ipc.somaxconn` of 128.
+
+The third was an artifact. The burst harness opened its sockets against
+`HOST = '127.0.0.1'`, so **it could not have reproduced a bug that only exists
+on `::1`** — it was hammering the one address that always worked. "Succeeded
+alone and four-ways concurrent" in §64 is the same mistake: `urllib` falls back
+across address families silently, so it proved the server was up and nothing
+more.
+
+That is §19's trap wearing different clothes — there, a grep that resolved the
+wrong symbol; here, a harness that resolved the wrong address. **A negative
+result is only evidence about the thing you actually exercised**, and the
+burden is to show the probe could have seen the failure at all.
 
 **GEFS precipitation will not be re-exported.** The correction in
 `SCALED_EXPORT_DIVISOR_HOURS = {'AIFS': 6.0, 'GEFS': 3.0}` is therefore

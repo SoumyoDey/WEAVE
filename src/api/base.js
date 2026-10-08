@@ -29,7 +29,26 @@
  * genuinely is on another host. That is a deployment which cannot be protected
  * by a single password, and the note above is the reason why.
  */
-const DEV_FALLBACK = 'http://localhost:5000/api';
+/**
+ * `127.0.0.1`, deliberately, and not `localhost`.
+ *
+ * `flask_api.py` runs the dev server with `host='0.0.0.0'`, which binds **IPv4
+ * only** — `lsof -nP -iTCP:5000 -sTCP:LISTEN` shows one IPv4 socket and no
+ * IPv6 one. On this machine `localhost` resolves to `::1` *first* and
+ * `127.0.0.1` second, so every call to `http://localhost:5000` begins with a
+ * connection to an address where nothing is listening. It is refused in about
+ * 13 ms, and Chrome's Happy Eyeballs fallback to IPv4 then usually hides that.
+ *
+ * Usually. When the fallback does not happen — a burst of parallel requests on
+ * a cold origin, before any address-family preference is cached — the refusal
+ * reaches the page as `TypeError: Failed to fetch`, and **the server has no
+ * record of it**, because the request never arrived (`NEXT_STEPS.md` §66).
+ *
+ * Naming the literal removes the ambiguity rather than relying on a fallback:
+ * there is one address, it is the one the server binds, and it cannot resolve
+ * to anything else. `REACT_APP_API_URL` still overrides for a real remote API.
+ */
+const DEV_FALLBACK = 'http://127.0.0.1:5000/api';
 
 export const API_BASE =
   process.env.REACT_APP_API_URL ||

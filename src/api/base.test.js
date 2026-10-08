@@ -56,8 +56,24 @@ describe('a production build', () => {
 describe('development', () => {
   it('keeps the absolute dev URL, because CRA serves the app on another port', () => {
     // Same-origin would resolve to the :3000 dev server, which has no API.
+    //
+    // This expected `http://localhost:5000/api` until 2026-10-08. The dev
+    // server binds `0.0.0.0` — IPv4 only — while `localhost` resolves to `::1`
+    // first, so every dev request began with a connection to an address
+    // nothing was listening on, and when Chrome's fallback to IPv4 did not
+    // happen it surfaced as `TypeError: Failed to fetch` with no server-side
+    // log entry (`NEXT_STEPS.md` §66).
     expect(load({ NODE_ENV: 'development', REACT_APP_API_URL: undefined }))
-      .toBe('http://localhost:5000/api');
+      .toBe('http://127.0.0.1:5000/api');
+  });
+
+  it('uses a literal address, not a name that can resolve to two families', () => {
+    // The point of the change, pinned separately from the exact string: any
+    // hostname here reintroduces the race, because which family it tries first
+    // is the resolver's choice and not ours.
+    const base = load({ NODE_ENV: 'development', REACT_APP_API_URL: undefined });
+    expect(base).not.toContain('localhost');
+    expect(new URL(base).hostname).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
   });
 });
 
