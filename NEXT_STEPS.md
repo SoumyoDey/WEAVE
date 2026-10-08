@@ -6086,6 +6086,64 @@ many times and the line beneath it never was.
 
 ---
 
+## 69. One default region — §54's defect, on the server side — 2026-10-08
+
+Three endpoints carried their own copy of the default bounding box and one
+disagreed. `_parse_bbox` and `/api/compare/spatial-agreement` used
+**25–45 N / −85..−65 W**, the domain the data is regridded onto.
+`/api/region-categorical-metrics` used **20–40 N / −100..−60 W**, clipping
+40–45 N off the top of the grid and reaching west into cells that hold nothing.
+
+**It changed a published score.** AIFS precipitation, 5 mm/6h, 0–168 h on
+`2025-09-16 00Z`, the same request with and without a bbox:
+
+| | CSI | POD | FSS |
+|---|---|---|---|
+| its own default (20–40 / −100..−60) | 0.1602 | 0.2192 | 0.4672 |
+| the shared domain | 0.1473 | 0.1960 | 0.4402 |
+| **after this change, no bbox** | **0.1473** | **0.1960** | **0.4402** |
+
+### Why §54 could not have caught it
+
+§54 unified the defaults the **client** sends and proved the two tabs then
+agreed to the last digit. This copy lives on the **server**, in the branch taken
+only when a request omits the bbox — which the frontend never does, because
+region mode requires a drawn region. **No frontend test can exercise a request
+the frontend never makes**, and the endpoint still answers it: to `curl`, to a
+script, to this repo's own examples in `RUNBOOK_LOAD_ONE_RUN.md`.
+
+### What was actually fixed
+
+`DEFAULT_REGION` is now the single definition, and both inline copies call
+`_parse_bbox` instead of re-implementing it. That had a second payoff neither
+copy had noticed: **`_parse_bbox` range-checks and the copies did not.**
+`min_lat=999` used to be accepted and echoed back as a grid cell by both
+endpoints; both now answer `400 latitude must be in [-90, 90]`, and a reversed
+box gets `min bound must be strictly less than max bound`.
+
+### The test that matters is the cross-file one
+
+`Data/test_default_region.py`, 8 tests, **7 of 8 confirmed to fail pre-fix**
+(the eighth is the vacuity guard, which must pass both ways — it asserts the
+parse actually found `TARGET_LAT_RANGE`/`TARGET_LON_RANGE` before anything is
+compared to them, the failure mode §32's JS parser exists to prevent).
+
+Pinning the four literals would only say the API agrees with itself. Two
+assertions do the real work:
+
+- **`DEFAULT_REGION` equals `regrid_members`'s `TARGET_LAT_RANGE`/
+  `TARGET_LON_RANGE`**, read out of the source with `ast` rather than imported,
+  because `regrid_members` is a loader CLI that pulls in scipy and calls
+  `load_dotenv` on import. The risk being guarded is a re-regrid onto a
+  different domain leaving the API describing a region the data is no longer
+  on — §24's defect, a confident statement about something no longer true.
+- **A scan for bare bbox literals anywhere in `flask_api.py`**, which found 12
+  before the change (three sites × four bounds) and must find none. The three
+  call sites were the symptom; the number being written down in more than one
+  place was the defect, and only the scan stops a fourth copy.
+
+---
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in

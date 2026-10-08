@@ -384,13 +384,19 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
   |---|---|
   | extent | `TARGET_LAT_RANGE`/`TARGET_LON_RANGE` in `Data/regrid_members.py:84`, and again as bbox defaults at `flask_api.py:700`, `:4474` **and `:5089`** |
 
-  **The third copy disagrees with the other two, and it changes a score.**
-  Found 2026-10-08 while re-verifying this row. `flask_api.py:700` (the shared
-  arg parser) and `:4474` (`/api/compare/spatial-agreement`) both default to
-  **25–45 N, −85..−65 W**, which is the loaded domain.
-  `/api/region-categorical-metrics` at `:5089` defaults to **20–40 N,
-  −100..−60 W** — a different box, which clips the northern 40–45 N off the
-  grid and extends west into cells that hold nothing.
+  ~~**The third copy disagrees with the other two, and it changes a score.**~~
+  **FIXED 2026-10-08 (`NEXT_STEPS.md` §69):** `DEFAULT_REGION` is now the one
+  definition, both inline copies call `_parse_bbox`, and a source scan fails on
+  any bare bbox literal. *What the API defaults to* is therefore closed; what
+  remains in this row is the larger item — the domain itself is still compiled
+  in rather than configured, in both `regrid_members.py` and `flask_api.py`.
+
+  The measurement is kept because it is the argument for the row:
+  `flask_api.py:700` (the shared arg parser) and `:4474`
+  (`/api/compare/spatial-agreement`) defaulted to **25–45 N, −85..−65 W**, the
+  loaded domain, while `/api/region-categorical-metrics` at `:5089` defaulted
+  to **20–40 N, −100..−60 W** — clipping the northern 40–45 N off the grid and
+  extending west into cells that hold nothing.
 
   Measured, AIFS precipitation at 5 mm/6h over 0–168 h on `2025-09-16 00Z`,
   one request with no bbox and one naming the shared domain:

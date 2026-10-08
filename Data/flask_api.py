@@ -690,17 +690,44 @@ def _valid_member(member):
         return False
 
 
+# The region a request gets when it names none: the domain the data is actually
+# regridded onto (`regrid_members.TARGET_LAT_RANGE`/`TARGET_LON_RANGE`).
+#
+# **One copy, because three had drifted.** `_parse_bbox` and
+# `/api/compare/spatial-agreement` both defaulted to this box inline;
+# `/api/region-categorical-metrics` defaulted to 20–40 N / −100..−60 W, which
+# clips 40–45 N off the top of the grid and reaches west into empty cells. That
+# is not a cosmetic difference — measured on AIFS precipitation at 5 mm/6h over
+# 0–168 h of `2025-09-16 00Z`, the same request with and without a bbox scored
+# **CSI 0.1602 against 0.1473**, with POD and FSS moving too.
+#
+# It is §54's defect on the server side. §54 unified the defaults the *client*
+# sends and could not see this one, because no frontend test exercises a
+# request the frontend never makes. A default nobody exercises is still an
+# answer the endpoint will give — to `curl`, to a script, to the examples in
+# `RUNBOOK_LOAD_ONE_RUN.md`.
+#
+# `test_default_region.py` asserts these four numbers equal the regrid grid's,
+# so the API's idea of "the domain" cannot drift from the domain.
+DEFAULT_REGION = {'min_lat': 25.0, 'max_lat': 45.0, 'min_lon': -85.0, 'max_lon': -65.0}
+
+
 def _parse_bbox(args):
     """Parse + sanity-check min/max lat/lon from request args.
 
     Returns (bbox_dict, None) on success or (None, (json, status)) on error, so
     callers can `bbox, err = _parse_bbox(...); if err: return err`.
+
+    Takes anything with `.get` — Flask's `request.args` or a parsed JSON body —
+    so the POST endpoints share this instead of reimplementing it. Two of them
+    did reimplement it, and neither carried the range and ordering checks
+    below: `min_lat=999` was accepted and echoed back as a grid cell.
     """
     try:
-        min_lat = float(args.get('min_lat',  25))
-        max_lat = float(args.get('max_lat',  45))
-        min_lon = float(args.get('min_lon', -85))
-        max_lon = float(args.get('max_lon', -65))
+        min_lat = float(args.get('min_lat', DEFAULT_REGION['min_lat']))
+        max_lat = float(args.get('max_lat', DEFAULT_REGION['max_lat']))
+        min_lon = float(args.get('min_lon', DEFAULT_REGION['min_lon']))
+        max_lon = float(args.get('max_lon', DEFAULT_REGION['max_lon']))
     except (TypeError, ValueError):
         return None, (jsonify({'error': 'lat/lon bounds must be numeric'}), 400)
     if not (-90 <= min_lat <= 90 and -90 <= max_lat <= 90):
@@ -4470,14 +4497,15 @@ def compare_spatial_agreement():
     variable = body.get('variable', 'precipitation')
     if _bad_token(*models, variable):
         return jsonify({'error': 'Invalid model or variable'}), 400
+    bbox, err = _parse_bbox(body)
+    if err:
+        return err
+    min_lat, max_lat = bbox['min_lat'], bbox['max_lat']
+    min_lon, max_lon = bbox['min_lon'], bbox['max_lon']
     try:
-        min_lat  = float(body.get('min_lat',  25))
-        max_lat  = float(body.get('max_lat',  45))
-        min_lon  = float(body.get('min_lon', -85))
-        max_lon  = float(body.get('max_lon', -65))
         hour     = int(body.get('hour', 24))
     except (TypeError, ValueError):
-        return jsonify({'error': 'min_lat, max_lat, min_lon, max_lon, hour must be numeric'}), 400
+        return jsonify({'error': 'hour must be numeric'}), 400
 
     is_wind  = (variable == 'wind')
     var_name = variable   # precip path; wind derives speed from u/v (below)
@@ -5085,17 +5113,21 @@ def region_categorical_metrics_endpoint(cursor):
     variable        = body.get('variable', 'precipitation')
     if _bad_token(model_name, variable):
         return jsonify({'error': 'Invalid model or variable'}), 400
+    # Shares `_parse_bbox` rather than keeping its own copy of the domain. Its
+    # copy read 20–40 N / −100..−60 W, a different box from every other
+    # endpoint's, and scored differently because of it — see `DEFAULT_REGION`.
+    bbox, err = _parse_bbox(body)
+    if err:
+        return err
+    min_lat, max_lat = bbox['min_lat'], bbox['max_lat']
+    min_lon, max_lon = bbox['min_lon'], bbox['max_lon']
     try:
-        min_lat         = float(body.get('min_lat', 20.0))
-        max_lat         = float(body.get('max_lat', 40.0))
-        min_lon         = float(body.get('min_lon', -100.0))
-        max_lon         = float(body.get('max_lon', -60.0))
         hour_min        = int(body.get('hour_min', 0))
         hour_max        = int(body.get('hour_max', 168))
         # Neighbourhood width for FSS, in grid cells (odd values centre cleanly).
         fss_window      = max(1, min(int(body.get('fss_window', 3)), 21))
     except (TypeError, ValueError):
-        return jsonify({'error': 'min_lat, max_lat, min_lon, max_lon, hour_min, hour_max must be numeric'}), 400
+        return jsonify({'error': 'hour_min, hour_max, fss_window must be numeric'}), 400
 
     is_wind = (variable == 'wind')
     try:
