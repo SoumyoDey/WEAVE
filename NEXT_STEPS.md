@@ -5700,6 +5700,64 @@ takes no settings props at all, which is the thing §60 could not do.
 
 ---
 
+## 63. Stage 4, and a design assumption that was wrong — 2026-10-08
+
+The last stage of `VERIFICATION_SETTINGS_DESIGN.md`. **`AnalysisTab.jsx` is
+1,027 → 421 lines**, with the verification machinery in
+`analysis/VerificationPanel.jsx` (648 lines, taking **no settings props at
+all**).
+
+That last part is the whole point of the four-stage order. §60 could not
+extract this panel because the settings belonged to the tab, and threading
+eight props down would have moved lines without moving behaviour. Now they
+belong to the app, so it was a plain move: the panel calls `useVerification()`
+and takes four props, all of them about *what* to score — point, region, model,
+variable.
+
+### The design said "use it in both tabs". That was wrong, and worth saying.
+
+The stage was written as "extract `VerificationPanel` once and use it in both
+tabs". Checking before building found the two tabs do not render the same
+panel: Analysis scores **one model** at a clicked cell or a drawn region, and
+Comparison scores **several models against each other**. They share the four
+*settings* — which is what stage 3 fixed — and the four *controls*, but the
+panels themselves display different things and always did.
+
+So stage 4 is one tab's extraction, not a shared component. The genuinely
+shared part that remains is the control row — threshold, scored area, FSS
+neighbourhood, lead range — rendered in **four places** in two visual idioms
+(Analysis's inline spans, Comparison's stacked `LABEL` fields). Unifying those
+means either imposing one tab's layout on the other, which is a visible change
+nobody asked for, or a `layout` prop, which is thin cover for keeping both.
+**Left alone deliberately**: the labels now agree (§54), the values now agree
+(§62), and the remaining duplication is presentational.
+
+### A test that had to follow the code
+
+`verificationDefaults.test.js` read the two tab files and asserted the agreed
+control labels appear in them. The FSS input is in `VerificationPanel.jsx` now,
+so the test reported a label missing when it had moved one file across. It
+reads each tab **and the directory it was decomposed into**, which also means a
+panel cannot quietly declare its own settings where the tab no longer can.
+
+That is the third test this week to change with the design (§55's qualifier,
+§62's defaults, this). The pattern is worth naming: **a test that pins a
+property of a file will fail when the file stops being where that property
+lives**, and the fix is to follow the property, not to weaken the assertion.
+
+### Where the two tabs ended up
+
+| | start of day | now |
+|---|---|---|
+| `ComparisonTab.jsx` | 2,373 | 1,771 |
+| `AnalysisTab.jsx` | 1,376 | **421** |
+
+Verified live: the panel runs for a clicked point and returns CSI, POD, FAR,
+FBI, Brier and FSS with five charts and no console errors; the cone and
+spread-skill panels render above it.
+
+---
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in

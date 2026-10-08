@@ -1,7 +1,13 @@
 # Verification settings — where they should live
 
-**Status: design, not built. One decision is open and it is the user's** —
-§"The decision" below. Everything else follows from it.
+**Status: BUILT, 2026-10-08.** The decision below was taken — yes, one setting
+for the app — and all four stages landed (`NEXT_STEPS.md` §62, §63).
+
+**One part of stage 4 was wrong and is recorded rather than quietly dropped:**
+it assumed a single `VerificationPanel` would serve both tabs. They do not
+render the same panel — Analysis scores one model, Comparison scores several
+against each other — so stage 4 extracted Analysis's panel alone. What the two
+tabs share is the settings, which is what stages 1–3 delivered.
 
 This is the boundary `NEXT_STEPS.md` §60 stopped at. The Verification Metrics
 panel is the largest remaining block in both tabs and the obvious next thing to

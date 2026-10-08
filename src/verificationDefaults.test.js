@@ -32,7 +32,28 @@ import { VERIFICATION_DEFAULTS } from './constants';
 const read = (file) =>
   fs.readFileSync(path.join(__dirname, 'components', file), 'utf8');
 
-const SOURCES = { AnalysisTab: read('AnalysisTab.jsx'), ComparisonTab: read('ComparisonTab.jsx') };
+/**
+ * Each scored tab *and the panels it was decomposed into* (§59, §60, §63).
+ *
+ * Reading only the two tab files stopped being enough the moment a control
+ * moved: the FSS input now lives in `analysis/VerificationPanel.jsx`, and a
+ * test looking for it in `AnalysisTab.jsx` would report the label missing when
+ * it had simply moved one file across. A directory read follows it, and also
+ * means a panel cannot quietly declare its own settings where the tab no
+ * longer can.
+ */
+const readTree = (tab, dir) => {
+  const dirPath = path.join(__dirname, 'components', dir);
+  const parts = fs.readdirSync(dirPath)
+    .filter((f) => /\.jsx?$/.test(f) && !f.includes('.test.'))
+    .map((f) => fs.readFileSync(path.join(dirPath, f), 'utf8'));
+  return [read(tab), ...parts].join('\n');
+};
+
+const SOURCES = {
+  AnalysisTab:   readTree('AnalysisTab.jsx', 'analysis'),
+  ComparisonTab: readTree('ComparisonTab.jsx', 'comparison'),
+};
 
 /** Any `useState(...)` a file declares for a verification setting. */
 const localSettingsIn = (source) => {
