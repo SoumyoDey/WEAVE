@@ -5615,6 +5615,38 @@ than quote: `wc -l src/components/*.jsx`.
 
 ---
 
+## 61. The verification-settings boundary, designed — 2026-10-08
+
+§60 stopped at a seam it would not cross: the Verification Metrics panel reads
+settings that §55 had just merged, so extracting it with its own state would
+have undone that fix. `VERIFICATION_SETTINGS_DESIGN.md` is the design for
+crossing it properly. **It is a design with one open decision, not a change.**
+
+Two things the survey found, both verified rather than inferred:
+
+- **Comparison still carries the defect §55 fixed in Analysis.** It holds
+  `threshold` and `regionThreshold`, `fssWindow` and `regionFssWindow` — two
+  of each, starting equal and diverging the moment either is touched.
+- **The two tabs share no live settings at all.** Tabs are hidden with
+  `display: none` and never unmount, so both copies stay alive. Demonstrated in
+  the running app: Analysis set to 5 mm/6h over 24–72 h while the Comparison
+  tab, one click away, still read 0–168 h with its own threshold. §54 unified
+  the starting values; nothing unifies what happens after the first keystroke.
+
+The recommendation is an app-level `VerificationProvider` mirroring
+`RunProvider`: a threshold qualifies every categorical number exactly as a
+forecast run qualifies every number, and the app already settled that question
+once. It is also the only option under which the panel extraction is honest —
+reading context instead of taking eight props that are really one idea.
+
+**The open decision is behavioural, which is why it is not mine:** should
+changing a threshold in one tab change it in the other? Yes gives one setting
+for the app; no keeps the tabs independent, and makes today's two-live-answers
+behaviour a decision rather than an accident — in which case the UI should say
+so.
+
+---
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in
