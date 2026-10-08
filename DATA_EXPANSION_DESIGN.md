@@ -334,11 +334,17 @@ conventions were so hard to reconstruct. Any expansion should make ingest
 > **The three decisions are taken. Re-measured first, and the arithmetic below
 > was low again — this time by about 50%.**
 >
-> | | measured 2026-09-24 | measured 2026-10-01 |
-> |---|---|---|
-> | whole database | 38 GB (1 run) | **123.52 GB** (3 inits) |
-> | a three-model run | ~37 GB | **55.30 GB** |
-> | ten runs | ~370 GB | **553 GB** |
+> | | measured 2026-09-24 | measured 2026-10-01 | measured 2026-10-08 |
+> |---|---|---|---|
+> | whole database | 38 GB (1 run) | **123.52 GB** (3 inits) | **128.88 GB** (3 inits) |
+> | a three-model run | ~37 GB | **55.30 GB** | **58.00 GB** |
+> | ten runs | ~370 GB | **553 GB** | **580 GB** |
+>
+> The 2026-10-08 column is the same three initialisations: nothing was loaded
+> in between. The growth is `idx_rfm_cell_member_hour`, the covering index
+> `NEXT_STEPS.md` §52 added to make the spread maps usable — 5.09 GB today and
+> about **2.70 GB on every future run**, which is why the per-run figure moved
+> without the run count changing. **An index is a per-run cost, not a one-off.**
 >
 > **The 200 GB figure this section warns about is crossed at four runs**, not
 > ten. Measured per run, from row counts weighted by each table's measured
@@ -365,7 +371,7 @@ conventions were so hard to reconstruct. Any expansion should make ingest
 > `safe: false` does **not** make the endpoint unhealthy. Being past the
 > threshold means a decision is due, not that anything is broken.
 >
-> It plans with `DB_GB_PER_FULL_RUN` (55.30, measured) rather than the mean of
+> It plans with `DB_GB_PER_FULL_RUN` (58.00, measured 2026-10-08) rather than the mean of
 > what is loaded. The mean is 41.17 GB because the 06Z run is partial, and
 > dividing headroom by it reports **3 more runs where the answer is 2** — this
 > section's own warning about the cheap UKMO-only run, reaching the check that
@@ -379,7 +385,7 @@ conventions were so hard to reconstruct. Any expansion should make ingest
 >
 > | tier | kept | per run | scores |
 > |---|---|---|---|
-> | hot | everything | 55.30 GB | exact |
+> | hot | everything | 58.00 GB | exact |
 > | **drop native** | both regridded tables | ~21 GB | **exact, all of them** |
 > | summary only | `regridded_forecast_ens` | ~1 GB | approximate spread |
 >

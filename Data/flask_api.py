@@ -475,8 +475,11 @@ def _check_pool_headroom(cursor):
 # at the moment it matters, which is mid-load.
 #
 # The number is the user's, chosen against a measured 123.52 GB holding three
-# initialisations and a measured 55.30 GB for a three-model run. So the threshold
-# is a little over two runs away, and crossing it is a *loading* decision.
+# initialisations and a then-measured 55.30 GB for a three-model run. So the
+# threshold is a little over two runs away, and crossing it is a *loading*
+# decision. (The database is 128.88 GB as of 2026-10-08 and a full run 58.00 GB;
+# the headroom check reads both live, so only the per-run figure below is a
+# constant that can rot.)
 #
 # `DATA_EXPANSION_DESIGN.md` phase 5 carries the archive options this is meant to
 # prompt; none is implemented, because none was chosen.
@@ -485,16 +488,27 @@ DB_SIZE_REVISIT_GB = float(os.environ.get('WEAVE_DB_SIZE_REVISIT_GB', 250))
 # What a THREE-MODEL run costs, measured 2026-10-01 on the 2025-09-16 00Z run
 # (AIFS + GEFS + UKMO, precipitation and wind): 116,423,050 native rows and
 # 42,546,970 regridded member rows, weighted by each table's measured
-# bytes-per-row.
+# bytes-per-row — 55.30 GB.
+#
+# **Re-measured 2026-10-08 after §52 added `idx_rfm_cell_member_hour`.** That
+# index is 5.09 GB across the 17 model-run-variable combinations loaded, so a
+# full run now carries about 2.70 GB of it: **58.00 GB**. A new index changes
+# what a future run costs, and this constant is the only place that says so —
+# it was still quoting the pre-index figure the day after, which would have
+# under-reported the last run before the threshold.
 #
 # The planning figure is this rather than the mean of what is loaded, and the
-# difference is not pedantic. The mean today is 41.17 GB because one of the
+# difference is not pedantic. The mean today is well under it because one of the
 # three initialisations is a partial 06Z run costing 8.49 GB, so dividing
 # headroom by the mean answers "how many runs like the ones I have" when the
 # question is "does another real run fit" — and reports 3 where the answer is 2.
 # `DATA_EXPANSION_DESIGN.md` phase 5 states the same warning about the cheap
 # UKMO-only run: do not read the cheapest thing in the database as headroom.
-DB_GB_PER_FULL_RUN = float(os.environ.get('WEAVE_DB_GB_PER_RUN', 55.30))
+#
+# Re-measure after any index change:
+#   SELECT round(pg_relation_size('idx_rfm_cell_member_hour')/1024.0^3
+#                / (SELECT count(*) FROM forecast_run_registry) * 9, 2);
+DB_GB_PER_FULL_RUN = float(os.environ.get('WEAVE_DB_GB_PER_RUN', 58.00))
 
 
 def _check_storage_headroom(cursor):

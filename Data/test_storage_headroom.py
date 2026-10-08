@@ -52,7 +52,13 @@ class FakeCursor:
 
 class TestTheMeasuredState:
     """Figures from the 2026-10-01 measurement, which is what the threshold was
-    chosen against."""
+    chosen against.
+
+    `FakeCursor`'s 123.52 GB is that measurement, deliberately frozen: these
+    tests pin the *arithmetic* against a known input, not the live size. The
+    database is larger now (128.88 GB on 2026-10-08) and `_check_storage_headroom`
+    reads it live, so nothing here needs to follow it.
+    """
 
     def test_today_is_under_the_threshold(self):
         r = api._check_storage_headroom(FakeCursor())
@@ -67,9 +73,13 @@ class TestTheMeasuredState:
 
     def test_it_plans_with_a_full_run_not_the_mean(self):
         """The mean is 41.17 GB because one of the three initialisations is a
-        partial 06Z run costing 8.49 GB; a real three-model run is 55.30 GB.
+        partial 06Z run costing 8.49 GB; a real three-model run is 58.00 GB.
         Dividing 126.48 GB of headroom by the mean says 3 more runs fit when
         the answer is 2.
+
+        The full-run figure was 55.30 GB until 2026-10-08, when §52's covering
+        index added about 2.70 GB to every future run. An index change moves
+        what a run costs, and this constant is the only thing that says so.
 
         This is `DATA_EXPANSION_DESIGN.md` phase 5's own warning about the cheap
         UKMO-only run — do not read the cheapest thing in the database as
@@ -78,7 +88,7 @@ class TestTheMeasuredState:
         """
         r = api._check_storage_headroom(FakeCursor())
         assert r['mean_gb_per_run'] == pytest.approx(41.17, abs=0.01)
-        assert r['gb_per_full_run'] == pytest.approx(55.30, abs=0.01)
+        assert r['gb_per_full_run'] == pytest.approx(58.00, abs=0.01)
         assert r['gb_per_full_run'] > r['mean_gb_per_run']
         # The optimistic answer the mean would have given, pinned so the two
         # cannot quietly converge.
@@ -110,12 +120,18 @@ class TestItActuallyTrips:
             FakeCursor(size_gb=api.DB_SIZE_REVISIT_GB))['safe'] is False
 
     def test_two_more_runs_would_cross_it(self):
-        """The decision's whole premise: at the measured 55.30 GB for a
-        three-model run, 250 GB is a little over two runs away. If this stops
-        being true the threshold wants revisiting, not the test."""
-        measured_three_model_run = 55.30
-        assert 123.52 + 2 * measured_three_model_run < api.DB_SIZE_REVISIT_GB
-        assert 123.52 + 3 * measured_three_model_run > api.DB_SIZE_REVISIT_GB
+        """The decision's whole premise: at the measured cost of a three-model
+        run, 250 GB is a little over two runs away. If this stops being true
+        the threshold wants revisiting, not the test.
+
+        Reads the constant rather than repeating its value. The literal copy
+        here said 55.30 and would have gone on saying it after the constant
+        moved — a test that agrees with a figure it carries its own copy of
+        cannot notice the figure changing.
+        """
+        measured = api.DB_GB_PER_FULL_RUN
+        assert 128.88 + 2 * measured < api.DB_SIZE_REVISIT_GB
+        assert 128.88 + 3 * measured > api.DB_SIZE_REVISIT_GB
 
 
 class TestItDoesNotBreakAnything:

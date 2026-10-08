@@ -4033,7 +4033,7 @@ often a spread or quantile field rather than 50 overplotted ones.
 4. Then the tab. That part is cheap: the tab bar is a literal array in
    `src/App.js` (`[['visualization', …], ['analysis', …], ['comparison', …]]`)
    and adding a fourth entry plus a component is the established pattern.
-   One caution — `AnalysisTab.jsx` is 1,264 lines and is on S4's deferred-refactor
+   One caution — `AnalysisTab.jsx` was already over 1,200 lines and is on S4's deferred-refactor
    list. A cyclone tab should not become the fifth large component.
 
 **Nothing here is started**, and nothing should be until step 1 is written
@@ -4954,19 +4954,25 @@ response cache cleared before each — the numbers a reviewer's first click pays
 
 ### What is slow
 
-| endpoint | cold | note |
-|---|---|---|
-| `/api/point-timeseries` | **57.5 s** | **fixed below → 4.1 s** (wind 117 s → 12.7 s) |
-| `/api/spatial-metric` `brier` | 55.8 s | the four member-grid metrics, full domain |
-| … `crps` | 53.2 s | |
-| … `ssr_agg` | 51.3 s | |
-| … `correlation` | 33.4 s | |
-| `/api/compare/spatial-diff` | 12.5 s | two full-domain metrics, so 2 × 6.3 s |
-| `/api/spatial-metric` `csi`/`pod`/`far` | 7.1–7.3 s | |
-| … `mae`/`bias`/`rmse` | 6.3–6.6 s | |
-| `/api/compare/region-metrics` | 6.1 s | was 217 s before §50 |
-| `/api/compare/categorical`, `skill`, `spatial-agreement` | 1.4–2.5 s | |
-| everything else | **≤ 0.6 s** | including all four cyclone endpoints at ≤ 70 ms |
+**Every row of this table has since been fixed — see the "now" column, added
+2026-10-08.** The survey below is kept as the measurement that motivated §52,
+not as a description of the app: within a day of writing it the four
+member-grid rows were four to six times wrong, which is the failure this file
+keeps recording in other people's documents.
+
+| endpoint | cold | now | note |
+|---|---|---|---|
+| `/api/point-timeseries` | **57.5 s** | **4.1 s** | fixed below (wind 117 s → 12.7 s) |
+| `/api/spatial-metric` `brier` | 55.8 s | **9.0 s** | the four member-grid metrics, full domain — §52 |
+| … `crps` | 53.2 s | **12.0 s** | §52 |
+| … `ssr_agg` | 51.3 s | **8.0 s** | §52 |
+| … `correlation` | 33.4 s | **23.5 s** | §52 |
+| `/api/compare/spatial-diff` | 12.5 s | — | two full-domain metrics, so 2 × 6.3 s |
+| `/api/spatial-metric` `csi`/`pod`/`far` | 7.1–7.3 s | — | |
+| … `mae`/`bias`/`rmse` | 6.3–6.6 s | — | |
+| `/api/compare/region-metrics` | 6.1 s | **4.4 s** | was 217 s before §50 |
+| `/api/compare/categorical`, `skill`, `spatial-agreement` | 1.4–2.5 s | — | |
+| everything else | **≤ 0.6 s** | — | including all four cyclone endpoints at ≤ 70 ms |
 
 **The cyclone tab is the fastest surface in the app** — 20 ms to 70 ms — which
 is worth knowing before anyone optimises it.
@@ -5020,6 +5026,11 @@ Two options, neither taken here because both are decisions rather than fixes:
 
 The second is the real answer and should be measured against the first; a map
 nobody waits 53 s for is worth more than 3 GB.
+
+**Both were done, 2026-10-08 (§52)** — and needed each other: the index alone
+took `crps` from 53 s to 36 s, the rewrite alone to 42 s, the two together to
+18 s. The index cost 5.09 GB rather than the 3 GB estimated here, which also
+moved `DB_GB_PER_FULL_RUN` from 55.30 to 58.00.
 
 ---
 
@@ -5299,6 +5310,71 @@ Region shows 24 and 72. Two of the three new range tests fail against the
 unmerged code; the third — that both modes *start* at the same value — passes
 against it, because §54 had already fixed the starting values and only the
 sharing is new.
+
+---
+
+## 56. The open list, swept again — and an index is a per-run cost — 2026-10-08
+
+Fourth sweep under §44's rule. Two items genuinely open, three stale — and
+**all three stale ones were written by me in the previous 48 hours**, which is
+a shorter half-life than any of the documents this file has corrected.
+
+### Genuinely open, verified today
+
+1. **Every GEFS comparison rests on n=1.** The registry holds AIFS 3 runs,
+   UKMO 3, **GEFS 1** (`2025-09-16 00Z`). Unchanged since §49.
+2. **The hardcoded 25–45 N / 85–65 W domain against a global cyclone archive** —
+   1,074 of 15,185 storms ever enter the box. A decision, not work.
+
+Known and parked: the UKMO coordinate spelling (§48), S4's deferred refactors,
+and the four questions for a person at the end of `TC_DATA_ACCESS.md`.
+
+### An index is a per-run cost, not a one-off
+
+`DB_GB_PER_FULL_RUN` still read **55.30 GB**, measured before §52 added
+`idx_rfm_cell_member_hour`. That index is **5.09 GB across the 17
+model-run-variable combinations loaded**, so a full three-model run now carries
+about **2.70 GB** of it: the figure is **58.00 GB**, and the database is
+**128.88 GB** rather than the 123.52 GB three documents still quoted.
+
+It changed no answer today — 121 GB of headroom buys two more runs at either
+figure — which is exactly why it would have survived: **a stale constant that
+happens to round to the same answer is invisible until the margin matters**,
+and the margin here is the last run before a 250 GB review.
+
+The test that was supposed to guard the premise carried `measured_three_model_run
+= 55.30` as its own literal, so it agreed with the constant by repeating it and
+would have gone on passing after the constant moved. It reads
+`api.DB_GB_PER_FULL_RUN` now.
+
+`DATA_EXPANSION_DESIGN.md`'s measurement table gained a third dated column
+rather than having its second rewritten — it is a record of a progression, and
+overwriting a dated measurement to make it current destroys the thing it is
+for.
+
+### §51's own table was four to six times wrong within a day
+
+It listed `brier` at 55.8 s, `crps` 53.2 s, `ssr_agg` 51.3 s as current. §52
+took them to 9.0, 12.0 and 8.0 s the same day, and §51 carried no pointer
+forward — so the section a reader reaches first described an app that had not
+existed for 24 hours. Now a "now" column, and the costed options at the end are
+marked done.
+
+### A number that cannot be carried in prose
+
+`AnalysisTab.jsx` was quoted at **1,264** lines in three documents, at
+**1,360** in `SYSTEM_DESIGN_PLAN.md` — written 2026-10-07 — and was **1,376**
+on 2026-10-08. Correcting it a third time would have bought another day, so S4
+now carries `wc -l` instead of a number, and the three historical mentions are
+marked as the counts they were at the time. **The fact the item needs — both
+components are large and undecomposed — does not change between measurements;
+only the figure does.** Same treatment §29 reached for the coverage
+percentages, for the same reason.
+
+Also corrected: `CONSISTENCY_AUDIT.md` 3a quoted the toggle it fixed as reading
+"Score over: This cell". The shipped label is "Around a point" — an audit
+quoting a string the code does not contain being, precisely, what that audit
+exists to catch.
 
 ---
 

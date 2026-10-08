@@ -248,8 +248,11 @@ maps, so `catMode = 'region'` is the sole route to the region-scored categorical
 numbers — FSS, FBI, the composite and the contingency counts over a box. Deleting
 it would have cost capability.
 
-So it now names the areas instead of repeating the mode: **"Score over: This cell |
-Drawn region"**, with an `aria-pressed` state. Nothing moved, nothing was lost, and
+So it now names the areas instead of repeating the mode: **"Score over: Around a
+point | Drawn region"**, with an `aria-pressed` state. (This entry said "This
+cell" until 2026-10-08; the shipped label is "Around a point", and an audit
+quoting a string the code does not contain is the thing this audit exists to
+catch.) Nothing moved, nothing was lost, and
 the two words no longer appear twice in one tab meaning two things.
 
 ### 3b. The scored area has two names — **accidental · FIXED**
@@ -643,7 +646,9 @@ The plan says to budget by risk, and the findings sort cleanly:
 **All six phases are now closed.**
 
 The guardrail in the plan held to the end: `ComparisonTab.jsx` is 2,300 lines and
-`AnalysisTab.jsx` is 1,264, and nothing in this audit restructured either. Phase 5
+`AnalysisTab.jsx` was 1,264 at the time, and nothing in this audit restructured
+either (both have grown since; `SYSTEM_DESIGN_PLAN.md` S4 carries the command
+rather than a number). Phase 5
 reached them for the first time, and only to change the spelling of a constant.
 Whether to extract them is still an open question, and still a separate one.
 

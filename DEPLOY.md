@@ -425,7 +425,7 @@ curl -su reviewer "$BASE/api/health" | python3 -m json.tool | grep -A9 '"storage
 > a "backup/restore runbook" and nothing had been written. This states the real
 > position rather than inventing a procedure nobody has run.
 
-**There is no automated backup, and the database is 123.52 GB.** Two recovery
+**There is no automated backup, and the database is 128.88 GB** (2026-10-08; it was 123.52 GB when this was written, and `/api/health` reports the live figure). Two recovery
 paths exist, and they are very different in cost:
 
 **1. Rebuild from source — the supported path, and slow.** Every table can be

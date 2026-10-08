@@ -375,7 +375,7 @@ file's own contents, and the ones that were *not* settled are named in §9.
 collaborator's working area inside our allocation. Readable — we are in the
 group — and not ours to assume is stable.
 
-**140 GB.** For scale, the entire current database is 123.52 GB and §27's
+**140 GB.** For scale, the entire current database is 128.88 GB (2026-10-08) and §27's
 retention review sits at 250 GB. Copying this wholesale is not an option and is
 not necessary; see `output/` below.
 

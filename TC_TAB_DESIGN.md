@@ -395,7 +395,8 @@ wrong twice before measuring it per centre.
   leave the current box**, so this is not deferrable past the first map.
 - **The tab is cheap and goes last.** The tab bar is a literal array in
   `src/App.js`; a fourth entry plus a component is the established pattern. One
-  caution: `AnalysisTab.jsx` is 1,264 lines and on S4's deferred-refactor list.
+  caution: `AnalysisTab.jsx` was already over 1,200 lines then and is on S4's
+  deferred-refactor list.
   A cyclone tab should not become the fifth large component.
 
 ---

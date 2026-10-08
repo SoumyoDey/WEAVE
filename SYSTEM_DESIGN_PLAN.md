@@ -318,7 +318,7 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
   What remains is not the writing. §9 states the real position rather than
   inventing a procedure — there is no automated backup, rebuild-from-source is
   the supported path at a measured ~42 minutes for one model's wind at one
-  initialisation, and **`pg_dump` has never been run at 123.52 GB.** An untested
+  initialisation, and **`pg_dump` has never been run at this size** (128.88 GB on 2026-10-08). An untested
   restore is a plan, not a backup, so the open item is *exercising* it and
   recording what it cost. **No secrets manager** either: `Data/.env` is the
   whole of it.
@@ -382,15 +382,25 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
   `_render_map()`, shared chart primitives, decomposing the two large tab
   components). Re-measured 2026-10-07: the domain is written out as
   `TARGET_LAT_RANGE`/`TARGET_LON_RANGE` in `Data/regrid_members.py` and again as
-  bbox defaults in two `flask_api.py` handlers; `AnalysisTab.jsx` is **1,360**
-  lines and `ComparisonTab.jsx` **2,372**, both larger than when this was
-  written.
+  bbox defaults in two `flask_api.py` handlers; and both tab components keep
+  growing — **measure, do not quote**:
+
+  ```bash
+  wc -l src/components/AnalysisTab.jsx src/components/ComparisonTab.jsx
+  ```
 
   > This bullet appeared twice, once as "Still open" and once as "NOT DONE",
   > with the same four items and the same stale line count in both. Merged
   > 2026-10-07. A duplicated open item is worse than it looks: both copies get
-  > re-read and neither gets updated, which is how the 1,264 survived two
-  > rounds of edits to the components it counts.
+  > re-read and neither gets updated, which is how `AnalysisTab.jsx` at 1,264
+  > lines survived two rounds of edits to the component it counts.
+  >
+  > **The replacement count went stale in a day.** 2026-10-07 recorded 1,360;
+  > it was 1,376 by 2026-10-08. A figure that moves whenever anyone touches the
+  > file cannot be carried in prose, so the command above replaces it — the
+  > same treatment §29 reached for the coverage percentages, for the same
+  > reason. What the item needs is the *fact* that both components are large
+  > and undecomposed, which does not change between measurements.
 - **Exit:** not reached. Adding a *metric* is now a single-place change (§35),
   but a model or variable is still two — `constants.js` `MODELS` carries each
   model's member count and lead hours beside the backend's own registry.
