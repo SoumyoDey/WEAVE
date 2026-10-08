@@ -5774,6 +5774,75 @@ lint of a `.jsx` directory with suspicion.
 
 ---
 
+## 64. The app, driven end to end — and `-81.19°E` — 2026-10-08
+
+A full working pass over the running app after the day's refactors, rather than
+another suite run. The suites were green and stayed green (**1,115 backend,
+287 frontend, clean production build**), and they found nothing, which is the
+point of this entry: **the one real defect of the day was invisible to all
+1,402 of them and plain within a minute of reading the screen.**
+
+### What was exercised
+
+Every registered endpoint against the live database — 26 of 26 at 200 with
+non-empty payloads — then all four tabs by hand: the overlay and the scrubber;
+Analysis point (cone, spread–skill, verification) and region (six Cartopy maps
+plus the categorical four); Comparison point and region (skill, the categorical
+six, per-model maps, the A−B difference map, the agreement map); Cyclones
+(spaghetti tracks, strike probability, error-against-lead, a storm and centre
+switch). `@with_db_cursor` on 21 views, `_map_figure_png`, and the extracted
+panels all hold up under real traffic.
+
+The cross-tab coupling §62 introduced was checked the way the design said to
+check it (`VERIFICATION_SETTINGS_DESIGN.md` §7): threshold 5 and leads 24–72 h
+set in **Analysis**, then **Comparison** opened and found already reading 5,
+24 and 72 — all four settings, including the FSS window and box, across a tab
+boundary. §43's FBI is in the live categorical row beside the other five.
+
+### The defect: a hemisphere letter that disagreed with its sign
+
+The Comparison tab labelled the clicked point **`39.99°N, -81.19°E`**. The
+Analysis tab, one click away, labelled the same point **`39.99°N, 81.19°W`**.
+
+`utils/geoUtils.js` exists for exactly this and says so in its own header — a
+signed number and a hemisphere letter say the same thing twice, and when they
+disagree the letter wins in the reader's head. It was adopted by `MetricPanel`,
+`AnalysisTab` and the panels extracted from Analysis, **and never by the
+Comparison side**, which kept `{lon.toFixed(1)}°E` in four places: the location
+chip, the region chip, the categorical bbox line, and `SpatialAgreementPanel`.
+Every loaded region in this archive is west of Greenwich, so all four were
+wrong every time they were shown.
+
+This is the §55/§60/§62 shape once more. A helper is written to end a defect,
+applied where the defect was noticed, and the other half of the app keeps its
+own copy of the bug. The fix is four call sites; **the guard is
+`src/geoLabels.test.js`**, which scans every component for a hemisphere letter
+welded to an interpolated value and would have failed on eight occurrences
+across the two files before the fix. Confirmed against the pre-fix source
+rather than assumed — a scan that has never failed is §28's vacuous test again.
+
+### Two things that looked like defects and were not
+
+- **The transport buttons do nothing while the Controls drawer is open.** The
+  drawer is `height: 100%` at `z-index: 1000` and the timeline sits at 900, so
+  it covers Play/Prev/Next. It covers them *visibly* — the drawer is opaque and
+  the buttons are plainly behind it — so this is a drawer overlaying content,
+  not an invisible overlay eating clicks, and a real click lands the moment it
+  is closed. Worth revisiting as layout; not a fault.
+- **Four `ERR_CONNECTION_REFUSED` on one `spatial-metric` request.** Seen once,
+  in one tab, early in the session. The backend access log has no record of
+  them arriving and no reloader restart; the identical request then succeeded
+  alone and four-ways concurrent, and a fresh tab loaded with an empty console
+  and every request at 200. Recorded as unexplained-and-not-reproduced rather
+  than diagnosed, because nothing was found to diagnose.
+
+**The lesson is the one §49 and §63 keep teaching from the other direction.**
+The test suite checks what someone thought to assert; it does not read the
+screen. A label that is wrong in every rendering is invisible to tests that
+never render it and obvious to anyone who looks. Drive the app.
+
+---
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in

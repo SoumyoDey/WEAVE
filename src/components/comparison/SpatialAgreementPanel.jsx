@@ -19,6 +19,7 @@ import React, { useState, useEffect } from 'react';
 
 import { fetchSpatialAgreement } from '../../api/comparisonApi';
 import { t } from '../../theme';
+import { fmtLat, fmtLon } from '../../utils/geoUtils';
 import { LoadingState as Spinner } from '../ui/PanelState';
 import { INPUT, SECTION_TITLE } from './styles';
 
@@ -102,8 +103,8 @@ export function SpatialAgreementPanel({ models, variable, region, defaultHour })
               }}>
                 {region.type === 'polygon' ? '⬡ Polygon' : '▭ Rectangle'}
                 {' '}
-                {region.bounds.min_lat.toFixed(1)}°–{region.bounds.max_lat.toFixed(1)}°N,{' '}
-                {region.bounds.min_lon.toFixed(1)}°–{region.bounds.max_lon.toFixed(1)}°E
+                {fmtLat(region.bounds.min_lat, 1)}–{fmtLat(region.bounds.max_lat, 1)},{' '}
+                {fmtLon(region.bounds.min_lon, 1)}–{fmtLon(region.bounds.max_lon, 1)}
               </span>
 
               {/* Spatial hour input */}

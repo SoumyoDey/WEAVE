@@ -318,7 +318,7 @@ export function AnalysisTab({
 
                   {/* Threshold */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: t.fontSize.xs, whiteSpace: 'nowrap' }} title="Event threshold, in native units. One threshold for this tab: the Verification Metrics panel scores at the same value.">Threshold</span>
+                    <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: t.fontSize.xs, whiteSpace: 'nowrap' }} title="Event threshold, in native units. One threshold for the whole app: the Verification Metrics panel and the Comparison tab score at this same value.">Threshold</span>
                     <input type="number" min="0" step="1" value={threshold}
                       onChange={e => setThreshold(e.target.value)}
                       style={{ width: '60px', padding: '4px 6px', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'right', outline: 'none' }} />

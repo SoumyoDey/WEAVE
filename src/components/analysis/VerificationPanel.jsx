@@ -207,7 +207,7 @@ export function VerificationPanel({
 
         {/* Threshold */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }} title="Event threshold, in native units. One threshold for this tab: the Region spatial maps score at the same value.">Threshold</span>
+          <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }} title="Event threshold, in native units. One threshold for the whole app: the Region spatial maps and the Comparison tab score at this same value.">Threshold</span>
           <input
             type="number" min="0" step="1" value={threshold}
             aria-label={`Threshold (${selectedVariable === 'wind' ? 'm/s' : 'mm/6h'})`}

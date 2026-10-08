@@ -13,6 +13,7 @@ import {
 import { fetchSpatialMetric, fetchSpatialMetricPlot } from '../api/spatialApi';
 import { SpatialAgreementPanel } from './comparison/SpatialAgreementPanel';
 import { t } from '../theme';
+import { fmtLat, fmtLon } from '../utils/geoUtils';
 import { useRun } from '../state/RunContext';
 import { useVerification } from '../state/VerificationContext';
 import { EmptyState } from './ui/PanelState';
@@ -541,7 +542,10 @@ export function ComparisonTab({
               background: 'rgba(46,204,113,0.12)', border: '1px solid rgba(46,204,113,0.25)',
               color: '#2ecc71',
             }}>
-              {parsedLat.toFixed(2)}°N, {parsedLon.toFixed(2)}°E
+              {/* fmtLat/fmtLon, not a hard-coded °N/°E: every point in this
+                  archive is west of Greenwich, so "-81.19°E" was wrong every
+                  time it was shown (`geoUtils.js`). */}
+              {fmtLat(parsedLat, 2)}, {fmtLon(parsedLon, 2)}
             </span>
           )}
         </div>
@@ -594,8 +598,8 @@ export function ComparisonTab({
               }}>
                 {selectedRegion.type === 'polygon' ? '⬡ Polygon' : '▭ Rectangle'}
                 {' '}
-                {selectedRegion.bounds.min_lat.toFixed(1)}°–{selectedRegion.bounds.max_lat.toFixed(1)}°N,{' '}
-                {selectedRegion.bounds.min_lon.toFixed(1)}°–{selectedRegion.bounds.max_lon.toFixed(1)}°E
+                {fmtLat(selectedRegion.bounds.min_lat, 1)}–{fmtLat(selectedRegion.bounds.max_lat, 1)},{' '}
+                {fmtLon(selectedRegion.bounds.min_lon, 1)}–{fmtLon(selectedRegion.bounds.max_lon, 1)}
               </span>
             ) : (
               <span style={{ color: '#f39c12', fontSize: t.fontSize.sm }}>
@@ -1516,8 +1520,8 @@ export function ComparisonTab({
                       borderRadius: '10px', padding: '3px 10px',
                     }}>
                       scored: {catData.box_cells ?? boxCells}×{catData.box_cells ?? boxCells} cells
-                      {' '}({catData.bbox[0].toFixed(1)}–{catData.bbox[1].toFixed(1)}°N,
-                      {' '}{catData.bbox[2].toFixed(1)}–{catData.bbox[3].toFixed(1)}°E)
+                      {' '}({fmtLat(catData.bbox[0], 1)}–{fmtLat(catData.bbox[1], 1)},
+                      {' '}{fmtLon(catData.bbox[2], 1)}–{fmtLon(catData.bbox[3], 1)})
                       {' · FSS over '}{catData.fss_window ?? fssWindow}×{catData.fss_window ?? fssWindow}
                     </span>
                   </div>
