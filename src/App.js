@@ -77,6 +77,11 @@ function App() {
   // ── UI state ────────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab]               = useState('visualization');
   const [menuOpen, setMenuOpen]                 = useState(false);
+  // How tall the timeline bar is right now, reported by it. Everything the map
+  // stacks on top of itself stops here, so nothing covers a visible control
+  // (§65). 0 until the first measurement, which is the old full-height
+  // behaviour for a single paint before the layout effect runs.
+  const [timelineH, setTimelineH]               = useState(0);
   const [showAbout, setShowAbout]               = useState(false);
   const [showTour, setShowTour]                 = useState(() => { try { return !localStorage.getItem('weave_onboarded'); } catch { return false; } });
   const closeTour = () => { try { localStorage.setItem('weave_onboarded', '1'); } catch { /* ignore */ } setShowTour(false); };
@@ -915,11 +920,17 @@ function App() {
         {/* Map canvas */}
         <div ref={mapRef} style={{ width: '100%', height: '100%', background: '#f5f5f5' }} />
 
-        {/* Click-away backdrop — closes the sidebar when user clicks the map */}
+        {/* Click-away backdrop — closes the sidebar when user clicks the map.
+            Stops at the timeline instead of `inset: 0`: it is transparent and
+            sat at z-index 999 over a bar at 900, so while the drawer was open
+            it silently swallowed every click on the scrubber and the transport
+            buttons across the *whole* width — not just the part the drawer
+            visibly covered (§65). The timeline is a control, not the map, so
+            operating it no longer closes the drawer either. */}
         {menuOpen && (
           <div
             onClick={() => setMenuOpen(false)}
-            style={{ position: 'absolute', inset: 0, zIndex: 999, cursor: 'default' }}
+            style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: timelineH, zIndex: 999, cursor: 'default' }}
           />
         )}
 
@@ -939,6 +950,7 @@ function App() {
         <ControlsSidebar
           open={menuOpen}
           isNarrow={isNarrow}
+          bottomInset={timelineH}
           models={MODELS}
           availableModels={selectedRun ? (modelsFor(selectedRun).length ? modelsFor(selectedRun) : null) : null}
           selectedModel={selectedModel} setSelectedModel={setSelectedModel}
@@ -966,12 +978,17 @@ function App() {
           selectedVariable={selectedVariable}
           obsCoverage={obsCoverage}
           isNarrow={isNarrow}
+          onHeight={setTimelineH}
         />
 
         {/* Legends */}
         {showData && (
           <div style={{
-            position: 'absolute', bottom: isNarrow ? '100px' : '72px', right: isNarrow ? '10px' : '20px',
+            // Sits a fixed gap above the timeline, whatever height that is.
+            // These were the two literals that disagreed with the bar — `72`
+            // against a measured 69, `100` against 83 — and with each other
+            // about how much clearance the legend wants (§65).
+            position: 'absolute', bottom: timelineH + 12, right: isNarrow ? '10px' : '20px',
             display: 'flex', flexDirection: 'column', gap: '10px', zIndex: 500, alignItems: 'flex-end',
             transform: isNarrow ? 'scale(0.8)' : 'none', transformOrigin: 'bottom right',
             maxHeight: isNarrow ? '60vh' : 'none', overflowY: isNarrow ? 'auto' : 'visible',

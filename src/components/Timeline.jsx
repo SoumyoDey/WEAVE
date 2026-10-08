@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { Play, Pause, SkipBack, SkipForward } from 'lucide-react';
 import { IconButton } from './ui/IconButton';
 import { t } from '../theme';
@@ -18,8 +18,11 @@ import { t } from '../theme';
  *   obsCoverage      {object|null} — /api/observation-coverage, or null while
  *                                    loading / if it failed
  *   isNarrow         {boolean} — compact, stacked layout for narrow viewports
+ *   onHeight         {fn(px)|undefined} — this bar's measured height, reported
+ *                                    whenever it changes; see `useLayoutEffect`
+ *                                    below for why it is measured, not named
  */
-export function Timeline({ currentModel, hours: runHours, selectedHour, setSelectedHour, obsCoverage, isNarrow }) {
+export function Timeline({ currentModel, hours: runHours, selectedHour, setSelectedHour, obsCoverage, isNarrow, onHeight }) {
   // The run's own lead times when they have arrived, the model constant until
   // then. `currentModel.hours` is `ALL_HOURS` — 0..360 every 6 hours — for all
   // three models, which matches none of them: GEFS precipitation is 3-hourly,
@@ -105,8 +108,38 @@ export function Timeline({ currentModel, hours: runHours, selectedHour, setSelec
     return () => window.removeEventListener('keydown', onKey);
   }); // re-bind each render so step() sees current values
 
+  /**
+   * Publish how tall this bar actually is.
+   *
+   * Anything the map lays over itself — the click-away backdrop, the controls
+   * drawer, the legends — has to stop above this bar or it covers a control
+   * the user can still see. The height is **measured rather than named**
+   * because it is not a constant: it is two stacked rows when `isNarrow`, one
+   * when not, and it moves with the font and the copyright footer. Two call
+   * sites had already written it down as `72` and `100`; measured, it is
+   * **69 and 83**, so both copies were wrong and a third would have been a
+   * third guess (`NEXT_STEPS.md` §65).
+   *
+   * `useLayoutEffect` so consumers lay out against the real number in the same
+   * paint, and a `ResizeObserver` because a viewport change crosses the
+   * `isNarrow` breakpoint without remounting anything.
+   */
+  const barRef = useRef(null);
+  useLayoutEffect(() => {
+    const el = barRef.current;
+    if (!el || !onHeight) return undefined;
+    const report = () => onHeight(el.getBoundingClientRect().height);
+    report();
+    // jsdom has no ResizeObserver; the one-shot report above is the whole
+    // behaviour under test, so this degrades to it rather than throwing.
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver(report);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [onHeight, isNarrow]);
+
   return (
-    <div style={{
+    <div ref={barRef} style={{
       position: 'absolute', bottom: 0, left: 0, right: 0,
       background: 'rgba(10,18,28,0.97)', backdropFilter: 'blur(12px)',
       borderTop: '1px solid rgba(255,255,255,0.07)', zIndex: 900,

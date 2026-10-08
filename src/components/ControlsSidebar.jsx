@@ -35,9 +35,15 @@ const MODES = [
 /**
  * Unified left "Controls" sidebar — merges the former Data (left) and Display
  * (right) panels into one, with progressive disclosure (Data / Display / Advanced).
+ *
+ * `bottomInset` is how much room to leave at the foot of the map for the
+ * timeline bar. It was `height: 100%`, which ran the drawer down over the
+ * transport controls, so Play/Prev/Next sat visible underneath an opaque panel
+ * (`NEXT_STEPS.md` §65). Stopping short of the bar keeps the drawer's own
+ * scroll area honest too: at `100%` its last section was behind the timeline.
  */
 export function ControlsSidebar({
-  open, isNarrow = false,
+  open, isNarrow = false, bottomInset = 0,
   models, selectedModel, setSelectedModel,
   // Models the *selected run* actually holds. Null while the run detail is
   // still loading, which is treated as "all available" rather than greying
@@ -60,7 +66,7 @@ export function ControlsSidebar({
   const showTexture = uncertaintyMode === 'texture';
 
   return (
-    <div style={{ position: 'absolute', top: 0, left: open ? '0' : (isNarrow ? '-92vw' : '-330px'), width: isNarrow ? '86vw' : '300px', maxWidth: '360px', height: '100%', background: t.panel, color: t.text, boxShadow: '4px 0 20px rgba(0,0,0,0.4)', transition: t.transition, zIndex: 1000, display: 'flex', flexDirection: 'column' }}>
+    <div style={{ position: 'absolute', top: 0, bottom: bottomInset, left: open ? '0' : (isNarrow ? '-92vw' : '-330px'), width: isNarrow ? '86vw' : '300px', maxWidth: '360px', background: t.panel, color: t.text, boxShadow: '4px 0 20px rgba(0,0,0,0.4)', transition: t.transition, zIndex: 1000, display: 'flex', flexDirection: 'column' }}>
       <div style={{ padding: `${t.space(3.5)} ${t.space(4)}`, borderBottom: `1px solid ${t.border}`, paddingTop: t.space(16), flexShrink: 0, display: 'flex', alignItems: 'center', gap: t.space(2), fontWeight: t.fontWeight.medium }}>
         <SlidersHorizontal size={16} style={{ color: t.accent }} />Controls
       </div>

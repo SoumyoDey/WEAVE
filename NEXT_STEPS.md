@@ -5845,12 +5845,9 @@ the push. Run all three.
 
 ### Two things that looked like defects and were not
 
-- **The transport buttons do nothing while the Controls drawer is open.** The
-  drawer is `height: 100%` at `z-index: 1000` and the timeline sits at 900, so
-  it covers Play/Prev/Next. It covers them *visibly* — the drawer is opaque and
-  the buttons are plainly behind it — so this is a drawer overlaying content,
-  not an invisible overlay eating clicks, and a real click lands the moment it
-  is closed. Worth revisiting as layout; not a fault.
+- ~~**The transport buttons do nothing while the Controls drawer is open.**~~
+  **That reading was wrong — see §65.** It is a fault, and the half I looked at
+  was the half that was not the fault.
 - **Four `ERR_CONNECTION_REFUSED` on one `spatial-metric` request.** Seen once,
   in one tab, early in the session. The backend access log has no record of
   them arriving and no reloader restart; the identical request then succeeded
@@ -5862,6 +5859,69 @@ the push. Run all three.
 The test suite checks what someone thought to assert; it does not read the
 screen. A label that is wrong in every rendering is invisible to tests that
 never render it and obvious to anyone who looks. Drive the app.
+
+---
+
+## 65. The timeline was unreachable, and §64 looked at the wrong half — 2026-10-08
+
+§64 listed "the drawer covers Play/Prev/Next" as *not* a defect, on the
+reasoning that the drawer is opaque and the buttons are visibly behind it, so a
+user would simply close it. **That reasoning described one of two overlays and
+the harmless one.**
+
+The other is the **click-away backdrop**: `position: absolute; inset: 0` at
+`z-index: 999`, rendered whenever the drawer is open, over a timeline bar at
+`z-index: 900`. It is transparent. So with the drawer open, the element on top
+at the Next button, at the middle of the scrubber **and at the far right of the
+bar** was all the same invisible sheet — measured with `elementFromPoint`, all
+three returning a 758×766 `DIV` at 999. The whole timeline was dead across its
+whole width, and the three quarters of it the drawer does not cover looked and
+felt perfectly normal.
+
+That is the distinction §64 got backwards. A control hidden behind an opaque
+panel is a layout choice a user can see and work around. A control they can
+see, click, and get nothing from is a fault — and the visible drawer was
+*masking* the invisible one, because the first thing anyone tests is the button
+nearest the drawer.
+
+### The fix, and why it is measured rather than named
+
+Everything the map stacks over itself now stops at the top of the timeline: the
+backdrop takes `bottom: timelineH` instead of `inset: 0`, and the drawer takes
+`bottom: bottomInset` instead of `height: 100%`.
+
+**`timelineH` is measured, not a constant**, and the reason is in the numbers.
+The bar is one row at desktop width and two when `isNarrow`, so its height is
+**69 px and 83 px** — and the legend was already carrying its own answer to the
+same question as `isNarrow ? '100px' : '72px'`. Both literals were wrong, by 3
+and by 17, and they disagreed with each other about how much clearance the
+legend wanted. A third hard-coded pair would have been a third guess. `Timeline`
+now reports its own height through a `ResizeObserver` in `useLayoutEffect`, the
+legend's two literals are gone, and the one place that knows how tall the bar is
+is the bar.
+
+One behaviour changed deliberately: **operating the timeline no longer closes
+the drawer.** The bar is a control, not the map.
+
+### What the test had to be
+
+`e2e/timelineReachable.spec.js`, four tests, and the layer is forced:
+
+- **jsdom cannot host this.** It has no layout, so nothing is ever on top of
+  anything and all four would pass against the broken build.
+- **The clicks must be real `click()` calls**, because Playwright's actionability
+  check *is* the hit test. `dispatchEvent` or `el.click()` in page script passes
+  against the broken build too — the DOM node was never the problem, which is
+  exactly how this survived: the button worked when called directly and only
+  failed when a human aimed at it.
+
+Confirmed in both directions: all four fail on the pre-fix source, all four pass
+after. And one of them failed for the *wrong reason* first — `locator.click()`
+on `.leaflet-container` refuses to run because the backdrop is on top of the map
+**by design**, against fixed and broken builds alike. That test now uses
+`page.mouse.click(x, y)`, which is what a user does: click a position and let
+whatever is on top receive it. **A test that fails on the broken build is not
+yet evidence; it has to fail for the reason you think it does.**
 
 ---
 
