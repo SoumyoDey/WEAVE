@@ -88,9 +88,23 @@ export function AnalysisTab({
   const catChartRef   = useRef(null);
 
   // ── Verification Metrics state ──────────────────────────────────────────────
-  // Default threshold: 25 mm/6h for precip, 10 m/s for wind
+  // Default threshold: 25 mm/6h for precip, 10 m/s for wind.
+  //
+  // **One threshold for the whole tab** (`NEXT_STEPS.md` §55). It used to be
+  // two — one for the verification panel and one for the spatial maps — so the
+  // same region could be scored at two different thresholds with only one of
+  // them visible in each mode. They started equal and diverged the moment
+  // either was touched, which meant the disagreement only ever appeared to a
+  // user who had changed something.
+  //
+  // Merging them is safe because the units already matched: both paths send
+  // `threshold_mm_6h` for precipitation and `threshold_ms` for wind, in native
+  // units. Held as a string so the field can be empty mid-typing; readers take
+  // `thresholdNum`.
   const defaultThreshold = selectedVariable === 'wind' ? 10 : 25;
-  const [catThreshold, setCatThreshold]   = useState(defaultThreshold);
+  const [threshold, setThreshold] = useState(defaultThreshold);
+  const parsedThreshold = parseFloat(threshold);
+  const thresholdNum = Number.isFinite(parsedThreshold) ? parsedThreshold : defaultThreshold;
   const [catHourMin,   setCatHourMin]     = useState(VD.HOUR_MIN);
   const [catHourMax,   setCatHourMax]     = useState(VD.HOUR_MAX);
 
@@ -117,11 +131,11 @@ export function AnalysisTab({
   const [regCatError,    setRegCatError]    = useState(null);
   const [regCatHasRun,   setRegCatHasRun]   = useState(false);
 
-  // Reset thresholds to variable-appropriate defaults and clear stale results on variable switch.
+  // Reset the threshold to the variable-appropriate default and clear stale
+  // results on variable switch.
   useEffect(() => {
     const def = selectedVariable === 'wind' ? 10 : 25;
-    setCatThreshold(def);
-    setRegionThreshold(def);
+    setThreshold(def);
     setCatData(null);
     setCatHasRun(false);
     setRegCatData(null);
@@ -133,7 +147,6 @@ export function AnalysisTab({
   const [analysisMode,       setAnalysisMode]       = useState('point');
   const [regionHourMin,      setRegionHourMin]      = useState(VD.HOUR_MIN);
   const [regionHourMax,      setRegionHourMax]      = useState(VD.HOUR_MAX);
-  const [regionThreshold,    setRegionThreshold]    = useState(selectedVariable === 'wind' ? 10 : 25);
   const [spatialMaps,        setSpatialMaps]        = useState({});
   const [regionRunning,      setRegionRunning]      = useState(false);
   // per-card share feedback: { [key]: 'idle' | 'copied' }
@@ -176,7 +189,7 @@ export function AnalysisTab({
         variable:     selectedVariable,
         lat:          clickedPoint.lat,
         lon:          clickedPoint.lon,
-        thresholdMm6h: parseFloat(catThreshold) || 25,
+        thresholdMm6h: thresholdNum,
         hourMin:      catHourMin,
         hourMax:      catHourMax,
         boxCells:     catBoxCells,
@@ -204,7 +217,7 @@ export function AnalysisTab({
         maxLat:        b.maxLat ?? b.max_lat,
         minLon:        b.minLon ?? b.min_lon,
         maxLon:        b.maxLon ?? b.max_lon,
-        thresholdMm6h: parseFloat(catThreshold) || 25,
+        thresholdMm6h: thresholdNum,
         hourMin:       catHourMin,
         hourMax:       catHourMax,
         fssWindow,
@@ -234,7 +247,7 @@ export function AnalysisTab({
           modelName: currentModel.name,
           variable:  selectedVariable,
           hour:      undefined,
-          threshold: m.requiresThreshold ? regionThreshold : undefined,
+          threshold: m.requiresThreshold ? thresholdNum : undefined,
           hourMin:   regionHourMin,
           hourMax:   regionHourMax,
           bounds,
@@ -257,7 +270,7 @@ export function AnalysisTab({
           model:          currentModel.name,
           variable:       selectedVariable,
           hour:           undefined,
-          threshold_mm_6h: m.requiresThreshold ? regionThreshold : undefined,
+          threshold_mm_6h: m.requiresThreshold ? thresholdNum : undefined,
           points:         pts.points,
           n_hours:        pts.n_hours,
         });
@@ -770,11 +783,11 @@ export function AnalysisTab({
 
                     {/* Threshold */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }} title="Separate from the Region spatial-maps threshold above">Threshold</span>
+                      <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }} title="Event threshold, in native units. One threshold for this tab: the Region spatial maps score at the same value.">Threshold</span>
                       <input
-                        type="number" min="0" step="1" value={catThreshold}
+                        type="number" min="0" step="1" value={threshold}
                         aria-label={`Threshold (${selectedVariable === 'wind' ? 'm/s' : 'mm/6h'})`}
-                        onChange={e => setCatThreshold(e.target.value)}
+                        onChange={e => setThreshold(e.target.value)}
                         style={{ width: '72px', padding: '4px 8px', fontSize: t.fontSize.base, fontWeight: t.fontWeight.semibold, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'right', outline: 'none' }}
                       />
                       <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.sm }}>
@@ -877,7 +890,7 @@ export function AnalysisTab({
                     {/* Active result label */}
                     {catMode === 'point' && catData && !catLoading && (() => {
                       const ti = catData.threshold_info ?? {};
-                      const thr = ti.threshold_ms ?? ti.threshold_mm_6h ?? catThreshold;
+                      const thr = ti.threshold_ms ?? ti.threshold_mm_6h ?? thresholdNum;
                       const unit = ti.unit ?? (selectedVariable === 'wind' ? 'm/s' : 'mm/6h');
                       const rateLabel = ti.unit === 'm/s' ? '' : ` (≡ ${ti.threshold_rate?.toFixed(3) ?? '—'} mm/h)`;
                       return (
@@ -888,7 +901,7 @@ export function AnalysisTab({
                     })()}
                     {catMode === 'region' && regCatData && !regCatLoading && (() => {
                       const ti = regCatData.threshold_info ?? {};
-                      const thr = ti.threshold_ms ?? ti.threshold_mm_6h ?? catThreshold;
+                      const thr = ti.threshold_ms ?? ti.threshold_mm_6h ?? thresholdNum;
                       const unit = ti.unit ?? (selectedVariable === 'wind' ? 'm/s' : 'mm/6h');
                       return (
                         <span style={{ fontSize: t.fontSize.xs, color: 'rgba(255,255,255,0.3)' }}>
@@ -1062,7 +1075,7 @@ export function AnalysisTab({
                           <>
                           <div ref={catChartRef}>
                             <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
-                              <span>Event Probability per Lead Time (threshold &gt; {activeData.threshold_info?.threshold_ms ?? activeData.threshold_info?.threshold_mm_6h ?? catThreshold} {activeData.threshold_info?.unit ?? (selectedVariable === 'wind' ? 'm/s' : 'mm/6h')})</span>
+                              <span>Event Probability per Lead Time (threshold &gt; {activeData.threshold_info?.threshold_ms ?? activeData.threshold_info?.threshold_mm_6h ?? thresholdNum} {activeData.threshold_info?.unit ?? (selectedVariable === 'wind' ? 'm/s' : 'mm/6h')})</span>
                               <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ display: 'inline-block', width: '10px', height: '10px', background: 'rgba(52,152,219,0.6)', borderRadius: '2px' }} />P(event) — Gaussian</span>
                               <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ display: 'inline-block', width: '14px', height: '3px', background: '#2ecc71', borderRadius: '1px' }} />Observed event</span>
                               <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ display: 'inline-block', width: '14px', height: '2px', background: '#e74c3c' }} />Forecast event (det.)</span>
@@ -1250,9 +1263,9 @@ export function AnalysisTab({
 
                   {/* Threshold */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: t.fontSize.xs, whiteSpace: 'nowrap' }} title="For spatial metric maps only. Verification Metrics below uses its own threshold setting.">Threshold (maps)</span>
-                    <input type="number" min="0" step="1" value={regionThreshold}
-                      onChange={e => setRegionThreshold(parseFloat(e.target.value) || (selectedVariable === 'wind' ? 10 : 25))}
+                    <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: t.fontSize.xs, whiteSpace: 'nowrap' }} title="Event threshold, in native units. One threshold for this tab: the Verification Metrics panel scores at the same value.">Threshold</span>
+                    <input type="number" min="0" step="1" value={threshold}
+                      onChange={e => setThreshold(e.target.value)}
                       style={{ width: '60px', padding: '4px 6px', fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'right', outline: 'none' }} />
                     <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.xs }}>
                       {selectedVariable === 'wind' ? 'm/s' : 'mm/6h'}
@@ -1275,7 +1288,7 @@ export function AnalysisTab({
                 {[
                   { id: 'calibration', label: 'Calibration', hint: 'Is the ensemble spread reliable?', keys: ['ssr_agg', 'correlation'] },
                   { id: 'accuracy',    label: 'Accuracy vs Observations', hint: 'How close is the ensemble mean to obs?', keys: ['bias', 'mae', 'rmse', 'crps'] },
-                  { id: 'categorical', label: `Categorical  (threshold > ${regionThreshold} ${selectedVariable === 'wind' ? 'm/s' : 'mm/6h'})`, hint: 'Event-based skill for threshold exceedances', keys: ['csi', 'pod', 'far', 'brier'] },
+                  { id: 'categorical', label: `Categorical  (threshold > ${thresholdNum} ${selectedVariable === 'wind' ? 'm/s' : 'mm/6h'})`, hint: 'Event-based skill for threshold exceedances', keys: ['csi', 'pod', 'far', 'brier'] },
                 ].map(group => (
                   <div key={group.id} style={{ marginBottom: '32px' }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: '12px', marginBottom: '14px' }}>

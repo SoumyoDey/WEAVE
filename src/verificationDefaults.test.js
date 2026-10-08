@@ -83,17 +83,21 @@ describe('the same control is called the same thing on both tabs', () => {
     expect(SOURCES.ComparisonTab).toContain(agreed);
   });
 
-  it('keeps the one qualifier that is doing work', () => {
+  it('no longer needs the qualifier that used to be doing work', () => {
     /**
-     * "Threshold (maps)" is NOT renamed to match Comparison's plain
-     * "Threshold". Analysis region mode really does carry two thresholds —
-     * one for the spatial maps and one the verification panel uses over the
-     * same region — and the qualifier plus its tooltip are what tell them
-     * apart. Consistency that removed that would make the tab less clear, not
-     * more. That the two thresholds exist at all is recorded as open in
-     * `NEXT_STEPS.md` §54.
+     * This test used to assert the opposite, and was right to: while Analysis
+     * carried two thresholds — one for the spatial maps, one the verification
+     * panel applied over the same region — "Threshold (maps)" and its tooltip
+     * were the only thing telling them apart, and renaming it to match
+     * Comparison would have made the tab less clear.
+     *
+     * §55 merged the two into one piece of state, which removed the thing the
+     * qualifier was qualifying. Both boxes now edit the same threshold and both
+     * read "Threshold", as Comparison's do. `AnalysisTab.threshold.test.js`
+     * holds the behaviour; this pins that the label did not survive the merge.
      */
-    expect(SOURCES.AnalysisTab).toContain('Threshold (maps)');
-    expect(SOURCES.AnalysisTab).toContain('uses its own threshold setting');
+    expect(SOURCES.AnalysisTab).not.toContain('Threshold (maps)');
+    expect(SOURCES.AnalysisTab).not.toContain('uses its own threshold setting');
+    expect(SOURCES.AnalysisTab).not.toContain('regionThreshold');
   });
 });

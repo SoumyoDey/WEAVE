@@ -5229,13 +5229,11 @@ than removing it.
 
 ### Still open, and it is the deeper version of the same thing
 
-**Analysis holds two thresholds and two lead ranges for one region.** The
-verification panel uses `catThreshold`/`catHour*`; the spatial maps use
-`regionThreshold`/`regionHour*`. They now start equal, so they agree until
-someone changes one — at which point the same region is scored two ways again,
-and only one of the two is visible in region mode. Making them one piece of
-state is the fix; it changes behaviour (moving the threshold in one place would
-move it in the other), so it wants a decision rather than a quiet refactor.
+~~**Analysis holds two thresholds and two lead ranges for one region.**~~
+**The thresholds were merged on 2026-10-08 — §55.** The two lead ranges remain:
+the verification panel uses `catHour*` and the spatial maps `regionHour*`. They
+start equal and diverge the moment either is changed, exactly as the thresholds
+did.
 
 ### A phantom, recorded because it nearly reached this document
 
@@ -5245,6 +5243,40 @@ one screen: the categorical panel's region mode (`catMode`) and the tab's
 region mode (`analysisMode`) are different controls, which `CONSISTENCY_AUDIT.md`
 3a already disambiguated in 2026-08. The finding above survives in the weaker,
 true form — two settings for one region, reachable from two places.
+
+---
+
+## 55. One threshold for the Analysis tab — 2026-10-08
+
+§54's open item, closed on request. Analysis held two thresholds for one
+region: `catThreshold` behind the Verification Metrics panel and
+`regionThreshold` behind the spatial maps. Each mode showed one of them, both
+boxes were labelled "Threshold" (one qualified "(maps)"), and they started
+equal — so **the tab agreed with itself until somebody typed in one of them**,
+and then scored the same region two ways with nothing on screen saying so.
+
+**The merge is safe because the units already matched, which is the thing worth
+checking first.** Both paths send `threshold_mm_6h` for precipitation and
+`threshold_ms` for wind, in native units — `spatialApi.js` for the maps and
+`analysisApi.js` for the scores. Had one been mm/h and the other mm/6h, a single
+box would have silently changed what the maps meant. A test now pins that
+agreement, because it is invisible from either call site.
+
+One `threshold` state, held as a string so the field can be empty mid-typing,
+with a `thresholdNum` every reader parses from it. Verified in the running app:
+typing 8 in Point mode, switching to Region, and finding 8 — where the old build
+showed "Threshold (maps) = 25".
+
+**Two labels changed, and one test now asserts the opposite of what it did
+yesterday.** §54 deliberately kept "Threshold (maps)" because the qualifier was
+the only thing distinguishing the two values; merging them removed the thing it
+qualified, so both boxes now read "Threshold" like Comparison's. The test that
+pinned the qualifier as *doing work* now pins that it is gone, with the reason
+in its docstring — a test changing sides is worth a sentence rather than a
+silent edit, because the next reader will otherwise find one of the two commits
+inexplicable.
+
+Five of the fourteen tests across the two files fail against the unmerged code.
 
 ---
 
