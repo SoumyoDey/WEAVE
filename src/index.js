@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import './index.css';
 import App from './App';
 import { RunProvider } from './state/RunContext';
+import { VerificationProvider } from './state/VerificationContext';
 import reportWebVitals from './reportWebVitals';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
@@ -12,7 +13,13 @@ root.render(
         future per-tab selector can override it for a subtree rather than
         every consumer having to change. */}
     <RunProvider>
-      <App />
+      {/* Beside the run, and for the same reason: a threshold qualifies every
+          categorical number exactly as a run qualifies every number, so it
+          belongs above the tabs rather than once per tab
+          (VERIFICATION_SETTINGS_DESIGN.md). */}
+      <VerificationProvider>
+        <App />
+      </VerificationProvider>
     </RunProvider>
   </React.StrictMode>
 );

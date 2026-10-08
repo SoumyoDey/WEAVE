@@ -112,18 +112,22 @@ export function ComparisonTab({
   const [showSpreadBands, setShowSpreadBands] = useState(true);
   const [normalizeScales, setNormalizeScales] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  // **One threshold and one FSS neighbourhood for the tab**, as Analysis has
+  // had since §55 and for the same reason (`NEXT_STEPS.md` §62). Point mode and
+  // region mode each used to keep their own: they started equal, because §54
+  // made the defaults one copy, and diverged the moment either was touched —
+  // with only one of each visible in each mode, so the tab disagreed with
+  // itself in a way only a user who had changed something could see.
+  //
+  // Safe to merge because the units already matched: both paths send
+  // `threshold_mm_6h` for precipitation and `threshold_ms` for wind, in native
+  // units (`comparisonApi.js`).
   const [threshold, setThreshold] = useState(selectedVariable === 'wind' ? 10 : 25);
   const [fssWindow, setFssWindow] = useState(VD.FSS_WINDOW);
   // The area scored around the point, in grid cells. Deliberately separate from
   // fssWindow: widening the neighbourhood used to widen the box too, which moved
   // CSI/POD/FAR when only the FSS scale was meant to change.
   const [boxCells, setBoxCells] = useState(VD.BOX_CELLS);
-  // Region mode keeps its own threshold: it drives the region-metric and map
-  // views, while `threshold` above drives point-mode advanced metrics.
-  const [regionThreshold, setRegionThreshold] = useState(selectedVariable === 'wind' ? 10 : 25);
-  // FSS neighbourhood width in grid cells. Separate from the drawn region: it
-  // sets the spatial scale the placement score is judged at, not the domain.
-  const [regionFssWindow, setRegionFssWindow] = useState(VD.FSS_WINDOW);
 
   // Loading
   const [tsLoading, setTsLoading] = useState(false);
@@ -168,7 +172,6 @@ export function ComparisonTab({
   useEffect(() => {
     const def = selectedVariable === 'wind' ? 10 : 25;
     setThreshold(def);
-    setRegionThreshold(def);
     setCatData(null);
     setRegionData(null);
     setModelMaps({});
@@ -290,8 +293,8 @@ export function ComparisonTab({
         variable: selectedVariable,
         bounds: selectedRegion.bounds,
         hourMin, hourMax,
-        threshold: Number(regionThreshold),
-        fssWindow: Number(regionFssWindow),
+        threshold: Number(threshold),
+        fssWindow: Number(fssWindow),
       });
       if (seq !== regionSeqRef.current) return;   // a newer run superseded this one
       setRegionData(result);
@@ -317,7 +320,7 @@ export function ComparisonTab({
 
     const def    = SPATIAL_MAP_METRICS.find(x => x.key === mapMetric);
     const bounds = selectedRegion.bounds;
-    const thr    = def?.requiresThreshold ? Number(regionThreshold) : undefined;
+    const thr    = def?.requiresThreshold ? Number(threshold) : undefined;
     const isWind = selectedVariable === 'wind';
 
     const computeOne = async (m) => {
@@ -396,7 +399,7 @@ export function ComparisonTab({
         metric: mapMetric, variable: selectedVariable,
         bounds: selectedRegion.bounds,
         hourMin, hourMax,
-        threshold: def?.requiresThreshold ? Number(regionThreshold) : undefined,
+        threshold: def?.requiresThreshold ? Number(threshold) : undefined,
       });
       if (seq !== diffSeqRef.current) return;
       setDiffData(result);
@@ -757,8 +760,8 @@ export function ComparisonTab({
                 <input
                   type="number"
                   min={0}
-                  value={regionThreshold}
-                  onChange={e => setRegionThreshold(e.target.value)}
+                  value={threshold}
+                  onChange={e => setThreshold(e.target.value)}
                   aria-label={`Threshold (${thresholdUnit})`}
                   style={{ ...INPUT, width: '72px' }}
                 />
@@ -779,13 +782,13 @@ export function ComparisonTab({
                 <input
                   type="number"
                   min={1} max={21} step={2}
-                  value={regionFssWindow}
-                  onChange={e => setRegionFssWindow(Math.max(1, Math.min(21, Number(e.target.value) || 1)))}
+                  value={fssWindow}
+                  onChange={e => setFssWindow(Math.max(1, Math.min(21, Number(e.target.value) || 1)))}
                   aria-label="FSS neighbourhood width (grid cells)"
                   style={{ ...INPUT, width: '64px' }}
                 />
                 <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: t.fontSize.sm }}>
-                  cells (≈{(regionFssWindow * 0.5).toFixed(1)}°)
+                  cells (≈{(fssWindow * 0.5).toFixed(1)}°)
                 </span>
               </div>
               <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.micro, marginTop: '5px' }}>
@@ -915,7 +918,7 @@ export function ComparisonTab({
                           <div style={SUBHEAD}>
                             <span style={{ fontWeight: t.fontWeight.semibold }}>
                               {group.label}
-                              {group.id === 'categorical' && ` (> ${regionThreshold} ${thresholdUnit})`}
+                              {group.id === 'categorical' && ` (> ${threshold} ${thresholdUnit})`}
                             </span>
                             {group.id === 'categorical' && (
                               <span style={{ fontSize: t.fontSize.micro, color: 'rgba(255,255,255,0.3)' }}>
@@ -1580,7 +1583,7 @@ export function ComparisonTab({
               <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: t.fontSize.sm }}>
                 One map per selected model
                 {SPATIAL_MAP_METRICS.find(x => x.key === mapMetric)?.requiresThreshold
-                  && ` · threshold > ${regionThreshold} ${thresholdUnit}`}
+                  && ` · threshold > ${threshold} ${thresholdUnit}`}
               </span>
             </div>
 
