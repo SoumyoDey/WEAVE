@@ -11,6 +11,7 @@ import {
   fetchComparisonSpatialDiff,
 } from '../api/comparisonApi';
 import { fetchSpatialMetric, fetchSpatialMetricPlot } from '../api/spatialApi';
+import { VERIFICATION_DEFAULTS as VD } from '../constants';
 import { t } from '../theme';
 import { useRun } from '../state/RunContext';
 import { LoadingState, EmptyState } from './ui/PanelState';
@@ -489,24 +490,24 @@ export function ComparisonTab({
   // What the user has ticked. Not what gets used — see `selectedModels` below,
   // which narrows this to the models the selected run actually holds.
   const [pickedModels, setSelectedModels] = useState(['AIFS', 'GEFS', 'UKMO']);
-  const [hourMin, setHourMin] = useState(0);
-  const [hourMax, setHourMax] = useState(168);
+  const [hourMin, setHourMin] = useState(VD.HOUR_MIN);
+  const [hourMax, setHourMax] = useState(VD.HOUR_MAX);
   const [spatialHour, setSpatialHour] = useState(defaultHour || 6);
   const [showSpreadBands, setShowSpreadBands] = useState(true);
   const [normalizeScales, setNormalizeScales] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [threshold, setThreshold] = useState(selectedVariable === 'wind' ? 10 : 25);
-  const [fssWindow, setFssWindow] = useState(5);
+  const [fssWindow, setFssWindow] = useState(VD.FSS_WINDOW);
   // The area scored around the point, in grid cells. Deliberately separate from
   // fssWindow: widening the neighbourhood used to widen the box too, which moved
   // CSI/POD/FAR when only the FSS scale was meant to change.
-  const [boxCells, setBoxCells] = useState(9);
+  const [boxCells, setBoxCells] = useState(VD.BOX_CELLS);
   // Region mode keeps its own threshold: it drives the region-metric and map
   // views, while `threshold` above drives point-mode advanced metrics.
   const [regionThreshold, setRegionThreshold] = useState(selectedVariable === 'wind' ? 10 : 25);
   // FSS neighbourhood width in grid cells. Separate from the drawn region: it
   // sets the spatial scale the placement score is judged at, not the domain.
-  const [regionFssWindow, setRegionFssWindow] = useState(3);
+  const [regionFssWindow, setRegionFssWindow] = useState(VD.FSS_WINDOW);
 
   // Loading
   const [tsLoading, setTsLoading] = useState(false);

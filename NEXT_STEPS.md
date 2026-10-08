@@ -5176,6 +5176,78 @@ explanation; both now share it.
 
 ---
 
+## 54. §41 agreed the estimator and left the defaults disagreeing — 2026-10-08
+
+A sweep for the rest of §53's class of defect — the same thing meaning two
+things across tabs. Three findings, one of which changes numbers.
+
+### The same region, two answers, with the estimator identical
+
+§41 made Analysis and Comparison pool categorical metrics the same way. It did
+not make them **start** at the same settings, and four independently written
+defaults had drifted. Same region, same model, same threshold (2 mm/6h), each
+tab at its own defaults:
+
+| model | Analysis (0–240 h, FSS 5) | Comparison (0–168 h, FSS 3) |
+|---|---|---|
+| AIFS | CSI **0.3082** · POD 0.7313 · FSS 0.6492 | CSI **0.3630** · POD 0.8167 · FSS 0.6582 |
+| GEFS | CSI 0.2908 · POD 0.8507 · FSS 0.6147 | CSI 0.3022 · POD 0.9167 · FSS 0.5684 |
+| UKMO | CSI 0.3913 · POD 0.9000 · FSS **0.7258** | CSI 0.3913 · POD 0.9000 · FSS **0.6824** |
+
+**18% apart on AIFS's CSI.** Forced to the same settings they agree to the last
+digit, so the whole difference was the defaults.
+
+Two causes, each a single surface out of step with the other three:
+
+- **Lead range.** The Analysis categorical panel scored 0–240 h; everything
+  else 0–168. Harmonised to **0–168** (the user's call, 2026-10-08). Note it is
+  invisible at a point and only appears over a region: at a point nothing
+  exceeds the threshold past 168 h on this run, which is why UKMO's CSI matches
+  above while AIFS's does not.
+- **FSS neighbourhood.** Comparison's *region* mode used 3 where the other
+  three — including Comparison's own *point* mode — used 5. That alone moved
+  UKMO's region FSS from 0.7258 to 0.6824.
+
+`VERIFICATION_DEFAULTS` in `src/constants.js` now holds one copy of each, and
+`src/verificationDefaults.test.js` fails if a tab goes back to a literal. Five
+of its nine tests fail against the previous code.
+
+### The same control, two names
+
+| parameter | was (Analysis) | was (Comparison) | now |
+|---|---|---|---|
+| FSS neighbourhood | "FSS window" | "FSS neighbourhood" | **FSS neighbourhood** |
+| lead-time range | "Hours" | "Lead times" | **Lead times** |
+
+**One mismatch was left in place deliberately.** Analysis region says
+"Threshold (maps)" where Comparison says "Threshold", and that qualifier is
+doing work: Analysis region really does carry two thresholds — one for the
+spatial maps, one the verification panel applies over the same region — and the
+label plus its tooltip are what distinguish them. Renaming it for surface
+consistency would make the tab less clear. The test pins the qualifier rather
+than removing it.
+
+### Still open, and it is the deeper version of the same thing
+
+**Analysis holds two thresholds and two lead ranges for one region.** The
+verification panel uses `catThreshold`/`catHour*`; the spatial maps use
+`regionThreshold`/`regionHour*`. They now start equal, so they agree until
+someone changes one — at which point the same region is scored two ways again,
+and only one of the two is visible in region mode. Making them one piece of
+state is the fix; it changes behaviour (moving the threshold in one place would
+move it in the other), so it wants a decision rather than a quiet refactor.
+
+### A phantom, recorded because it nearly reached this document
+
+I had "the Analysis region categorical numbers and the maps beside them use
+different windows on one screen" written down before checking. They are not on
+one screen: the categorical panel's region mode (`catMode`) and the tab's
+region mode (`analysisMode`) are different controls, which `CONSISTENCY_AUDIT.md`
+3a already disambiguated in 2026-08. The finding above survives in the weaker,
+true form — two settings for one region, reachable from two places.
+
+---
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in

@@ -119,6 +119,32 @@ export const VALUE_UNITS = {
   wind:          'm/s',
 };
 
+// What every scored surface starts at. **One copy, because four copies drifted**
+// (`NEXT_STEPS.md` §54).
+//
+// Analysis and Comparison answer the same question about the same region, and
+// since §41 they use the same estimator — but they were started at different
+// settings, so the same region still read differently on the two tabs. At their
+// old defaults, AIFS over one box at 2 mm/6h: **CSI 0.3082 on Analysis against
+// 0.3630 on Comparison**, 18% apart, with the estimator identical. Forced to
+// the same settings they agreed exactly, so the whole difference was here.
+//
+// - `HOUR_MAX` 168: seven days. Three of the four surfaces already used it; the
+//   Analysis categorical panel was alone at 240. Observations reach +258 h on
+//   the loaded run, so this is a choice about what to compare by default, not a
+//   limit of the data — a surface may still be driven past it by hand.
+// - `FSS_WINDOW` 5: three of the four surfaces already used it; Comparison's
+//   region mode was alone at 3, which moved UKMO's region FSS from 0.7258 to
+//   0.6824 for no reason a reader could see.
+// - `BOX_CELLS` 9: both point surfaces already agreed. Here so it cannot
+//   quietly stop agreeing.
+export const VERIFICATION_DEFAULTS = {
+  HOUR_MIN:   0,
+  HOUR_MAX:   168,
+  FSS_WINDOW: 5,
+  BOX_CELLS:  9,
+};
+
 export const withUnit = (text, variable) =>
   typeof text === 'string'
     ? text.replaceAll('{unit}', VALUE_UNITS[variable] ?? '')

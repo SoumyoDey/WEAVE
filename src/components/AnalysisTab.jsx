@@ -7,7 +7,7 @@ import {
 import { BarChart3, MapPin, Map as MapIcon } from 'lucide-react';
 import { fetchCategoricalMetrics, fetchRegionCategoricalMetrics } from '../api/analysisApi';
 import { fetchSpatialMetric, fetchSpatialMetricPlot } from '../api/spatialApi';
-import { METRIC_CONFIG } from '../constants';
+import { METRIC_CONFIG, VERIFICATION_DEFAULTS as VD } from '../constants';
 import { t } from '../theme';
 import { fmtLat, fmtLon } from '../utils/geoUtils';
 import { LoadingState, EmptyState, NoDataNote } from './ui/PanelState';
@@ -91,8 +91,8 @@ export function AnalysisTab({
   // Default threshold: 25 mm/6h for precip, 10 m/s for wind
   const defaultThreshold = selectedVariable === 'wind' ? 10 : 25;
   const [catThreshold, setCatThreshold]   = useState(defaultThreshold);
-  const [catHourMin,   setCatHourMin]     = useState(0);
-  const [catHourMax,   setCatHourMax]     = useState(240);
+  const [catHourMin,   setCatHourMin]     = useState(VD.HOUR_MIN);
+  const [catHourMax,   setCatHourMax]     = useState(VD.HOUR_MAX);
 
   const [catLoading,   setCatLoading]     = useState(false);
   const [catData,      setCatData]        = useState(null);  // full API response
@@ -106,12 +106,12 @@ export function AnalysisTab({
   // score, not a display option. Odd values centre cleanly on a cell.
   // Defaults match the Comparison tab so the same score is asked the same
   // question in both places.
-  const [fssWindow,      setFssWindow]      = useState(5);
+  const [fssWindow,      setFssWindow]      = useState(VD.FSS_WINDOW);
   // The field FSS is evaluated over, in cells. It affects FSS and nothing else:
   // the contingency table reads the centre cell at every width (verified — hits,
   // misses and false alarms are identical at 1, 3, 5 and 9). It was 1, which made
   // FSS structurally undefined and therefore invisible in this tab.
-  const [catBoxCells,    setCatBoxCells]    = useState(9);
+  const [catBoxCells,    setCatBoxCells]    = useState(VD.BOX_CELLS);
   const [regCatLoading,  setRegCatLoading]  = useState(false);
   const [regCatData,     setRegCatData]     = useState(null);
   const [regCatError,    setRegCatError]    = useState(null);
@@ -131,8 +131,8 @@ export function AnalysisTab({
 
   // ── Region mode state ────────────────────────────────────────────────────────
   const [analysisMode,       setAnalysisMode]       = useState('point');
-  const [regionHourMin,      setRegionHourMin]      = useState(0);
-  const [regionHourMax,      setRegionHourMax]      = useState(168);
+  const [regionHourMin,      setRegionHourMin]      = useState(VD.HOUR_MIN);
+  const [regionHourMax,      setRegionHourMax]      = useState(VD.HOUR_MAX);
   const [regionThreshold,    setRegionThreshold]    = useState(selectedVariable === 'wind' ? 10 : 25);
   const [spatialMaps,        setSpatialMaps]        = useState({});
   const [regionRunning,      setRegionRunning]      = useState(false);
@@ -831,7 +831,7 @@ export function AnalysisTab({
                           style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }}
                           title="Width of the box FSS compares event fractions over. Wider neighbourhoods forgive small displacement errors."
                         >
-                          FSS window
+                          FSS neighbourhood
                         </span>
                         <input
                           type="number" min="1" max="21" step="2" value={fssWindow}
@@ -847,7 +847,7 @@ export function AnalysisTab({
 
                     {/* Hour range */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }}>Hours</span>
+                      <span style={{ color: 'rgba(255,255,255,0.55)', fontSize: t.fontSize.sm, whiteSpace: 'nowrap' }}>Lead times</span>
                       <input type="number" min="0" step="6" value={catHourMin}
                         onChange={e => setCatHourMin(parseInt(e.target.value, 10) || 0)}
                         style={{ width: '60px', padding: '4px 6px', fontSize: t.fontSize.sm, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'center', outline: 'none' }} />
@@ -1237,7 +1237,7 @@ export function AnalysisTab({
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px', flexWrap: 'wrap', background: 'rgba(255,255,255,0.04)', borderRadius: '10px', padding: '12px 16px', border: '1px solid rgba(255,255,255,0.08)' }}>
                   {/* Hour range */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: t.fontSize.xs, whiteSpace: 'nowrap' }}>Hours</span>
+                    <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: t.fontSize.xs, whiteSpace: 'nowrap' }}>Lead times</span>
                     <input type="number" min="0" step="6" value={regionHourMin}
                       onChange={e => setRegionHourMin(parseInt(e.target.value, 10) || 0)}
                       style={{ width: '52px', padding: '4px 6px', fontSize: t.fontSize.sm, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: t.radiusSm, color: 'white', textAlign: 'center', outline: 'none' }} />
