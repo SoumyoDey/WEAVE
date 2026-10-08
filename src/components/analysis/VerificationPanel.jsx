@@ -28,11 +28,10 @@ import {
 } from 'recharts';
 
 import { fetchCategoricalMetrics, fetchRegionCategoricalMetrics } from '../../api/analysisApi';
-import { METRIC_CONFIG, VERIFICATION_DEFAULTS as VD } from '../../constants';
+import { VERIFICATION_DEFAULTS as VD } from '../../constants';
 import { useVerification } from '../../state/VerificationContext';
 import { t } from '../../theme';
 import { fmtLat, fmtLon } from '../../utils/geoUtils';
-import { LoadingState, NoDataNote } from '../ui/PanelState';
 import { downloadChartAsPng } from './chartExport';
 
 

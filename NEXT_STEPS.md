@@ -5756,6 +5756,22 @@ Verified live: the panel runs for a clicked point and returns CSI, POD, FAR,
 FBI, Brier and FSS with five charts and no console errors; the cone and
 spread-skill panels render above it.
 
+### `npx eslint <dir>` does not lint `.jsx`, and CI found that out
+
+The first push of this failed `frontend · build` on three unused imports in the
+new panel — after `npm test` passed, after `npx eslint src/components/analysis/`
+reported **zero problems**, and after a browser check. The directory form of
+the eslint CLI only picks up `.js` without `--ext .jsx`, so it had silently
+linted nothing in a directory of `.jsx` files and said so as a clean result.
+
+**`CI=true npm run build` is the authoritative frontend check** — it is what
+the build job runs and it treats warnings as errors. A lint command that is
+quiet because it examined no files looks exactly like a lint command that is
+quiet because the code is clean, which is the same failure shape as §28's
+vacuous tests and §49's stale markers: *a check that cannot fail is not a
+check*. Run the build before pushing frontend work, and read a zero-problem
+lint of a `.jsx` directory with suspicion.
+
 ---
 
 ## Standing decisions — do not undo these by accident
