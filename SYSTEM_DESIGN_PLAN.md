@@ -378,23 +378,51 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
   rather than quietly corrected, because a well-tested component wired to
   nothing is a failure mode this project has now hit three times.
 - **Still open** — config-driving the hardcoded extent / candidate hours / obs
-  sources / base date. Each verified in place 2026-10-08:
+  sources. Each verified in place 2026-10-08:
 
   | item | where it is written down |
   |---|---|
-  | extent | `TARGET_LAT_RANGE`/`TARGET_LON_RANGE` in `Data/regrid_members.py:84`, and again as bbox defaults at `flask_api.py:700` and `:4474` |
+  | extent | `TARGET_LAT_RANGE`/`TARGET_LON_RANGE` in `Data/regrid_members.py:84`, and again as bbox defaults at `flask_api.py:700`, `:4474` **and `:5089`** |
+
+  **The third copy disagrees with the other two, and it changes a score.**
+  Found 2026-10-08 while re-verifying this row. `flask_api.py:700` (the shared
+  arg parser) and `:4474` (`/api/compare/spatial-agreement`) both default to
+  **25–45 N, −85..−65 W**, which is the loaded domain.
+  `/api/region-categorical-metrics` at `:5089` defaults to **20–40 N,
+  −100..−60 W** — a different box, which clips the northern 40–45 N off the
+  grid and extends west into cells that hold nothing.
+
+  Measured, AIFS precipitation at 5 mm/6h over 0–168 h on `2025-09-16 00Z`,
+  one request with no bbox and one naming the shared domain:
+
+  | | CSI | POD | FSS |
+  |---|---|---|---|
+  | endpoint's own default (20–40 / −100..−60) | **0.1602** | 0.2192 | 0.4672 |
+  | the domain everything else defaults to | **0.1473** | 0.1960 | 0.4402 |
+
+  This is §54's defect in a place that sweep could not reach: §54 unified the
+  defaults the *client* sends, and this one lives on the server, where no
+  frontend test can see it. It is latent while the UI always sends a bbox —
+  region mode requires a drawn region — and reachable by anything that does
+  not, including the `curl` examples in `RUNBOOK_LOAD_ONE_RUN.md`. **A default
+  nobody exercises is still an answer the endpoint will give.**
   | candidate hours | `src/components/MetricPanel.jsx:50` — `[0, 6, 12, 18]` for wind, `[6, 12, 18, 24]` otherwise |
   | obs sources | `src/components/AnalysisTab.jsx:192` and `AboutModal.jsx:80` name IMERG and ERA5 in prose |
-  | base date | `src/components/Timeline.jsx:67` |
 
-  **The base date is not merely unconfigured, it is wrong, and the line above it
-  says so.** The fallback is `new Date('2025-09-08T00:00:00Z')` while the run
-  the app opens on is `2025-09-16`; the comment two lines up reads *"comes from
-  the run, not a hard-coded date — the latter silently lied the moment a
-  different run was loaded."* It is reached whenever `obsCoverage` is null,
-  which is every page load until that request returns, and permanently if it
-  fails. Valid times are then computed eight days off. Filed here rather than
-  fixed in a documentation commit.
+  ~~**base date** — `src/components/Timeline.jsx:67`, and not merely
+  unconfigured but *wrong*: an eight-day-stale literal reached on every page
+  load until `/api/observation-coverage` returned.~~ **CLOSED 2026-10-08
+  (`NEXT_STEPS.md` §68).** There is no base-date literal left; the timeline
+  takes the run's init from `selectedRun` and shows no valid time at all when
+  there is no run.
+
+  > **This row went stale in two commits, written by the same person who then
+  > fixed the thing it described.** It was added on 2026-10-08 during the
+  > marker sweep (§67) and the defect was fixed an hour later (§68) without the
+  > row moving. It is left struck through rather than deleted because the
+  > interval is the point: the gap between fixing something and un-marking it
+  > is where every other entry in this document went stale too, and it is
+  > measured in *hours*, not months.
 
 - ~~**the deferred refactors** (`@with_db_cursor`, `_render_map()`, shared chart
   primitives, decomposing the two large tab components)~~ — **three of the four
