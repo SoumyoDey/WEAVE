@@ -5986,6 +5986,60 @@ wrong symbol; here, a harness that resolved the wrong address. **A negative
 result is only evidence about the thing you actually exercised**, and the
 burden is to show the probe could have seen the failure at all.
 
+---
+
+## 67. Three stale markers, and the one that was hiding a wrong date — 2026-10-08
+
+The open-item sweep found three markers that read as open and were not. §49's
+rule held again: **correcting a marker against the code is what hands you the
+defect it was standing in front of.**
+
+| marker | what it claimed | what is true |
+|---|---|---|
+| `SYSTEM_DESIGN_PLAN.md` S4 | four deferred refactors open | three landed today (§57–§60, §63); only shared chart primitives remain, and §63 parked that *deliberately* |
+| `CONSISTENCY_AUDIT.md` phase 5 | "whether to extract them is still an open question" | answered — `AnalysisTab.jsx` 1,376 → **428**, `ComparisonTab.jsx` 2,373 → **1,775** |
+| `TC_DATA_ACCESS.md` | four "open questions for whoever has context" | two answered from the files; this document's own header already said nothing about the archive was unexplained |
+
+### The thing the first marker was hiding
+
+That bullet also listed "config-driving the hardcoded extent / candidate hours /
+obs sources / base date" — genuinely open, so it had never been looked at. Going
+to each of the four to write down *where* it lives turned up a defect in the
+fourth:
+
+```js
+// src/components/Timeline.jsx:67
+: new Date('2025-09-08T00:00:00Z');
+```
+
+**That fallback is eight days off the run the app opens on** (`2025-09-16`), and
+the comment two lines above it reads *"the initialisation time comes from the
+run, not a hard-coded date — the latter silently lied the moment a different run
+was loaded."* The line the comment condemns is the line beneath it. It is
+reached whenever `obsCoverage` is null — every page load until that request
+returns, and permanently if it fails — and the timeline's "valid at" label is
+wrong by eight days for that window.
+
+Filed, not fixed: this was a documentation sweep, and a wrong date on screen
+deserves its own commit and its own test rather than riding along in one.
+
+**Why "config-drive it" hid it.** An item phrased as a *refactor* gets read as
+tidiness — nobody re-reads a hardcoded constant to check it is still the right
+constant, because the complaint is that it is hardcoded, not that it is wrong.
+
+### And this sweep broke a heading in the commit before it
+
+`99b70c9` replaced the `## Standing decisions — do not undo these by accident`
+heading with §66's instead of restoring it, so that section's content spent one
+commit orphaned under §66 — reading as part of a note about IPv6. Restored here.
+**An edit anchored on the heading that follows your insertion point has to put
+that heading back**, and nothing in a Markdown file will complain if it does
+not.
+
+---
+
+## Standing decisions — do not undo these by accident
+
 **GEFS precipitation will not be re-exported.** The correction in
 `SCALED_EXPORT_DIVISOR_HOURS = {'AIFS': 6.0, 'GEFS': 3.0}` is therefore
 permanent. It is not debt: it describes how the loaded data was produced.

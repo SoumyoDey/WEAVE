@@ -378,12 +378,35 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
   rather than quietly corrected, because a well-tested component wired to
   nothing is a failure mode this project has now hit three times.
 - **Still open** — config-driving the hardcoded extent / candidate hours / obs
-  sources / base date, and the deferred refactors (`@with_db_cursor`,
-  `_render_map()`, shared chart primitives, decomposing the two large tab
-  components). Re-measured 2026-10-07: the domain is written out as
-  `TARGET_LAT_RANGE`/`TARGET_LON_RANGE` in `Data/regrid_members.py` and again as
-  bbox defaults in two `flask_api.py` handlers; and both tab components keep
-  growing — **measure, do not quote**:
+  sources / base date. Each verified in place 2026-10-08:
+
+  | item | where it is written down |
+  |---|---|
+  | extent | `TARGET_LAT_RANGE`/`TARGET_LON_RANGE` in `Data/regrid_members.py:84`, and again as bbox defaults at `flask_api.py:700` and `:4474` |
+  | candidate hours | `src/components/MetricPanel.jsx:50` — `[0, 6, 12, 18]` for wind, `[6, 12, 18, 24]` otherwise |
+  | obs sources | `src/components/AnalysisTab.jsx:192` and `AboutModal.jsx:80` name IMERG and ERA5 in prose |
+  | base date | `src/components/Timeline.jsx:67` |
+
+  **The base date is not merely unconfigured, it is wrong, and the line above it
+  says so.** The fallback is `new Date('2025-09-08T00:00:00Z')` while the run
+  the app opens on is `2025-09-16`; the comment two lines up reads *"comes from
+  the run, not a hard-coded date — the latter silently lied the moment a
+  different run was loaded."* It is reached whenever `obsCoverage` is null,
+  which is every page load until that request returns, and permanently if it
+  fails. Valid times are then computed eight days off. Filed here rather than
+  fixed in a documentation commit.
+
+- ~~**the deferred refactors** (`@with_db_cursor`, `_render_map()`, shared chart
+  primitives, decomposing the two large tab components)~~ — **three of the four
+  are DONE, 2026-10-08** (`NEXT_STEPS.md` §57–§60, §63). `@with_db_cursor`
+  decorates 22 views; the map furniture is shared as `_map_figure_png` with 5
+  callers; both tab components were decomposed. **Shared chart primitives are
+  the one that remains**, and §63 parked it deliberately rather than by
+  omission: the control row is rendered in two different visual idioms across
+  the two tabs, so sharing it would mean picking one and changing how the other
+  looks — a design decision, not a refactor.
+
+  The tab components no longer "keep growing" — **measure, do not quote**:
 
   ```bash
   wc -l src/components/AnalysisTab.jsx src/components/ComparisonTab.jsx
@@ -399,8 +422,15 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
   > it was 1,376 by 2026-10-08. A figure that moves whenever anyone touches the
   > file cannot be carried in prose, so the command above replaces it — the
   > same treatment §29 reached for the coverage percentages, for the same
-  > reason. What the item needs is the *fact* that both components are large
-  > and undecomposed, which does not change between measurements.
+  > reason.
+  >
+  > That paragraph used to end "what the item needs is the *fact* that both
+  > components are large and undecomposed, which does not change between
+  > measurements." It changed on 2026-10-08: they were decomposed. The dated
+  > counts above are left as written, because they record the staleness problem
+  > rather than assert today's sizes — but **the standing fact the item rested
+  > on is gone, which is the one thing a "does not change" claim never prepares
+  > you for.**
 - **Exit:** not reached. Adding a *metric* is now a single-place change (§35),
   but a model or variable is still two — `constants.js` `MODELS` carries each
   model's member count and lead hours beside the backend's own registry.

@@ -650,7 +650,19 @@ The guardrail in the plan held to the end: `ComparisonTab.jsx` is 2,300 lines an
 either (both have grown since; `SYSTEM_DESIGN_PLAN.md` S4 carries the command
 rather than a number). Phase 5
 reached them for the first time, and only to change the spelling of a constant.
-Whether to extract them is still an open question, and still a separate one.
+~~Whether to extract them is still an open question, and still a separate one.~~
+
+**Answered 2026-10-08: both were extracted** (`NEXT_STEPS.md` §59, §60, §63).
+`AnalysisTab.jsx` went 1,376 → 428 lines and `ComparisonTab.jsx` 2,373 → ~1,775,
+into `src/components/analysis/` and `src/components/comparison/`. The separate
+question had a separate answer, which is what the sentence above was holding the
+place for; it was simply never updated when the answer arrived.
+
+Measure rather than trust the numbers in this paragraph:
+
+```bash
+wc -l src/components/AnalysisTab.jsx src/components/ComparisonTab.jsx
+```
 
 ---
 

@@ -910,10 +910,26 @@ distinctly, and `NA` unifies 25 `AL` runs with 10 `North Atlantic` ones.
 
 ## Open questions for whoever has context
 
-- Which storm, or storms? One case to prove the feature, or a season?
-- Can Shuochen say how the data was produced — which model, which tracker if
-  any, and what was already applied to it? §2 argues this is the cheapest route
-  to most of §3, and it is not blocking.
+**Two of these four were answered from the files and are struck through below
+(2026-10-08).** They were left standing while the header of this document
+already said *"Nothing about this archive is now unexplained"* — the section was
+simply never marked, unlike the ones at §4 and §6. A list of questions that
+includes answered ones is read as four unknowns and costs a reader the same
+hour twice.
+
+- ~~Which storm, or storms? One case to prove the feature, or a season?~~
+  **Answered by building it** (`NEXT_STEPS.md` §37): all of them. The tab serves
+  **138 storms across 1,181 runs**, and the storm/centre/init selectors make the
+  choice at read time rather than at ingest.
+- ~~Can Shuochen say how the data was produced — which model, which tracker if
+  any, and what was already applied to it?~~ **Answered from the data, not by
+  email** (§9, and the `T` column decoded 2026-10-06). The cheapest route turned
+  out to be the files themselves.
+
+Still genuinely open, and **neither is answerable from the archive** — both are
+questions about intent, which is why they survived a document that otherwise
+explained everything:
+
 - Is `ROOT` a collaborator's working area inside our allocation, or a copy
   somebody staged there for this purpose? It changes whether it is safe to
   assume the contents are stable.
