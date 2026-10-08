@@ -5821,6 +5821,28 @@ welded to an interpolated value and would have failed on eight occurrences
 across the two files before the fix. Confirmed against the pre-fix source
 rather than assumed — a scan that has never failed is §28's vacuous test again.
 
+### One of the 1,402 did have something to say — it was holding the bug in place
+
+CI then failed on a job the local run had not covered: **`frontend · playwright`**,
+whose `e2e/mapSelection.spec.js` asserted
+`Rectangle 35.0°–37.0°N, -77.0°–-74.0°E` — the wrong label, transcribed from
+what the tab showed when the test was written. So the e2e suite was not silent
+about this after all; it was **pinning the defect in place**, which is worse
+than silence, and a later attempt to fix the label would have looked like a
+regression.
+
+Two details worth keeping. The same file's other two assertions use
+`/36\.\d+°N,\s*75\.\d+°W/` and were always right, because they read the
+*Analysis* side, which had already adopted the helper — the split ran right
+through one spec file. And the expectation was updated with the reason written
+beside it rather than silently corrected, as §55, §62 and §63's changed tests
+were.
+
+**The process lesson: `CI=true npm run build` plus jest is not the local gate.**
+§63 established the build as authoritative for lint; it says nothing about the
+e2e job. `npx playwright test` is 39 s locally and would have caught this before
+the push. Run all three.
+
 ### Two things that looked like defects and were not
 
 - **The transport buttons do nothing while the Controls drawer is open.** The

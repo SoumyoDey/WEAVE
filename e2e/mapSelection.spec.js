@@ -44,9 +44,17 @@ test('rectangle drag creates a region with the drawn bounds', async ({ page }) =
   expect(await hasRegion(page)).toBe(true);
 
   // The Comparison tab prints the bounds it will actually query.
+  //
+  // This expectation changed on 2026-10-08, and the direction matters: it used
+  // to read `35.0°–37.0°N, -77.0°–-74.0°E`, transcribed from what the tab
+  // showed. That label was wrong — a negative number with an E on it, for a box
+  // that is 77 to 74 degrees WEST — so this assertion was pinning the defect in
+  // place rather than guarding against it. The tab now uses `fmtLat`/`fmtLon`
+  // like the rest of the app, and the two assertions above and below, which
+  // were always written in the correct `°W` form, did not move (§64).
   await page.getByRole('button', { name: 'Comparison' }).click();
   await page.getByRole('button', { name: 'Region', exact: true }).click();
-  await expect(page.getByText(/Rectangle\s*35\.0°–37\.0°N,\s*-77\.0°–-74\.0°E/)).toBeVisible();
+  await expect(page.getByText(/Rectangle\s*35\.0°N–37\.0°N,\s*77\.0°W–74\.0°W/)).toBeVisible();
 });
 
 test('rectangle drag does not move an already-selected point', async ({ page }) => {
