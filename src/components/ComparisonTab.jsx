@@ -1,20 +1,21 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
-  ComposedChart, LineChart, Line, BarChart, Bar, Cell,
+  ComposedChart, LineChart, Line,
   Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine,
 } from 'recharts';
 import { Scale, MapPin } from 'lucide-react';
 import {
-  fetchComparisonTimeseries, fetchComparisonSkill, fetchSpatialAgreement,
+  fetchComparisonTimeseries, fetchComparisonSkill,
   fetchComparisonCategorical, fetchComparisonRegionMetrics,
   fetchComparisonSpatialDiff,
 } from '../api/comparisonApi';
 import { fetchSpatialMetric, fetchSpatialMetricPlot } from '../api/spatialApi';
+import { SpatialAgreementPanel } from './comparison/SpatialAgreementPanel';
 import { VERIFICATION_DEFAULTS as VD } from '../constants';
 import { t } from '../theme';
 import { useRun } from '../state/RunContext';
-import { LoadingState, EmptyState } from './ui/PanelState';
+import { EmptyState } from './ui/PanelState';
 import {
   MODEL_COLORS, MODEL_NAMES, PRECIP_RECORD_NOTE,
   CAT_METRICS, CAT_SUMMARY_METRICS, SKILL_METRICS, SKILL_SUMMARY_METRICS,
@@ -24,8 +25,8 @@ import {
   CARD, SECTION_TITLE, LABEL, INPUT, TOOLTIP_STYLE, SMALL_GRID, SUBHEAD,
 } from './comparison/styles';
 import {
-  Spinner, RegionNudge, NoData, MetricCard, LeadTimeChart, AggregateBar,
-  ForecastTooltip, ssrColor, corrColor, axisTick,
+  Spinner, RegionNudge, LeadTimeChart, AggregateBar,
+  ForecastTooltip, ssrColor, corrColor,
 } from './comparison/charts';
 
 
@@ -108,7 +109,6 @@ export function ComparisonTab({
   const [pickedModels, setSelectedModels] = useState(['AIFS', 'GEFS', 'UKMO']);
   const [hourMin, setHourMin] = useState(VD.HOUR_MIN);
   const [hourMax, setHourMax] = useState(VD.HOUR_MAX);
-  const [spatialHour, setSpatialHour] = useState(defaultHour || 6);
   const [showSpreadBands, setShowSpreadBands] = useState(true);
   const [normalizeScales, setNormalizeScales] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -132,9 +132,6 @@ export function ComparisonTab({
   // Results
   const [tsData, setTsData] = useState(null);
   const [skillData, setSkillData] = useState(null);
-  const [spatialData, setSpatialData] = useState(null);
-  const [spatialLoading, setSpatialLoading] = useState(false);
-  const [spatialShareState, setSpatialShareState] = useState('idle'); // 'idle' | 'copied'
   const [hasRun, setHasRun] = useState(false);
   const [hasRunRegion, setHasRunRegion] = useState(false);
   const [regionData, setRegionData] = useState(null);
@@ -165,10 +162,6 @@ export function ComparisonTab({
       setLon(String(defaultLocation.lon));
     }
   }, [defaultLocation]);
-
-  useEffect(() => {
-    if (defaultHour != null) setSpatialHour(defaultHour);
-  }, [defaultHour]);
 
   // Thresholds are variable-specific (mm/6h vs m/s), so reset them to a sane
   // default and drop now-stale results whenever the variable changes.
@@ -464,56 +457,6 @@ export function ComparisonTab({
     });
   };
 
-  const handleRunSpatial = async () => {
-    if (!selectedRegion || selectedModels.length < 2) return;
-    setSpatialData(null);
-    setSpatialLoading(true);
-    const { min_lat, max_lat, min_lon, max_lon } = selectedRegion.bounds;
-    try {
-      const result = await fetchSpatialAgreement({
-        models: selectedModels,
-        minLat: min_lat,
-        maxLat: max_lat,
-        minLon: min_lon,
-        maxLon: max_lon,
-        hour: spatialHour,
-        variable: selectedVariable,
-      });
-      setSpatialData(result);
-    } catch (err) {
-      console.error('Spatial agreement error:', err);
-      setSpatialData({ error: err.message });
-    }
-    setSpatialLoading(false);
-  };
-
-  const handleSpatialDownload = () => {
-    if (!spatialData?.image) return;
-    const a = document.createElement('a');
-    a.href = 'data:image/png;base64,' + spatialData.image;
-    a.download = `spatial_agreement_${selectedVariable}_+${spatialHour}h.png`;
-    a.click();
-  };
-
-  const handleSpatialShare = async () => {
-    if (!spatialData?.image) return;
-    const dataUrl = 'data:image/png;base64,' + spatialData.image;
-    const blob = await (await fetch(dataUrl)).blob();
-    const file = new File([blob], `spatial_agreement_+${spatialHour}h.png`, { type: 'image/png' });
-    if (navigator.canShare?.({ files: [file] })) {
-      try { await navigator.share({ files: [file], title: 'WEAVE Spatial Agreement' }); return; }
-      catch (e) { if (e.name !== 'AbortError') console.warn('Share failed:', e); }
-    }
-    try {
-      await navigator.clipboard.write([
-        new ClipboardItem({ 'image/png': blob }),
-      ]);
-      setSpatialShareState('copied');
-      setTimeout(() => setSpatialShareState('idle'), 2500);
-    } catch {
-      handleSpatialDownload();
-    }
-  };
 
   // Derived chart data. Memoised: buildMergedTimeseries is O(hours × models) with
   // a per-hour .find, and previously reran on every render (incl. unrelated state
@@ -1814,173 +1757,12 @@ export function ComparisonTab({
 
         {/* ── Section 6: Spatial Agreement (region mode) ── */}
         {isRegionMode && hasRegion && hasRunRegion && (
-          <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '20px', marginBottom: '16px' }}>
-            <h3 style={SECTION_TITLE}>Spatial Agreement Map</h3>
-
-            {/* Region available → controls + map */}
-            {selectedRegion && (
-              <div>
-                {/* Region info pill + controls row */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginBottom: '16px' }}>
-                  {/* Region badge */}
-                  <span style={{
-                    fontSize: t.fontSize.xs, fontWeight: t.fontWeight.semibold, padding: '4px 12px', borderRadius: '20px',
-                    background: 'rgba(230,126,34,0.12)', border: '1px solid rgba(230,126,34,0.3)',
-                    color: '#e67e22',
-                  }}>
-                    {selectedRegion.type === 'polygon' ? '⬡ Polygon' : '▭ Rectangle'}
-                    {' '}
-                    {selectedRegion.bounds.min_lat.toFixed(1)}°–{selectedRegion.bounds.max_lat.toFixed(1)}°N,{' '}
-                    {selectedRegion.bounds.min_lon.toFixed(1)}°–{selectedRegion.bounds.max_lon.toFixed(1)}°E
-                  </span>
-
-                  {/* Spatial hour input */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: t.fontSize.sm }}>Hour</span>
-                    <input
-                      type="number"
-                      value={spatialHour}
-                      min={0} max={360}
-                      onChange={e => setSpatialHour(Math.max(0, Math.min(360, Number(e.target.value))))}
-                      style={{ ...INPUT, width: '60px' }}
-                    />
-                    <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.sm }}>h</span>
-                  </div>
-
-                  {/* Run button */}
-                  <button
-                    onClick={handleRunSpatial}
-                    disabled={spatialLoading || selectedModels.length < 2}
-                    style={{
-                      background: (!spatialLoading && selectedModels.length >= 2) ? '#e67e22' : 'rgba(255,255,255,0.08)',
-                      color: (!spatialLoading && selectedModels.length >= 2) ? 'white' : 'rgba(255,255,255,0.25)',
-                      border: 'none',
-                      borderRadius: t.radius,
-                      padding: '7px 18px',
-                      fontSize: t.fontSize.base,
-                      fontWeight: t.fontWeight.bold,
-                      cursor: (!spatialLoading && selectedModels.length >= 2) ? 'pointer' : 'not-allowed',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      transition: 'background 0.15s',
-                    }}
-                  >
-                    {spatialLoading ? '⏳ Computing…' : '▶ Run Map'}
-                  </button>
-
-                  {/* Export buttons (only when image is ready) */}
-                  {spatialData?.image && !spatialLoading && (
-                    <div style={{ display: 'flex', gap: '6px', marginLeft: 'auto' }}>
-                      <button
-                        onClick={handleSpatialDownload}
-                        title="Download PNG"
-                        style={{
-                          background: 'rgba(255,255,255,0.06)',
-                          border: '1px solid rgba(255,255,255,0.12)',
-                          borderRadius: '7px',
-                          color: 'rgba(255,255,255,0.7)',
-                          fontSize: t.fontSize.sm,
-                          padding: '5px 12px',
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '5px',
-                        }}
-                      >
-                        ⬇ Download
-                      </button>
-                      <button
-                        onClick={handleSpatialShare}
-                        title="Copy or share image"
-                        style={{
-                          background: spatialShareState === 'copied' ? 'rgba(46,204,113,0.15)' : 'rgba(255,255,255,0.06)',
-                          border: `1px solid ${spatialShareState === 'copied' ? 'rgba(46,204,113,0.4)' : 'rgba(255,255,255,0.12)'}`,
-                          borderRadius: '7px',
-                          color: spatialShareState === 'copied' ? '#2ecc71' : 'rgba(255,255,255,0.7)',
-                          fontSize: t.fontSize.sm,
-                          padding: '5px 12px',
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '5px',
-                          transition: 'all 0.2s',
-                        }}
-                      >
-                        {spatialShareState === 'copied' ? '✓ Copied!' : '⎘ Share'}
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                {/* Loading spinner */}
-                {spatialLoading && <Spinner />}
-
-                {/* Error */}
-                {!spatialLoading && spatialData?.error && (
-                  <div style={{
-                    background: 'rgba(231,76,60,0.08)',
-                    border: '1px solid rgba(231,76,60,0.25)',
-                    borderRadius: t.radius,
-                    padding: '12px 16px',
-                    color: '#e74c3c',
-                    fontSize: t.fontSize.base,
-                  }}>
-                    ⚠ {spatialData.error}
-                  </div>
-                )}
-
-                {/* Result image */}
-                {!spatialLoading && spatialData?.image && (
-                  <div style={{ marginTop: '8px' }}>
-                    <img
-                      src={'data:image/png;base64,' + spatialData.image}
-                      alt="Spatial Agreement Map"
-                      style={{
-                        maxWidth: '100%',
-                        maxHeight: '420px',
-                        width: 'auto',
-                        display: 'block',
-                        margin: '0 auto',
-                        borderRadius: '10px',
-                        boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
-                      }}
-                    />
-                    {/* Metadata row */}
-                    <div style={{
-                      display: 'flex',
-                      gap: '16px',
-                      marginTop: '10px',
-                      justifyContent: 'center',
-                      flexWrap: 'wrap',
-                    }}>
-                      {[
-                        { label: 'Models', value: spatialData.n_models },
-                        { label: 'Grid points', value: spatialData.n_points?.toLocaleString() },
-                        { label: 'Lead time', value: `+${spatialData.hour}h` },
-                      ].map(({ label, value }) => (
-                        <div key={label} style={{ textAlign: 'center' }}>
-                          <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: t.fontSize.md, fontWeight: t.fontWeight.bold }}>
-                            {value ?? '—'}
-                          </div>
-                          <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: t.fontSize.micro, marginTop: '1px' }}>
-                            {label}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Initial state — region selected but not yet run */}
-                {!spatialLoading && !spatialData && (
-                  <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: t.fontSize.base, padding: '16px 0', textAlign: 'center' }}>
-                    Click <strong style={{ color: 'rgba(255,255,255,0.5)' }}>▶ Run Map</strong> to compute model disagreement for the selected region.
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+          <SpatialAgreementPanel
+            models={selectedModels}
+            variable={selectedVariable}
+            region={selectedRegion}
+            defaultHour={defaultHour}
+          />
         )}
 
       </div>

@@ -5494,6 +5494,67 @@ is §49's domain question from the other side.
 
 ---
 
+## 59. S4, third piece: the Comparison tab, decomposed — 2026-10-08
+
+`ComparisonTab.jsx` was **2,373 lines**: 475 of module-level declarations and a
+1,898-line component. It is now **1,775**, with four modules beside it.
+
+### The line that decides what moves is state, not length
+
+| | | lines |
+|---|---|---|
+| `comparison/metrics.js` | what the tab scores and how each metric is drawn — panel, reference line, decimals, model colours, record notes | 128 |
+| `comparison/styles.js` | the tab's composition of the theme's primitives | 68 |
+| `comparison/charts.jsx` | `MetricCard`, `LeadTimeChart`, `AggregateBar`, `NoData`, `RegionNudge`, `ForecastTooltip`, the colour helpers | 247 |
+| `comparison/SpatialAgreementPanel.jsx` | the agreement map **and the four pieces of state it owns** | 259 |
+
+The first three are presentational and stateless — they take data as props and
+hold nothing, which is what made them safe to lift whole. `LeadTimeChart` and
+`AggregateBar` are the two shapes the tab repeats, so the region, point and
+categorical panels now read as variations of two charts rather than as twelve
+separate blocks.
+
+**The fourth is the one that counts.** A stateless extraction makes a file
+shorter; it does not make the component smaller, because the state and the
+effects stay. `SpatialAgreementPanel` took `spatialHour`, `spatialData`,
+`spatialLoading` and `spatialShareState` with it, along with their three
+handlers and the effect that seeds the lead time — so the parent lost
+behaviour, not just markup. It is a feature with a boundary: models, variable,
+region and a starting hour in; a map out.
+
+### Three things the tests did not catch
+
+1. **An orphaned effect.** `useEffect(() => setSpatialHour(defaultHour))` stayed
+   behind after its state left, referencing a setter that no longer existed.
+   **283 jest tests passed anyway**, because the effect is guarded by
+   `defaultHour != null` and the tests do not pass one. It would have thrown on
+   the first real render with a lead time set.
+2. **Two unused imports** left pointing at moved code, which `eslint` found and
+   the suite did not care about.
+3. **`'INPUT' is not defined`** — the extracted JSX used a style token I had not
+   imported into the new file. Jest did not reach that branch, and an ad-hoc
+   `eslint` run did not have `no-undef` enabled; **CRA's dev build caught it in
+   the browser within seconds**, as a compile error on the screen.
+
+All three are the same shape: moving code between files breaks references that
+nothing exercises until something renders. **The browser is the check that
+matters for a refactor of components**, and it caught what two other checks
+missed.
+
+Verified live afterwards: a point comparison renders 12 charts with the model
+colours, per-model record notes and summary row intact, and the agreement panel
+runs its map, shows 3 models / 30 grid points / +6 h, and offers Download and
+Share — with no console errors. 283 frontend tests pass.
+
+### What is left on S4
+
+`AnalysisTab.jsx` (1,376 lines) has had none of this treatment — its cone of
+uncertainty, spread-skill panel, categorical panel and region maps are the same
+kind of seam. And config-driving the hardcoded extent, which is §49's domain
+question from the other side.
+
+---
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in
