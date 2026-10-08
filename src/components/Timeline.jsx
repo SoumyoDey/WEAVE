@@ -17,12 +17,16 @@ import { t } from '../theme';
  *   selectedVariable {string}
  *   obsCoverage      {object|null} — /api/observation-coverage, or null while
  *                                    loading / if it failed
+ *   initTime         {string|null} — the selected run's initialisation time,
+ *                                    which every "valid at" label is measured
+ *                                    from; null means no run, and then no
+ *                                    valid time is shown rather than a guess
  *   isNarrow         {boolean} — compact, stacked layout for narrow viewports
  *   onHeight         {fn(px)|undefined} — this bar's measured height, reported
  *                                    whenever it changes; see `useLayoutEffect`
  *                                    below for why it is measured, not named
  */
-export function Timeline({ currentModel, hours: runHours, selectedHour, setSelectedHour, obsCoverage, isNarrow, onHeight }) {
+export function Timeline({ currentModel, hours: runHours, selectedHour, setSelectedHour, obsCoverage, initTime = null, isNarrow, onHeight }) {
   // The run's own lead times when they have arrived, the model constant until
   // then. `currentModel.hours` is `ALL_HOURS` — 0..360 every 6 hours — for all
   // three models, which matches none of them: GEFS precipitation is 3-hourly,
@@ -60,16 +64,30 @@ export function Timeline({ currentModel, hours: runHours, selectedHour, setSelec
           + `+${recordEnd}h, and a score needs its whole window observed`
         : `Nothing to verify against beyond +${verifiedTo}h — the observation record ends there`;
 
-  // The initialisation time comes from the run, not a hard-coded date — the
-  // latter silently lied the moment a different run was loaded.
-  const baseDate  = obsCoverage?.init_time
-    ? new Date(`${obsCoverage.init_time}Z`)
-    : new Date('2025-09-08T00:00:00Z');
-  const validDate = new Date(baseDate.getTime() + selectedHour * 3600000);
-  const validStr  = validDate.toLocaleString('en-US', {
+  // The initialisation time comes from the run, and when there is no run there
+  // is no valid time to show.
+  //
+  // This used to fall back to `new Date('2025-09-08T00:00:00Z')` when
+  // `obsCoverage` was null — which is every page load until that request
+  // returns, and permanently if it fails. The app opens on `2025-09-16`, so
+  // the label read eight days early, and the comment sitting directly above
+  // the fallback was already the argument against it: *"the latter silently
+  // lied the moment a different run was loaded"* (`NEXT_STEPS.md` §68).
+  //
+  // Two changes, and the second is the one that matters. The init now comes
+  // from `initTime` — the run the selector holds — rather than from a field
+  // the *observation-coverage* endpoint happens to echo back, which coupled
+  // "what is this forecast valid at" to a request about observations. And
+  // when it is absent the label is omitted instead of guessed: a missing
+  // valid time is visibly missing, where a wrong one is not.
+  const baseDate  = initTime ? new Date(`${initTime}Z`) : null;
+  const validDate = baseDate && !Number.isNaN(baseDate.getTime())
+    ? new Date(baseDate.getTime() + selectedHour * 3600000)
+    : null;
+  const validStr  = validDate === null ? null : `${validDate.toLocaleString('en-US', {
     weekday: 'short', month: 'short', day: 'numeric',
     hour: '2-digit', minute: '2-digit', timeZone: 'UTC', hour12: false,
-  }) + ' UTC';
+  })} UTC`;
 
   const dayTicks = Array.from({ length: Math.floor(maxHour / 24) + 1 }, (_, d) => d * 24)
     .filter(h => h <= maxHour);
@@ -224,7 +242,7 @@ export function Timeline({ currentModel, hours: runHours, selectedHour, setSelec
             <span style={{ fontSize: isNarrow ? t.fontSize.md : t.fontSize.lg, fontWeight: t.fontWeight.heavy, color: 'white', letterSpacing: '-0.5px' }}>+{selectedHour}h</span>
             <span style={{ fontSize: t.fontSize.xs, color: 'rgba(255,255,255,0.38)', marginLeft: '5px' }}>({(selectedHour / 24).toFixed(1)}d)</span>
           </div>
-          {!isNarrow && (
+          {!isNarrow && validStr && (
             <div style={{ fontSize: t.fontSize.xs, color: 'rgba(255,255,255,0.5)' }}>
               <span style={{ color: 'rgba(255,255,255,0.28)', fontSize: t.fontSize.nano, letterSpacing: '0.05em' }}>Valid </span>{validStr}
             </div>

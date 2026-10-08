@@ -977,6 +977,12 @@ function App() {
           selectedHour={selectedHour} setSelectedHour={setSelectedHour}
           selectedVariable={selectedVariable}
           obsCoverage={obsCoverage}
+          // The run the selector holds, not the init echoed back by
+          // /api/observation-coverage: the valid time is a fact about the
+          // forecast, and reading it from an observations request made it
+          // unavailable (and then wrong) whenever that request had not
+          // returned (§68).
+          initTime={selectedRun}
           isNarrow={isNarrow}
           onHeight={setTimelineH}
         />

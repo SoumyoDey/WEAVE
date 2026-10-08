@@ -6020,8 +6020,9 @@ reached whenever `obsCoverage` is null — every page load until that request
 returns, and permanently if it fails — and the timeline's "valid at" label is
 wrong by eight days for that window.
 
-Filed, not fixed: this was a documentation sweep, and a wrong date on screen
-deserves its own commit and its own test rather than riding along in one.
+~~Filed, not fixed: this was a documentation sweep, and a wrong date on screen
+deserves its own commit and its own test rather than riding along in one.~~
+**Fixed in §68.**
 
 **Why "config-drive it" hid it.** An item phrased as a *refactor* gets read as
 tidiness — nobody re-reads a hardcoded constant to check it is still the right
@@ -6035,6 +6036,53 @@ commit orphaned under §66 — reading as part of a note about IPv6. Restored he
 **An edit anchored on the heading that follows your insertion point has to put
 that heading back**, and nothing in a Markdown file will complain if it does
 not.
+
+---
+
+## 68. The valid time comes from the run — 2026-10-08
+
+§67's finding, fixed. The timeline's "Valid …" label was computed from
+
+```js
+const baseDate = obsCoverage?.init_time
+  ? new Date(`${obsCoverage.init_time}Z`)
+  : new Date('2025-09-08T00:00:00Z');   // ← eight days off the run it opens on
+```
+
+**Two things were wrong, and the second is the one worth keeping.**
+
+The literal is the obvious half: `obsCoverage` is null on every page load until
+`/api/observation-coverage` returns, and permanently if it fails, so the label
+read `Sep 8` for a `Sep 16` run — the thing the comment directly above it
+already condemned in writing.
+
+The deeper half is **where it was reading the init from at all**. The valid time
+of a forecast is `run init + lead`, and the run init belongs to the run. It was
+being taken from a payload about *observations*, which happens to echo the init
+back. That coupling is why the fallback existed: a fact about the forecast was
+unavailable whenever a request about observations had not returned, and
+somebody had to put *something* there.
+
+Both now come from the right place. `Timeline` takes `initTime`, App passes
+`selectedRun` — the run the selector holds, which is what every other panel is
+showing — and **when there is no run the label is omitted rather than guessed**.
+A missing valid time is visibly missing; a wrong one is not.
+
+Verified in the running app: `2025-09-16 00Z` at +6 h reads
+`Valid Tue, Sep 16, 06:00 UTC`, stepping to +12 h moves it to `12:00`, and
+switching the selector to the `2025-09-08` run moves it to
+`Valid Mon, Sep 8, 12:00 UTC` — the switch the old code could not follow while
+coverage was pending.
+
+`src/components/Timeline.validTime.test.js`, six tests, **all six confirmed to
+fail against the pre-fix component**. One of them pins the regression by name
+(`obsCoverage: null` must not resurrect a date), and one pins the precedence —
+given a stale coverage payload naming a *different* init, the run wins.
+
+**The transferable part is why a test did not already exist.** The argument
+against the hard-coded date was written down, in a comment, immediately above
+the hard-coded date. Prose that knows better is not a check; it had been read
+many times and the line beneath it never was.
 
 ---
 
