@@ -23,6 +23,7 @@ import { renderMetricCanvas, clearMetricCanvas } from './layers/metricLayer';
 
 // ── UI Components ─────────────────────────────────────────────────────────────
 import { ControlsSidebar }    from './components/ControlsSidebar';
+import { ErrorBoundary }      from './components/ErrorBoundary';
 import { RunSelector }        from './components/RunSelector';
 import { useRun }             from './state/RunContext';
 import { Timeline }           from './components/Timeline';
@@ -920,6 +921,16 @@ function App() {
         {/* Map canvas */}
         <div ref={mapRef} style={{ width: '100%', height: '100%', background: '#f5f5f5' }} />
 
+        {/* The boundary starts *below* the map container on purpose.
+            Leaflet is attached imperatively to `mapRef` and the init effect
+            runs once; if a boundary unmounted that div the map instance would
+            be left pointing at a detached node, and "Try again" would restore
+            the controls around a map that no longer exists. Everything below
+            is React-rendered chrome, which can be replaced and rebuilt freely.
+            So a throw in the timeline or a legend costs you the overlay, and
+            the map keeps drawing. */}
+        <ErrorBoundary name="Visualization" resetKeys={[selectedRun, selectedVariable]}>
+
         {/* Click-away backdrop — closes the sidebar when user clicks the map.
             Stops at the timeline instead of `inset: 0`: it is transparent and
             sat at z-index 999 over a bar at 900, so while the drawer was open
@@ -1082,40 +1093,48 @@ function App() {
 
         {/* First-run onboarding */}
         <OnboardingTour open={showTour} onClose={closeTour} />
+
+        </ErrorBoundary>
       </div>
 
       {/* ══ CYCLONE TAB ══ */}
       {/* Mounted only once visited: it builds its own Leaflet map, and a second
           hidden map instance costs tiles and listeners for a tab nobody opened. */}
       <div style={{ display: activeTab === 'cyclones' ? 'block' : 'none', position: 'absolute', top: TAB_BAR_H, left: 0, right: 0, bottom: 0, background: '#0d151f' }}>
-        <CycloneTab active={activeTab === 'cyclones'} isNarrow={isNarrow} />
+        <ErrorBoundary name="Cyclones" resetKeys={[selectedRun]}>
+          <CycloneTab active={activeTab === 'cyclones'} isNarrow={isNarrow} />
+        </ErrorBoundary>
       </div>
 
       {/* ══ ANALYSIS TAB ══ */}
       <div style={{ display: activeTab === 'analysis' ? 'flex' : 'none', position: 'absolute', top: TAB_BAR_H, left: 0, right: 0, bottom: 0, background: '#0f1923', flexDirection: 'column', overflow: 'hidden' }}>
-        <AnalysisTab
-          clickedPoint={clickedPoint}
-          currentModel={currentModel}
-          selectedVariable={selectedVariable}
-          timeseriesLoading={timeseriesLoading} timeseriesData={timeseriesData}
-          ssrLoading={ssrLoading} ssrData={ssrData}
-          obsCoverage={obsCoverage}
-          onCompare={() => setActiveTab('comparison')}
-          selectedRegion={selectedRegion}
-          active={activeTab === 'analysis'}
-        />
+        <ErrorBoundary name="Analysis" resetKeys={[selectedRun, selectedVariable]}>
+          <AnalysisTab
+            clickedPoint={clickedPoint}
+            currentModel={currentModel}
+            selectedVariable={selectedVariable}
+            timeseriesLoading={timeseriesLoading} timeseriesData={timeseriesData}
+            ssrLoading={ssrLoading} ssrData={ssrData}
+            obsCoverage={obsCoverage}
+            onCompare={() => setActiveTab('comparison')}
+            selectedRegion={selectedRegion}
+            active={activeTab === 'analysis'}
+          />
+        </ErrorBoundary>
       </div>
 
       {/* ══ COMPARISON TAB ══ */}
       <div style={{ display: activeTab === 'comparison' ? 'flex' : 'none', position: 'absolute', top: TAB_BAR_H, left: 0, right: 0, bottom: 0, background: '#0f1923', flexDirection: 'column', overflow: 'hidden' }}>
-        <ComparisonTab
-          defaultLocation={clickedPoint}
-          defaultHour={selectedHour}
-          selectedVariable={selectedVariable}
-          selectedRegion={selectedRegion}
-          onJumpToComparison={(lat, lon) => setActiveTab('comparison')}
-          active={activeTab === 'comparison'}
-        />
+        <ErrorBoundary name="Comparison" resetKeys={[selectedRun, selectedVariable]}>
+          <ComparisonTab
+            defaultLocation={clickedPoint}
+            defaultHour={selectedHour}
+            selectedVariable={selectedVariable}
+            selectedRegion={selectedRegion}
+            onJumpToComparison={(lat, lon) => setActiveTab('comparison')}
+            active={activeTab === 'comparison'}
+          />
+        </ErrorBoundary>
       </div>
 
     </div>

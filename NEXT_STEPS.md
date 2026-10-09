@@ -6149,6 +6149,70 @@ assertions do the real work:
 
 ---
 
+## 70. A tab that throws costs you that tab — 2026-10-09
+
+S5's error boundary, built. The four tabs share one React tree and are hidden
+with `display: none` rather than unmounted, so **any render throw anywhere
+blanked the whole application** — the map, the run selector and the three tabs
+that were fine going down with the one that was not. For a tool whose job is to
+show numbers that is the worst available outcome: it removes the evidence of
+what broke along with everything else.
+
+### The arrangement
+
+One boundary per tab, named, plus a backstop in `index.js` outside the
+providers so a provider that fails to initialise is caught too. A tab failing
+now shows *"The Analysis panel stopped — nothing else is affected"*, the thrown
+message, and a Try-again button, while the other three keep working.
+
+**The Visualization boundary starts below the map container, and that placement
+is the one real design decision here.** Leaflet is attached imperatively to
+`mapRef` and the init effect runs once; a boundary that unmounted that div would
+leave the map instance pointing at a detached node, and "Try again" would
+helpfully restore the controls around a map that no longer exists. Everything
+below the container is React-rendered chrome and can be rebuilt freely, so a
+throw in the timeline or a legend costs the overlay and the map keeps drawing.
+
+### What it deliberately does not do
+
+- **It does not swallow the error.** `componentDidCatch` logs the error and the
+  component stack, and a test asserts that it does. A boundary that renders a
+  tidy message and drops the stack trades a visible failure for an invisible
+  one, which is §28 and §49 in a new costume.
+- **It does not catch what boundaries cannot catch**, and the source says so
+  rather than letting the next reader assume otherwise: not event handlers, not
+  `setTimeout`, not async code after an `await`. Nearly every failure this app
+  has actually had — a fetch rejecting, a 400 from a scored endpoint — is in
+  that category and is already handled by the panels' own error states. This
+  catches the other kind: a bad shape reaching a renderer.
+- **It does not reset on every render.** `resetKeys` are compared by value, not
+  identity, because JSX builds a fresh array each render and an identity
+  comparison would reset continuously into a subtree that throws again.
+
+### Two test files, because one of them would have passed either way
+
+`ErrorBoundary.test.js` (11 tests) throws for real and checks containment,
+attribution, logging, and all four reset behaviours including the two negative
+ones — stays latched when the cause is still there, does not reset on an equal
+`resetKeys` array.
+
+**That file would pass whether or not `App` used the boundary at all**, which is
+exactly the failure this project has hit three times: §28's vacuous tests,
+§32's `src/api/config.js` imported by nothing but its own test, §33's untested
+`/api/runs`. So `App.errorContainment.test.js` (4 tests) mocks `AnalysisTab` to
+throw during render, renders the **real** `App`, and asserts the tab bar, the
+run selector and the other tabs are still on screen and still usable.
+**All four fail when `App.js` is reverted** — the component tests stay green,
+which is the point.
+
+One trap worth recording: the containment test first failed because its fixture
+had a single run, and the run selector **collapses to a plain label** rather
+than a combobox on a one-run backend, so the `waitFor` on the combobox never
+resolved. The app was fine; the fixture was describing a backend shape that
+renders different controls.
+
+---
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in
