@@ -5843,7 +5843,12 @@ were.
 e2e job. `npx playwright test` is 39 s locally and would have caught this before
 the push. Run all three.
 
-### Two things that looked like defects and were not
+### Two things I judged "not defects" — and both were
+
+*(Heading corrected 2026-10-09. It read "Two things that looked like defects
+and were not", which survived both entries beneath it being struck through.
+**A heading is the part that gets skimmed and the part nobody updates**, so it
+outlived two corrections sitting directly under it.)*
 
 - ~~**The transport buttons do nothing while the Controls drawer is open.**~~
   **That reading was wrong — see §65.** It is a fault, and the half I looked at
