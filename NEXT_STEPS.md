@@ -44,9 +44,19 @@
 >    `TC_DATA_ACCESS.md`: whether `ROOT` on Explorer is stable, and whether this
 >    is a historical case study or something that should run on new storms.
 >
-> **Deliberately parked, not forgotten:** shared chart primitives across the two
-> tabs (§63 — the control row is two visual idioms, so sharing it means changing
-> how one tab looks), and the UKMO coordinate spelling (§48).
+> **Deliberately parked, not forgotten:**
+>
+> - **Per-member cyclone rasters** — `TC_TAB_DESIGN.md` §4 option (a), the
+>   "fifty translucent member fields" half of the original request. Option (c),
+>   the strike-probability field, was chosen instead on 2026-10-02 and is what
+>   shipped; (a) is *"not refused, only deferred"*, and that document records
+>   how to evaluate it cheaply — prototype the rendering on the per-member grids
+>   already loaded, which separates the hard question from the expensive ingest.
+>   **The cyclone tab is complete against the design that was chosen, not
+>   against the request as first phrased**, and this is the difference.
+> - **Shared chart primitives** across the two tabs (§63) — the control row is
+>   two visual idioms, so sharing it means changing how one tab looks.
+> - **The UKMO coordinate spelling** (§48).
 >
 > **Closed recently, because the lists below still say otherwise:** S4 entirely
 > (§57–§63, §75, §76), S5 entirely (§70, §71), the config-driving of extent,
