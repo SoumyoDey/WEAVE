@@ -1,7 +1,61 @@
 # Next steps
 
-State as of 2026-09-28. **PR #2 is merged** (`49ead8f`); `main` is the live
-branch and carries everything below.
+> ## Open items — the authority, 2026-10-13
+>
+> **This document contains fourteen "what is left" lists.** They were written at
+> different times, each was true when written, and the older ones are now wrong
+> in ways that take a code read to notice — which is how a sweep came to find
+> the same stale marker twice in five days (§67, §74). **This block is the
+> authority where they disagree**, the same device `TC_DATA_ACCESS.md` §9 uses.
+> Everything below it is a dated record, including the lists.
+>
+> Every line here was verified against the code or the database on 2026-10-13,
+> not copied from the list before it. **Re-verify before trusting it**: in this
+> project an open item is more likely stale than open (§44).
+>
+> **Open, and no amount of code fixes it**
+>
+> 1. **Every GEFS comparison rests on n=1.** Registry: AIFS 3 inits, UKMO 3,
+>    **GEFS 1** (`2025-09-16 00Z`), for all three variables. Last load
+>    `2026-09-30`. This bounds what the project may claim, and closes only when
+>    a second three-model run is ingested.
+> 2. **The analysis domain and the cyclone archive barely overlap.** The grid is
+>    one 25–45 N / −85..−65 W box; the archive is global. Measured: **144 of
+>    1,181 runs and 20 of 138 storms** ever enter it. Nothing is broken — the
+>    cyclone tab is track-only — but tracks cannot be scored against gridded
+>    fields outside that box. A decision about scope, not a defect.
+>
+> **Open, and it is ordinary work**
+>
+> 3. **No containerisation** (S2) — no `Dockerfile`, no compose file.
+> 4. **`pg_dump` has never been run at this size** (S2). `DEPLOY.md` §9 says so
+>    itself: *"an untested restore is a plan, not a backup"*, against 129 GB.
+>    **The highest-value item on this list** — it is the only one that can lose
+>    work rather than merely limit it.
+> 5. **No Redis, async jobs or load test** (S3). Caps and caching are done.
+>
+> **Yours to decide**
+>
+> 6. A **host** for the reviewer deployment (AWS dropped 2026-09-18, nothing
+>    chosen).
+> 7. **Retention** — 129 GB against the 250 GB review threshold, roughly two
+>    full runs of headroom.
+> 8. The **two tropical-cyclone intent questions** at the end of
+>    `TC_DATA_ACCESS.md`: whether `ROOT` on Explorer is stable, and whether this
+>    is a historical case study or something that should run on new storms.
+>
+> **Deliberately parked, not forgotten:** shared chart primitives across the two
+> tabs (§63 — the control row is two visual idioms, so sharing it means changing
+> how one tab looks), and the UKMO coordinate spelling (§48).
+>
+> **Closed recently, because the lists below still say otherwise:** S4 entirely
+> (§57–§63, §75, §76), S5 entirely (§70, §71), the config-driving of extent,
+> candidate hours and obs sources (§75, §76), `/api/health` freshness (§73), the
+> startup checks reaching production (§74), and the export divisor (§72).
+
+State as of 2026-09-28, superseded by the block above where they disagree.
+**PR #2 is merged** (`49ead8f`); `main` is the live branch and carries
+everything below.
 
 **The active workstream is the password-protected reviewer deployment** (§10),
 which is not what the rest of this document is about — everything below §8
@@ -20,10 +74,15 @@ in this repository.
 - **2026-10-02 — a tropical cyclone tab is requested** (§37), and it is the
   first *new* workstream since the consistency audit closed. Two features —
   every member's storm track on the map at once, and every member's field as a
-  translucent layer — in a new tab, from data on the HPC. **Not started, and
-  the first task is not code**: the request came with the warnings that the
+  translucent layer — in a new tab, from data on the HPC. ~~**Not started, and
+  the first task is not code**~~: the request came with the warnings that the
   structure and the dates may differ from ours, which names this project's two
   most expensive defects (§13/§22 and §12). Read §37 before opening an editor.
+  **BUILT and complete as of 2026-10-06** — 1,181 runs across 138 storms are
+  loaded and the tab serves spaghetti tracks, strike probability and
+  error-against-lead. "Not started" survived a week of the tab existing,
+  three paragraphs into the file's header, which is why the block at the top
+  of this document now exists.
 - **2026-09-29 — the 09-08 run is a MIXTURE of two forecasts** (§20). §18's AIFS
   wind was not isolated: **four of six model/variable combinations were the
   09-16 run**, including all three models' wind and GEFS precipitation. Only
