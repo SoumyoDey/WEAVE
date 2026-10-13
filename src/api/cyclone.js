@@ -59,13 +59,31 @@ export const fetchStrikeProbability = ({ storm, centre, init, radiusKm, hourMin,
  * thresholds nobody measured. Low values stay translucent so the tracks beneath
  * remain legible, which is the point of drawing both.
  */
+/**
+ * The bands, as data, because the map and the legend must not disagree.
+ *
+ * These were a chain of `if` statements, which was fine while nothing else
+ * needed to know them. A legend does: it has to draw the same five colours
+ * against the same five ranges, and a legend that writes its own copy is a
+ * caption that can drift from the thing it captions — the defect this project
+ * has now found in four other places (§54 the defaults, §69 the bbox, §75 the
+ * observation sources, §76 the domain).
+ *
+ * `upto` is exclusive, so a cell exactly on a boundary takes the band above it:
+ * 0.25 is "25–50", not "10–25". The last band's `Infinity` is what makes 1.0
+ * land somewhere.
+ */
+export const STRIKE_BANDS = [
+  { upto: 0.10,     colour: 'rgba(80,140,255,0.18)', label: '< 10' },
+  { upto: 0.25,     colour: 'rgba(90,190,235,0.28)', label: '10 – 25' },
+  { upto: 0.50,     colour: 'rgba(120,220,170,0.38)', label: '25 – 50' },
+  { upto: 0.75,     colour: 'rgba(240,210,100,0.50)', label: '50 – 75' },
+  { upto: Infinity, colour: 'rgba(240,120,70,0.62)', label: '≥ 75' },
+];
+
 export const strikeColour = (value) => {
   const v = Math.max(0, Math.min(1, value));
-  if (v < 0.1)  return 'rgba(80,140,255,0.18)';
-  if (v < 0.25) return 'rgba(90,190,235,0.28)';
-  if (v < 0.5)  return 'rgba(120,220,170,0.38)';
-  if (v < 0.75) return 'rgba(240,210,100,0.50)';
-  return 'rgba(240,120,70,0.62)';
+  return (STRIKE_BANDS.find((b) => v < b.upto) ?? STRIKE_BANDS[STRIKE_BANDS.length - 1]).colour;
 };
 
 /**

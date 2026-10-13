@@ -27,6 +27,7 @@ import {
 import { fetchCyclones, fetchCycloneTracks, fetchStrikeProbability,
          fetchErrorByLead,
          unwrapTrack, referenceLongitude, strikeColour } from '../api/cyclone';
+import { StrikeProbabilityLegend } from './legends/StrikeProbabilityLegend';
 import { t } from '../theme';
 import { ESRI_CANVAS_BASE } from '../constants';
 
@@ -421,9 +422,34 @@ export function CycloneTab({ active, isNarrow = false }) {
       */}
       <div style={{ display: 'flex', flex: 1, minHeight: 0,
                     flexDirection: isNarrow ? 'column' : 'row' }}>
-        <div ref={divRef} style={isNarrow
-                  ? { height: '55vh', flexShrink: 0, minHeight: '260px' }
-                  : { flex: 1, minWidth: 0 }} />
+        {/* The map div gains a positioned wrapper so the legend can sit over
+            it, the way the visualization tab's legends sit over theirs. The
+            wrapper carries the sizing and the map fills it, because Leaflet
+            measures the element it is given and a legend inside that element
+            would be inside the map's own coordinate space. */}
+        <div style={isNarrow
+                  ? { position: 'relative', height: '55vh', flexShrink: 0, minHeight: '260px' }
+                  : { position: 'relative', flex: 1, minWidth: 0 }}>
+          <div ref={divRef} style={{ width: '100%', height: '100%' }} />
+
+          {/* Only while the overlay is actually drawn: a legend for a field
+              that is switched off explains nothing and covers the map. */}
+          {showStrike && strike && (
+            <div style={{ position: 'absolute', right: '12px', bottom: '12px',
+                          zIndex: 500,
+                          // Scaled down when narrow, as the visualization
+                          // tab's legends are: at 375px the card was half the
+                          // width of a map that is already only 55vh tall.
+                          transform: isNarrow ? 'scale(0.82)' : 'none',
+                          transformOrigin: 'bottom right' }}>
+              <StrikeProbabilityLegend
+                radiusKm={strike.radius_km}
+                nominalMembers={strike.nominal_members}
+                peak={strike.peak}
+              />
+            </div>
+          )}
+        </div>
 
         {/* Error and spread against lead. Beside the map rather than below it
             when there is room: the map answers "where", this answers "how
