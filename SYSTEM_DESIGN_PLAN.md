@@ -382,13 +382,17 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
   existed, passed its tests, and was never called. That is recorded in §35
   rather than quietly corrected, because a well-tested component wired to
   nothing is a failure mode this project has now hit three times.
-- **Still open** — config-driving the hardcoded extent. Candidate hours and
-  obs sources closed 2026-10-13 (§75); the rows below are kept because the
-  *extent* is still compiled in. Verified in place 2026-10-08:
+- ~~**Still open** — config-driving the hardcoded extent / candidate hours /
+  obs sources.~~ **ALL THREE CLOSED 2026-10-13** (`NEXT_STEPS.md` §75, §76).
+  The extent is now `Data/domain.py`, read by both the regrid loader and the
+  API and settable with `WEAVE_DOMAIN_LAT`/`WEAVE_DOMAIN_LON`, with
+  `_check_domain` comparing it against the rows actually stored — configurable
+  without a check would have been worse than hard-coded. The rows below are
+  kept as the record of where each copy lived:
 
   | item | where it is written down |
   |---|---|
-  | extent | `TARGET_LAT_RANGE`/`TARGET_LON_RANGE` in `Data/regrid_members.py:84`, and again as bbox defaults at `flask_api.py:700`, `:4474` **and `:5089`** |
+  | ~~extent~~ | **CLOSED 2026-10-13 (§76)** — was `TARGET_LAT_RANGE`/`TARGET_LON_RANGE` in `Data/regrid_members.py` plus bbox defaults at three `flask_api.py` sites; now one `Data/domain.py` |
 
   ~~**The third copy disagrees with the other two, and it changes a score.**~~
   **FIXED 2026-10-08 (`NEXT_STEPS.md` §69):** `DEFAULT_REGION` is now the one

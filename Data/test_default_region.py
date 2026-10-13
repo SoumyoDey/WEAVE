@@ -34,27 +34,35 @@ HERE = pathlib.Path(__file__).resolve().parent
 
 
 def _regrid_constants():
-    """`TARGET_LAT_RANGE`/`TARGET_LON_RANGE` read from the source text.
+    """`TARGET_LAT_RANGE`/`TARGET_LON_RANGE`, as the loader exposes them.
 
-    Parsed rather than imported: `regrid_members` is a loader CLI that pulls in
-    scipy and calls `load_dotenv` at import, none of which this assertion needs,
-    and making the API's test suite depend on the loader's dependencies to check
-    four numbers is a worse trade than reading the file.
+    **This used to parse `regrid_members.py`'s source text with `ast`**, because
+    the loader is a CLI that imports scipy and calls `load_dotenv`, and making
+    the API's tests depend on that to compare four numbers was the worse trade.
+
+    §76 removed the need: both sides now read `domain.py`, which imports
+    nothing but `os`, so the comparison is between two objects instead of
+    between a value and a transcription. The test is kept — it is the
+    cross-boundary assertion, and it is now stronger, because it fails if
+    either side stops reading the shared module rather than only if the digits
+    drift.
     """
-    tree = ast.parse((HERE / 'regrid_members.py').read_text())
-    out = {}
-    for node in tree.body:
-        if not isinstance(node, ast.Assign):
-            continue
-        name = node.targets[0].id if isinstance(node.targets[0], ast.Name) else None
-        if name in ('TARGET_LAT_RANGE', 'TARGET_LON_RANGE'):
-            out[name] = ast.literal_eval(node.value)
-    return out
+    import domain
+    return {'TARGET_LAT_RANGE': domain.LAT_RANGE,
+            'TARGET_LON_RANGE': domain.LON_RANGE}
+
+
+def test_the_loader_and_the_api_read_the_same_module():
+    # The structural half: not "these numbers agree today" but "there is only
+    # one place for them to come from".
+    import domain
+    import regrid_members as rm
+    assert rm.TARGET_LAT_RANGE is domain.LAT_RANGE
+    assert rm.TARGET_LON_RANGE is domain.LON_RANGE
+    assert rm.TARGET_RESOLUTION == domain.RESOLUTION
 
 
 def test_the_parse_found_the_constants():
-    # Without this the two assertions below pass vacuously on a file whose
-    # constants were renamed — the failure mode §32's JS parser guards against.
     got = _regrid_constants()
     assert set(got) == {'TARGET_LAT_RANGE', 'TARGET_LON_RANGE'}, got
 

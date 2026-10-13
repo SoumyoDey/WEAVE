@@ -33,7 +33,7 @@ def checks(monkeypatch):
     The probes have their own tests; this file is about whether the reporter
     says the right thing, to the right place, in each state.
     """
-    def configure(pool_safe=True, storage_safe=True):
+    def configure(pool_safe=True, storage_safe=True, domain_safe=True):
         monkeypatch.setattr(api, 'get_db_connection', lambda: _FakeConn())
         monkeypatch.setattr(api, 'return_db_connection', lambda conn: None)
         monkeypatch.setattr(api, '_check_pool_headroom', lambda cur: {
@@ -46,6 +46,13 @@ def checks(monkeypatch):
         monkeypatch.setattr(api, '_check_data_freshness', lambda cur: {
             'runs': 3, 'latest_init': '2025-09-16T00:00:00',
             'last_loaded_at': '2026-09-30T11:26:00'})
+        monkeypatch.setattr(api, '_check_domain', lambda cur: {
+            'safe': domain_safe, 'from_default': True, 'rows_loaded': True,
+            'resolution': 0.5,
+            'configured': {'min_lat': 25.0, 'max_lat': 45.0,
+                           'min_lon': -85.0, 'max_lon': -65.0},
+            'stored':     {'min_lat': 20.0, 'max_lat': 40.0,
+                           'min_lon': -100.0, 'max_lon': -60.0}})
     return configure
 
 
@@ -83,6 +90,22 @@ class TestWhatItSays:
         assert 'STORAGE PAST THE RETENTION THRESHOLD' in out[0]
         # Says plainly that nothing is broken — the stance /api/health takes.
         assert 'Nothing is broken' in out[0]
+
+    def test_it_warns_when_the_domain_does_not_match_the_data(self, checks):
+        """The warning that makes the domain safe to configure at all.
+
+        A constant can only be wrong if someone edits a file; an environment
+        variable can be wrong because of a shell, and every default-bbox answer
+        would then be scoped to a box the database does not hold (§76).
+        """
+        checks(domain_safe=False)
+        out = []
+        api.report_startup_checks(emit=_emit_to(out))
+        assert len(out) == 1
+        assert 'ANALYSIS DOMAIN DOES NOT MATCH THE DATA' in out[0]
+        # Both boxes, so the reader can see which way it drifted.
+        assert '25.0' in out[0] and '20.0' in out[0]
+        assert 'WEAVE_DOMAIN_LAT' in out[0]
 
     def test_both_warnings_appear_together(self, checks):
         checks(pool_safe=False, storage_safe=False)
@@ -128,7 +151,7 @@ class TestAgainstARealCursor:
         result = api.report_startup_checks(emit=_emit_to(out))
 
         # The shapes the caller destructures in `__main__`.
-        assert set(result) == {'pool', 'storage', 'freshness'}
+        assert set(result) == {'pool', 'storage', 'freshness', 'domain'}
         assert isinstance(result['storage']['database_gb'], float)
         assert isinstance(result['pool']['usable_connections'], int)
         assert 'latest_init' in result['freshness']
@@ -146,6 +169,8 @@ class TestAgainstARealCursor:
             assert key in r['pool'], key
         for key in ('runs', 'latest_init', 'last_loaded_at'):
             assert key in r['freshness'], key
+        for key in ('configured', 'stored', 'from_default', 'rows_loaded', 'safe'):
+            assert key in r['domain'], key
 
 
 class TestItIsWiredToRequests:

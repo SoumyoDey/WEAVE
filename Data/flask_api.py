@@ -3,6 +3,8 @@ import functools
 from flask_cors import CORS
 import psycopg2
 from psycopg2.extras import RealDictCursor
+
+import domain
 from collections import defaultdict
 import math
 import io
@@ -561,6 +563,77 @@ def _check_storage_headroom(cursor):
     }
 
 
+def _check_domain(cursor):
+    """Does the configured domain still describe the rows on disk?
+
+    This check is what makes the domain *safe* to configure. The box lives in
+    `domain.py` and can be set from the environment, but the data it describes
+    was regridded once and is not going to move: point a running API at a
+    different box and every default-bbox answer is quietly scoped to a region
+    the database does not hold. A constant can only be wrong if someone edits a
+    file; a variable can be wrong because of a shell, so it needs a check the
+    constant never did (`NEXT_STEPS.md` §76).
+
+    Compared against `regridded_forecast_ens`, the analysis grid, **not against
+    `regridded_observation`.** The observation grid is legitimately wider —
+    24–46 N / −86..−64 W against the forecast grid's 25–45 / −85..−65 — because
+    it snaps to each source's own native hull (IMERG's 24.05..45.95 rounds
+    outward). Comparing against it would report a mismatch that is correct
+    behaviour, which is the fastest way to teach someone to ignore a check.
+
+    **The test is containment, not equality**, and the fixture database is why.
+    It holds a deliberate 5x5 lattice at 35–37 N / −76..−74 W, well inside the
+    real domain, and an equality test called that a mismatch. It is not one: a
+    partial load is the normal state of a database that is still being filled,
+    and flagging it would make this check noise on every development machine —
+    the same mistake as comparing against the wider observation grid.
+
+    What actually breaks is data lying **outside** the configured box: those
+    rows exist, are never returned to a request that names no bounding box, and
+    nothing says so. A configured box wider than the data is merely wasteful,
+    so both extents are reported and only the clipping case is `safe: false`.
+
+    `safe: false` leaves the endpoint healthy, like the storage check: it means
+    the configuration and the data disagree and someone must decide which is
+    right, not that a request is failing.
+    """
+    cursor.execute("""
+        SELECT min(latitude)  AS min_lat, max(latitude)  AS max_lat,
+               min(longitude) AS min_lon, max(longitude) AS max_lon
+        FROM regridded_forecast_ens
+    """)
+    row = cursor.fetchone()
+    get = (lambda k, i: row[k] if isinstance(row, dict) else row[i]) if row else (
+        lambda k, i: None)
+    stored = {k: (float(get(k, i)) if get(k, i) is not None else None)
+              for i, k in enumerate(('min_lat', 'max_lat', 'min_lon', 'max_lon'))}
+
+    configured = dict(DEFAULT_REGION)
+    # An empty database is not a mismatch — there is nothing to disagree with.
+    loaded = any(v is not None for v in stored.values())
+
+    # Containment, with a tolerance: coordinates are float4 in places, so an
+    # exact comparison would flag rounding noise as a clipped domain.
+    tol = 1e-6
+    contained = (not loaded) and True
+    if loaded:
+        contained = (stored['min_lat'] >= configured['min_lat'] - tol
+                     and stored['max_lat'] <= configured['max_lat'] + tol
+                     and stored['min_lon'] >= configured['min_lon'] - tol
+                     and stored['max_lon'] <= configured['max_lon'] + tol)
+
+    return {
+        'configured':   configured,
+        'stored':       stored,
+        'resolution':   domain.RESOLUTION,
+        'from_default': domain.is_default(),
+        'rows_loaded':  loaded,
+        # True when every stored cell is inside the configured box. A narrower
+        # stored extent is a partial load, not a fault.
+        'safe':         contained,
+    }
+
+
 def _check_data_freshness(cursor):
     """How current the loaded data is — facts, with no verdict attached.
 
@@ -672,6 +745,7 @@ def report_startup_checks(emit=None):
             pool  = _check_pool_headroom(cur)
             store = _check_storage_headroom(cur)
             fresh = _check_data_freshness(cur)
+            dom   = _check_domain(cur)
     finally:
         return_db_connection(conn)
 
@@ -690,9 +764,19 @@ def report_startup_checks(emit=None):
     # Logged in both states: an operator reading the log wants to know what is
     # loaded, and "nothing was warned" is indistinguishable from "the check did
     # not run" without a line saying it did.
+    if not dom['safe']:
+        emit(f"ANALYSIS DOMAIN DOES NOT MATCH THE DATA — configured "
+             f"{dom['configured']['min_lat']}..{dom['configured']['max_lat']} N, "
+             f"{dom['configured']['min_lon']}..{dom['configured']['max_lon']} E; "
+             f"the regridded grid holds "
+             f"{dom['stored']['min_lat']}..{dom['stored']['max_lat']} N, "
+             f"{dom['stored']['min_lon']}..{dom['stored']['max_lon']} E. "
+             f"Every request that names no bounding box is being scoped to the "
+             f"configured box — check WEAVE_DOMAIN_LAT/LON, or re-run the regrid.")
+
     log.info("WEAVE data: %s run(s), latest init %s, last loaded %s",
              fresh['runs'], fresh['latest_init'], fresh['last_loaded_at'])
-    return {'pool': pool, 'storage': store, 'freshness': fresh}
+    return {'pool': pool, 'storage': store, 'freshness': fresh, 'domain': dom}
 
 
 @app.before_request
@@ -859,9 +943,11 @@ def _valid_member(member):
 # answer the endpoint will give — to `curl`, to a script, to the examples in
 # `RUNBOOK_LOAD_ONE_RUN.md`.
 #
-# `test_default_region.py` asserts these four numbers equal the regrid grid's,
-# so the API's idea of "the domain" cannot drift from the domain.
-DEFAULT_REGION = {'min_lat': 25.0, 'max_lat': 45.0, 'min_lon': -85.0, 'max_lon': -65.0}
+# **The numbers now come from `domain.py`**, which the regrid loader also reads,
+# so there is no longer an API copy to drift (§76). `test_default_region.py` had
+# to parse the loader's source text to compare the two; it now checks they are
+# the same object, and `_check_domain` below checks both against the rows.
+DEFAULT_REGION = domain.as_bbox()
 
 
 def _parse_bbox(args):
@@ -4368,6 +4454,10 @@ def health_check():
             # reaches. Facts without a verdict — see `_check_data_freshness`
             # for why there is deliberately no `safe` flag here.
             "freshness": _check_data_freshness(cursor),
+            # Whether the configured analysis domain still describes the rows
+            # on disk. `safe: false` means the configuration and the data
+            # disagree — someone must decide which is right (§76).
+            "domain": _check_domain(cursor),
             # What this worker has served since it started: counts by status
             # class and recent latency percentiles. In-process and reset by a
             # restart, which the payload says of itself rather than leaving a

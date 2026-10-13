@@ -36,13 +36,34 @@ def _enumerates_runs(stmt):
     return 'GROUP BY' in stmt and 'init_time' in stmt.split('GROUP BY', 1)[1]
 
 
+# The second query that must NOT be scoped: `_check_domain`'s extent probe.
+#
+# It asks what the *lattice* is — the coordinate extremes of the whole table —
+# in order to compare it against the configured analysis domain. Every run
+# shares one lattice; `regrid_members.verify_grid` enforces that at load time.
+# So scoping this to a run would narrow the question and, worse, **hide the
+# answer it exists to find**: a run regridded onto a different box is precisely
+# the drift the check is looking for, and filtering to one run would mean never
+# seeing it.
+#
+# Recognised by shape like the exemption above — aggregate extremes of the
+# coordinate columns with no WHERE clause at all. A query that reads values
+# rather than coordinates, or that filters anything, cannot borrow it.
+def _measures_the_whole_lattice(stmt):
+    flat = ' '.join(stmt.split())
+    return ('min(latitude)' in flat
+            and 'max(longitude)' in flat
+            and 'WHERE' not in flat.upper())
+
+
 def _sql_statements(source):
     """Every triple-quoted block that reads a regridded forecast table."""
     blocks = re.findall(r'"""(.*?)"""', source, re.DOTALL)
     return [b for b in blocks
             if any(t in b for t in REGRIDDED)
             and re.search(r'\bSELECT\b', b)
-            and not _enumerates_runs(b)]
+            and not _enumerates_runs(b)
+            and not _measures_the_whole_lattice(b)]
 
 
 class TestEveryRegriddedQueryIsRunScoped:

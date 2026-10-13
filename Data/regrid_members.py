@@ -62,6 +62,7 @@ from scipy.interpolate import RegularGridInterpolator
 
 # Local: the run registry, written at the end of each model/variable so the
 # run describes its own export convention rather than being inferred later.
+import domain
 import run_registry
 
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
@@ -79,11 +80,17 @@ DB_CONFIG = {
 ZERO_FILL_VARIABLES = {'precipitation'}
 
 # The common analysis grid every scored endpoint reads: 0.5° over the domain the
-# whole project uses. Stated here rather than discovered by query — see
-# `target_grid` for why that changed.
-TARGET_LAT_RANGE  = (25.0, 45.0)
-TARGET_LON_RANGE  = (-85.0, -65.0)
-TARGET_RESOLUTION = 0.5
+# whole project uses. Stated rather than discovered by query — see `target_grid`
+# for why that changed.
+#
+# The numbers come from `domain.py`, which `flask_api.py` also reads. They were
+# written out in both files, so the side that decides what gets *loaded* and the
+# side that decides what gets *served* each had their own copy of one fact
+# (`NEXT_STEPS.md` §76). The names are kept because ~20 call sites and four test
+# modules use them.
+TARGET_LAT_RANGE  = domain.LAT_RANGE
+TARGET_LON_RANGE  = domain.LON_RANGE
+TARGET_RESOLUTION = domain.RESOLUTION
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS regridded_forecast_member (

@@ -6365,6 +6365,68 @@ tells you two tests failed and nothing about which.
 
 ---
 
+## 76. The analysis domain, configured once and checked against the data — 2026-10-13
+
+The last of S4's config-driving items. The 0.5° box was written out twice:
+`TARGET_LAT_RANGE`/`TARGET_LON_RANGE` in `regrid_members.py`, deciding what gets
+**loaded**, and `DEFAULT_REGION` in `flask_api.py`, deciding what gets **served**
+to a request naming no box. One fact on both sides of the ingest boundary, kept
+equal only by a test that parsed one file's source text.
+
+`Data/domain.py` is now the one definition, imported by both. It imports nothing
+but `os`, which is the point: the loader is a CLI that pulls in scipy and opens
+a database at import, and the web app cannot take that on for four numbers —
+which is *why* the parity test had to read source text rather than compare
+objects. It now compares objects, and asserts `rm.TARGET_LAT_RANGE is
+domain.LAT_RANGE` — so it fails if either side stops reading the shared module,
+not only if the digits drift.
+
+### Making it configurable is the dangerous half
+
+`WEAVE_DOMAIN_LAT=25,45` and friends, read once at import. **A hard-coded
+constant can only be wrong if somebody edits a file; an environment variable can
+be wrong because of a shell** — and a running API pointed at a box the database
+does not hold answers every default-bbox request against the wrong region,
+silently. Configurable without a check would have been worse than hardcoded.
+
+So `_check_domain` compares the configured box against the extent actually
+stored, reports it on `/api/health`, and `report_startup_checks` (§74) warns
+when they disagree. Verified by setting `WEAVE_DOMAIN_LAT=30,40
+WEAVE_DOMAIN_LON=-80,-70` against the real database: `safe: false`, and the
+warning names both boxes and the variables to check.
+
+A malformed or reversed range raises at import rather than falling back.
+**Starting with a different domain than the operator asked for is the one
+outcome worse than refusing to start**, because every number served afterwards
+is quietly scoped to the wrong box.
+
+### Containment, not equality — and the fixture taught me that
+
+The check first tested equality, and the fixture database failed it. The
+fixture holds a deliberate **5×5 lattice at 35–37 N / −76..−74 W**, well inside
+the real domain, and equality called that a mismatch. It is not one: **a
+partial load is the normal state of a database still being filled**, and
+flagging it would have made the check noise on every development machine — the
+same mistake as comparing against the observation grid, which is legitimately
+wider (24–46 N, snapping to IMERG's native hull) and which I had already
+decided not to compare against.
+
+What actually breaks is data lying *outside* the configured box: those rows
+exist, never appear in a default-bbox answer, and nothing says so. A configured
+box wider than the data is merely wasteful. So `safe` is containment, both
+extents are reported, and only the clipping case is false.
+
+### The run-scoping guard needed a second exemption, by shape
+
+`test_run_scoping.py` asserts every regridded `SELECT` filters on `init_time`.
+The extent probe deliberately does not — and **scoping it would defeat it**: a
+run regridded onto a different lattice is exactly the drift being looked for,
+and filtering to one run would mean never seeing it. The exemption is
+recognised by shape (coordinate extremes, no `WHERE`), like the existing one for
+the query that enumerates runs, so an unrelated query cannot borrow it.
+
+---
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in
