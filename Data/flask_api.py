@@ -561,6 +561,154 @@ def _check_storage_headroom(cursor):
     }
 
 
+def _check_data_freshness(cursor):
+    """How current the loaded data is — facts, with no verdict attached.
+
+    `/api/health` could say the database was connected, the pool fitted and the
+    disk had room, and **nothing at all about whether the numbers it serves are
+    from last week or last year**. "Is this stale?" was unanswerable without
+    opening a SQL client, which is the question an operator actually has.
+
+    **Deliberately no `safe` flag, unlike the two checks above.** Those compare
+    against a threshold that means something — a pool either fits under
+    `max_connections` or it does not. This is a research archive, not a live
+    feed: `2025-09-16` is the run under study and is *supposed* to be old, so
+    any staleness threshold here would be invented, and an invented threshold
+    that reads `safe: false` forever is worse than no flag. The ages are
+    reported and the reader judges.
+
+    Three different clocks, which is why each is named rather than collapsed:
+
+    * `latest_init` — the newest forecast *initialisation* held. How old the
+      weather is.
+    * `last_loaded_at` — when anything was most recently ingested. How long the
+      archive has been quiet.
+    * `observations.end` — how far the truth record reaches, which is what
+      actually bounds verification (`record_end_lead_hours` on
+      `/api/observation-coverage` is the per-run form of this).
+    """
+    now = datetime.now()
+
+    cursor.execute("""
+        SELECT max(init_time)            AS latest_init,
+               max(loaded_at)            AS last_loaded_at,
+               count(DISTINCT init_time) AS runs
+        FROM forecast_run_registry
+    """)
+    row = cursor.fetchone()
+    latest_init    = row['latest_init']    if isinstance(row, dict) else row[0]
+    last_loaded_at = row['last_loaded_at'] if isinstance(row, dict) else row[1]
+    runs           = row['runs']           if isinstance(row, dict) else row[2]
+
+    observations = {}
+    for label, source in (('precipitation', 'GPM_IMERG_V07B'), ('wind', 'ERA5_WIND')):
+        cursor.execute(
+            "SELECT max(obs_time) AS end FROM regridded_observation WHERE source = %s",
+            (source,))
+        r = cursor.fetchone()
+        end = r['end'] if isinstance(r, dict) else r[0]
+        observations[label] = {
+            'source': source,
+            'end':    end.isoformat() if end else None,
+            # Whether the truth record reaches the newest run at all. False
+            # means that run cannot be scored yet — a real and common state
+            # here, not an error.
+            'covers_latest_init': bool(end and latest_init and end >= latest_init),
+        }
+
+    def _age_hours(then):
+        return round((now - then).total_seconds() / 3600, 1) if then else None
+
+    return {
+        'latest_init':          latest_init.isoformat() if latest_init else None,
+        'latest_init_age_hours': _age_hours(latest_init),
+        'last_loaded_at':       last_loaded_at.isoformat() if last_loaded_at else None,
+        'last_loaded_age_hours': _age_hours(last_loaded_at),
+        'runs':                 runs,
+        'observations':         observations,
+    }
+
+
+_STARTUP_CHECKS_DONE = False
+
+
+def report_startup_checks(emit=None):
+    """Pool, storage and freshness, emitted once per worker process.
+
+    **These checks existed and production never saw them.** They ran inside
+    `if __name__ == '__main__'`, which is the Flask dev server's entry point and
+    not gunicorn's — gunicorn imports `flask_api:app` and that block never runs.
+    So the one deployment where "your pool will not fit under `max_connections`"
+    matters was the one deployment nobody was told (`NEXT_STEPS.md` §74). The
+    figures were on `/api/health` for anyone who thought to look, which is not
+    the same as being warned.
+
+    `emit` defaults to the logger, so a deployment gets these through whatever
+    collects its logs; `__main__` passes `print` to keep its banner as it was.
+
+    **On first request rather than at import.** Import-time database work runs
+    before gunicorn has finished forking, during `--preload`, and inside every
+    test that imports this module; a check that cannot stop the server starting
+    should not be able to stop it *importing* either. The cost is that the
+    warning lands a few milliseconds after the first request instead of at
+    boot, which is early enough to matter and late enough to be safe.
+    """
+    emit = emit or (lambda line: log.warning(line))
+    conn = get_db_connection()
+    try:
+        # A plain cursor, not a RealDictCursor: `_check_pool_headroom` and
+        # `_check_storage_headroom` read their rows positionally
+        # (`fetchone()[0]`), which is why `/api/health` builds a plain one too.
+        # Passing a RealDictCursor here raised `KeyError: 0`, the `except`
+        # below swallowed it as "Could not verify startup headroom: 0", and the
+        # checks silently did not run — the exact failure this function exists
+        # to end, reproduced inside it. `_check_data_freshness` reads either
+        # shape.
+        with conn.cursor() as cur:
+            pool  = _check_pool_headroom(cur)
+            store = _check_storage_headroom(cur)
+            fresh = _check_data_freshness(cur)
+    finally:
+        return_db_connection(conn)
+
+    if not pool['safe']:
+        emit(f"CONNECTION POOL OVER CAPACITY — {pool['workers']} worker(s) x "
+             f"{pool['pool_max_per_worker']} = {pool['peak_connections']} connections "
+             f"at peak, server allows {pool['usable_connections']} usable "
+             f"(max_connections {pool['max_connections']}). Lower DB_POOL_MAX or raise "
+             f"max_connections — REVIEW_DEPLOY_PREREQS.md section 2.")
+    if not store['safe']:
+        emit(f"STORAGE PAST THE RETENTION THRESHOLD — {store['database_gb']} GB over "
+             f"{store['runs']} run(s), threshold {store['revisit_at_gb']:.0f} GB. "
+             f"Nothing is broken; a retention decision is due before the next ingest "
+             f"— DATA_EXPANSION_DESIGN.md phase 5.")
+
+    # Logged in both states: an operator reading the log wants to know what is
+    # loaded, and "nothing was warned" is indistinguishable from "the check did
+    # not run" without a line saying it did.
+    log.info("WEAVE data: %s run(s), latest init %s, last loaded %s",
+             fresh['runs'], fresh['latest_init'], fresh['last_loaded_at'])
+    return {'pool': pool, 'storage': store, 'freshness': fresh}
+
+
+@app.before_request
+def _run_startup_checks_once():
+    """Fire `report_startup_checks` on this worker's first request.
+
+    Skipped under `TESTING`, so the suite does not pay for a database round
+    trip on whichever test happens to issue the first request — and so a test
+    asserting on log output is not racing this one.
+    """
+    global _STARTUP_CHECKS_DONE
+    if _STARTUP_CHECKS_DONE or app.config.get('TESTING'):
+        return
+    _STARTUP_CHECKS_DONE = True        # set first: one attempt, success or not
+    try:
+        report_startup_checks()
+    except Exception as e:             # never let a check break a request
+        log.warning("Could not verify startup headroom: %s", e)
+
+
 def _pool_getconn():
     """getconn with a short bounded retry. ThreadedConnectionPool.getconn raises
     PoolError immediately when every connection is checked out; a brief wait lets
@@ -4148,6 +4296,11 @@ def health_check():
             # is wrong — see DB_SIZE_REVISIT_GB and DATA_EXPANSION_DESIGN.md
             # phase 5.
             "storage": _check_storage_headroom(cursor),
+            # How current the data is: newest initialisation held, when the
+            # archive was last written to, and how far the observation record
+            # reaches. Facts without a verdict — see `_check_data_freshness`
+            # for why there is deliberately no `safe` flag here.
+            "freshness": _check_data_freshness(cursor),
             # What this worker has served since it started: counts by status
             # class and recent latency percentiles. In-process and reset by a
             # restart, which the payload says of itself rather than leaving a
@@ -6149,53 +6302,25 @@ if __name__ == '__main__':
     print("=" * 60)
     print("✅ Optimized with connection pooling")
 
-    # Say it at startup, loudly, when the pool cannot fit under the server's
-    # max_connections. This is a warning rather than a refusal on purpose: the
-    # worker count is inferred from the environment, so refusing would take an
-    # otherwise-working deployment down over a variable that may simply be
-    # unset. /api/health carries the same figures for checking afterwards.
+    # The same checks the running app performs on its first request, printed
+    # here in the dev server's banner style. One implementation, two emitters:
+    # the block that used to live here was the *only* place they ran, which is
+    # why gunicorn never reported them (`report_startup_checks`).
     try:
-        _hc_conn = get_db_connection()
-        try:
-            with _hc_conn.cursor() as _hc_cur:
-                _pool = _check_pool_headroom(_hc_cur)
-                _store = _check_storage_headroom(_hc_cur)
-        finally:
-            return_db_connection(_hc_conn)
-
-        # Phase 5's threshold, announced where it can be acted on. Printed in
-        # both states, because "how many more runs fit" is the number someone
-        # wants *before* starting a load, not only once it is too late.
+        _s = report_startup_checks(emit=lambda line: print(f"\u26a0\ufe0f  {line}"))
+        _store, _pool, _fresh = _s['storage'], _s['pool'], _s['freshness']
         if _store['safe']:
-            print(f"💾 Storage: {_store['database_gb']} GB over "
+            print(f"\U0001f4be Storage: {_store['database_gb']} GB over "
                   f"{_store['runs']} run(s), {_store['headroom_gb']} GB until the "
                   f"{_store['revisit_at_gb']:.0f} GB retention review"
                   + (f" (~{_store['runs_until_revisit']} more run(s))"
                      if _store['runs_until_revisit'] is not None else ""))
-        else:
-            print("=" * 60)
-            print(f"⚠️  STORAGE PAST THE RETENTION THRESHOLD — a decision is due")
-            print(f"    {_store['database_gb']} GB over {_store['runs']} run(s), "
-                  f"threshold {_store['revisit_at_gb']:.0f} GB")
-            print(f"    mean {_store['mean_gb_per_run']} GB per run")
-            print("    Nothing is broken. Choose an archive tier before the next")
-            print("    ingest — DATA_EXPANSION_DESIGN.md phase 5 has the options.")
-            print("=" * 60)
-
         if _pool['safe']:
-            print(f"✅ Pool headroom: {_pool['workers']} worker(s) × "
+            print(f"\u2705 Pool headroom: {_pool['workers']} worker(s) \u00d7 "
                   f"{_pool['pool_max_per_worker']} = {_pool['peak_connections']} "
                   f"of {_pool['usable_connections']} usable connections")
-        else:
-            print("=" * 60)
-            print("⚠️  CONNECTION POOL OVER CAPACITY — requests will fail under load")
-            print(f"    {_pool['workers']} worker(s) × {_pool['pool_max_per_worker']} "
-                  f"= {_pool['peak_connections']} connections at peak")
-            print(f"    server allows {_pool['usable_connections']} usable "
-                  f"(max_connections {_pool['max_connections']})")
-            print("    Lower DB_POOL_MAX in Data/.env, or raise max_connections.")
-            print("    See REVIEW_DEPLOY_PREREQS.md §2.")
-            print("=" * 60)
+        print(f"\U0001f4c5 Data: {_fresh['runs']} run(s), latest init "
+              f"{_fresh['latest_init']}, last loaded {_fresh['last_loaded_at']}")
     except Exception as _e:
         # Never let the check itself stop the server starting.
         print(f"⚠️  Could not verify pool headroom: {_e}")
