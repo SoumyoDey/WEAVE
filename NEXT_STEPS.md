@@ -6213,6 +6213,66 @@ renders different controls.
 
 ---
 
+## 71. Lazy tabs — and a comment that described an intention — 2026-10-09
+
+S5's last item. The three scored/charted tabs are now their own chunks, loaded
+on first visit.
+
+| | before | after |
+|---|---|---|
+| `main.js` (gzipped) | **285.66 kB** | **146.6 kB** |
+| largest chunk | — | 112.62 kB (recharts) |
+| requests on first load | 9, incl. two cyclone endpoints | **5** |
+
+**Recharts is the whole prize.** It is imported by Analysis, Comparison and
+Cyclones and by nothing else, so as static imports it sat in the initial bundle
+for every reader, including one who only ever looks at the map. Leaflet stays
+in `main` deliberately: `App.js` builds the visualization map itself, so it is
+needed before any tab opens.
+
+### `lazy` alone would have bought nothing
+
+The tabs are hidden with `display: none` and never unmounted — deliberately, so
+Comparison still holds its results when you switch away and back. But a hidden
+tab is still *rendered*, and `lazy` fetches a chunk when the component renders,
+not when it becomes visible. All four chunks would have been requested on load.
+
+So the split needed `visitedTabs`: a tab is rendered only once it has been
+opened, and then stays rendered for the session. That keeps the property the
+tabs relied on and gets the deferral.
+
+### The comment that was describing an intention
+
+Above the cyclone tab stood:
+
+> *Mounted only once visited: it builds its own Leaflet map, and a second
+> hidden map instance costs tiles and listeners for a tab nobody opened.*
+
+**It was not mounted only once visited.** It was mounted on every page load,
+and the §64 network trace shows it: `/api/cyclone/tracks` and
+`/api/cyclone/error-by-lead` fetched for storm ALCIDE, at init `2018-11-09`,
+on the visualization tab, before anyone had opened the cyclone tab — the cost
+the comment said was being avoided, being paid on every load, under the comment
+saying it was not. **Prose describing behaviour is not behaviour**, which is
+§68's lesson from yesterday in a different file. Now it is true.
+
+### Two tests changed sides, and the second is a flake worth naming
+
+`App.errorContainment.test.js` asserted the boundary's fallback appeared
+*immediately* after render, because every tab was mounted on load. Analysis is
+no longer mounted until opened, so the tests now open it first — and a new test
+pins the dividend: **a broken tab costs nothing at all until it is visited.**
+
+The other change was not a behaviour change. "The other tabs still open and
+render" passed alone and failed in the full suite, because it waits on two
+sequential dynamic `import()`s and in isolation already took **1,154 ms**
+against `waitFor`'s 1,000 ms default. The budget is now explicit. Three
+consecutive full runs green. **A test that passes alone and fails in the suite
+is usually a timing budget, not a race — measure how long it actually takes
+before treating it as flaky.**
+
+---
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in

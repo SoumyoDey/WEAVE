@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { ChevronLeft, Info, Menu, CloudRain, Map as MapIcon, BarChart3, Scale, Wind } from 'lucide-react';
@@ -31,15 +31,45 @@ import { AboutModal }         from './components/AboutModal';
 import { OnboardingTour }     from './components/OnboardingTour';
 import { SelectionToolbar }   from './components/SelectionToolbar';
 import { MetricPanel }        from './components/MetricPanel';
-import { AnalysisTab }        from './components/AnalysisTab';
-import { ComparisonTab }      from './components/ComparisonTab';
-import { CycloneTab }         from './components/CycloneTab';
 import { IDWLegend }          from './components/legends/IDWLegend';
 import { BivariateLegend }    from './components/legends/BivariateLegend';
 import { VSUPFanLegend }      from './components/legends/VSUPFanLegend';
 import { VSUPBoxesLegend }    from './components/legends/VSUPBoxesLegend';
 import { TextureLegend }      from './components/legends/TextureLegend';
 import { t } from './theme';
+
+/**
+ * The three scored/charted tabs load as their own chunks, on first visit.
+ *
+ * **Recharts is the reason.** It is imported by Analysis, Comparison and
+ * Cyclones and by nothing else, so while these were static imports it sat in
+ * the initial bundle for every reader — including one who only ever looks at
+ * the map. Leaflet stays in `main` on purpose: this file builds the
+ * visualization map itself, so it is needed before any tab is opened.
+ *
+ * `lazy` only pays off because of `visitedTabs` below. These tabs are hidden
+ * with `display: none` rather than unmounted, so if all four were *rendered* on
+ * load, every chunk would be requested on load and the split would buy nothing
+ * (`NEXT_STEPS.md` §71).
+ *
+ * Named exports, hence the `.then` — `lazy` wants a module with a `default`.
+ */
+const AnalysisTab   = lazy(() => import('./components/AnalysisTab')
+  .then(m => ({ default: m.AnalysisTab })));
+const ComparisonTab = lazy(() => import('./components/ComparisonTab')
+  .then(m => ({ default: m.ComparisonTab })));
+const CycloneTab    = lazy(() => import('./components/CycloneTab')
+  .then(m => ({ default: m.CycloneTab })));
+
+/** Full-tab placeholder while a chunk is in flight. */
+const TabLoading = () => (
+  <div style={{
+    height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    color: 'rgba(255,255,255,0.35)', fontSize: '0.95rem',
+  }}>
+    Loading…
+  </div>
+);
 
 const TAB_BAR_H = 48;
 
@@ -77,6 +107,27 @@ function App() {
 
   // ── UI state ────────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab]               = useState('visualization');
+
+  /**
+   * Which tabs have ever been opened — the half of code-splitting that makes it
+   * work here.
+   *
+   * A tab is rendered only once it has been visited, and then stays rendered
+   * (hidden with `display: none`) for the rest of the session. That keeps the
+   * property the tabs already relied on — Comparison still holds its results
+   * when you switch away and back, which is why they were never unmounted —
+   * while meaning a reader who opens the map and nothing else never downloads
+   * the chart chunks at all.
+   *
+   * `/api/cyclone/tracks` was being fetched on *every* page load, on the
+   * visualization tab, for a storm nobody had asked about, because the comment
+   * saying this tab was "mounted only once visited" described an intention
+   * rather than the code (§71).
+   */
+  const [visitedTabs, setVisitedTabs] = useState(() => new Set(['visualization']));
+  useEffect(() => {
+    setVisitedTabs((seen) => (seen.has(activeTab) ? seen : new Set(seen).add(activeTab)));
+  }, [activeTab]);
   const [menuOpen, setMenuOpen]                 = useState(false);
   // How tall the timeline bar is right now, reported by it. Everything the map
   // stacks on top of itself stops here, so nothing covers a visible control
@@ -1101,14 +1152,20 @@ function App() {
       {/* Mounted only once visited: it builds its own Leaflet map, and a second
           hidden map instance costs tiles and listeners for a tab nobody opened. */}
       <div style={{ display: activeTab === 'cyclones' ? 'block' : 'none', position: 'absolute', top: TAB_BAR_H, left: 0, right: 0, bottom: 0, background: '#0d151f' }}>
-        <ErrorBoundary name="Cyclones" resetKeys={[selectedRun]}>
-          <CycloneTab active={activeTab === 'cyclones'} isNarrow={isNarrow} />
-        </ErrorBoundary>
+        {visitedTabs.has('cyclones') && (
+          <ErrorBoundary name="Cyclones" resetKeys={[selectedRun]}>
+            <Suspense fallback={<TabLoading />}>
+              <CycloneTab active={activeTab === 'cyclones'} isNarrow={isNarrow} />
+            </Suspense>
+          </ErrorBoundary>
+        )}
       </div>
 
       {/* ══ ANALYSIS TAB ══ */}
       <div style={{ display: activeTab === 'analysis' ? 'flex' : 'none', position: 'absolute', top: TAB_BAR_H, left: 0, right: 0, bottom: 0, background: '#0f1923', flexDirection: 'column', overflow: 'hidden' }}>
+        {visitedTabs.has('analysis') && (
         <ErrorBoundary name="Analysis" resetKeys={[selectedRun, selectedVariable]}>
+          <Suspense fallback={<TabLoading />}>
           <AnalysisTab
             clickedPoint={clickedPoint}
             currentModel={currentModel}
@@ -1120,12 +1177,16 @@ function App() {
             selectedRegion={selectedRegion}
             active={activeTab === 'analysis'}
           />
+          </Suspense>
         </ErrorBoundary>
+        )}
       </div>
 
       {/* ══ COMPARISON TAB ══ */}
       <div style={{ display: activeTab === 'comparison' ? 'flex' : 'none', position: 'absolute', top: TAB_BAR_H, left: 0, right: 0, bottom: 0, background: '#0f1923', flexDirection: 'column', overflow: 'hidden' }}>
+        {visitedTabs.has('comparison') && (
         <ErrorBoundary name="Comparison" resetKeys={[selectedRun, selectedVariable]}>
+          <Suspense fallback={<TabLoading />}>
           <ComparisonTab
             defaultLocation={clickedPoint}
             defaultHour={selectedHour}
@@ -1134,7 +1195,9 @@ function App() {
             onJumpToComparison={(lat, lon) => setActiveTab('comparison')}
             active={activeTab === 'comparison'}
           />
+          </Suspense>
         </ErrorBoundary>
+        )}
       </div>
 
     </div>

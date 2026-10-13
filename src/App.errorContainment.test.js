@@ -29,6 +29,9 @@ import { RunProvider } from './state/RunContext';
 import { VerificationProvider } from './state/VerificationContext';
 import { resetRun } from './api/run';
 
+/** Budget for a lazy tab's chunk to load; see `openBrokenTab`. */
+const CHUNK_WAIT = 10000;
+
 const RUN = '2025-09-16T00:00:00';
 const OLDER = '2025-09-08T00:00:00';
 
@@ -70,13 +73,39 @@ const renderApp = async () => {
     .toBeInTheDocument());
 };
 
+/**
+ * Open the broken tab and wait for the boundary to catch.
+ *
+ * **These tests used to assert on the fallback straight after render**, because
+ * every tab was mounted on load and merely hidden — so a tab that threw threw
+ * immediately. §71 made the tabs lazy and mount-on-first-visit, so Analysis is
+ * not rendered, and cannot throw, until someone opens it.
+ *
+ * The expectation changed because the behaviour improved: a broken tab now
+ * costs nothing at all until it is visited. The `waitFor` is the dynamic
+ * `import()` resolving through `Suspense`.
+ */
+const openBrokenTab = async () => {
+  fireEvent.click(screen.getByRole('button', { name: 'Analysis' }));
+  // CHUNK_WAIT, not the 1 s default: this waits on a real dynamic `import()`
+  // resolving in jsdom, which is slower under a full parallel test run than it
+  // is for this file alone. The first version of this test passed in isolation
+  // and failed in the suite for exactly that reason.
+  await waitFor(
+    () => expect(screen.getByText(/The Analysis panel stopped/)).toBeInTheDocument(),
+    { timeout: CHUNK_WAIT });
+};
+
+test('a tab that throws is not even mounted until it is opened', async () => {
+  await renderApp();
+  // The split's safety dividend, pinned so it is not lost by accident.
+  expect(screen.queryByText(/The Analysis panel stopped/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/analysis exploded/)).not.toBeInTheDocument();
+});
+
 test('the app survives a tab that throws on render', async () => {
   await renderApp();
-
-  // The throw happens immediately: every tab is mounted at once and merely
-  // hidden with `display: none`, which is exactly why one of them failing used
-  // to be fatal.
-  expect(screen.getByText(/The Analysis panel stopped/)).toBeInTheDocument();
+  await openBrokenTab();
 
   // The things that must still be there.
   expect(screen.getByRole('button', { name: 'Visualization' })).toBeInTheDocument();
@@ -87,10 +116,12 @@ test('the app survives a tab that throws on render', async () => {
 
 test('the other tabs still open and render', async () => {
   await renderApp();
+  await openBrokenTab();
 
   fireEvent.click(screen.getByRole('button', { name: 'Comparison' }));
-  await waitFor(() =>
-    expect(screen.getByRole('button', { name: /Run Comparison/ })).toBeInTheDocument());
+  await waitFor(
+    () => expect(screen.getByRole('button', { name: /Run Comparison/ })).toBeInTheDocument(),
+    { timeout: CHUNK_WAIT });
 
   // And the broken one is still contained rather than having spread.
   expect(screen.getByText(/The Analysis panel stopped/)).toBeInTheDocument();
@@ -98,15 +129,16 @@ test('the other tabs still open and render', async () => {
 
 test('the failure is attributed to the tab that failed', async () => {
   await renderApp();
+  await openBrokenTab();
   // Naming it is the difference between "the app is broken" and "Analysis is
   // broken, use the other three" — the whole reason the boundaries are
   // per-tab rather than one at the root.
-  expect(screen.getByText(/The Analysis panel stopped/)).toBeInTheDocument();
   expect(screen.queryByText(/The Comparison panel stopped/)).not.toBeInTheDocument();
   expect(screen.queryByText(/The Visualization panel stopped/)).not.toBeInTheDocument();
 });
 
 test('the thrown message is shown, not hidden behind an apology', async () => {
   await renderApp();
+  await openBrokenTab();
   expect(screen.getByText(/analysis exploded/)).toBeInTheDocument();
 });

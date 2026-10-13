@@ -205,8 +205,9 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
 - **G. Extensibility** — adding a model/variable/metric touches ~6 scattered
   places; hardcoded extent/candidate_hours/obs-sources/base-date; complex dual
   path under-documented.
-- **H. Frontend** — CRA/react-scripts EOL; single bundle; API URL baked at build;
-  ~~no error boundary~~ (**fixed 2026-10-09, §70**).
+- **H. Frontend** — CRA/react-scripts EOL; ~~single bundle~~ (**split 2026-10-09,
+  §71**); API URL baked at build; ~~no error boundary~~ (**fixed 2026-10-09,
+  §70**).
 - **I. Testing/CI** — good metric tests, but no endpoint/integration/loader tests,
   2 frontend smoke tests, no CI, no load testing.
 - **J. Scientific validity (documented limits)** — `|mean vector|` wind-speed
@@ -473,10 +474,12 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
 ### S5 — Frontend platform & resilience — ~3–4 days, low–med risk
 - ~~Vite migration (CRA is EOL)~~ **dropped 2026-09-21** — see `NEXT_STEPS.md`
   §6 for what staying on CRA costs. The rest of S5 stands.
-- ~~React error boundary~~ **DONE 2026-10-09 (`NEXT_STEPS.md` §70)** — one
-  boundary per tab plus a backstop in `index.js`, so a render throw costs
-  that tab rather than blanking the app. Code-splitting / lazy tabs is
-  **still open** and is now the only item left in this bullet.
+- ~~React error boundary; code-splitting / lazy tabs~~ **BOTH DONE 2026-10-09
+  (`NEXT_STEPS.md` §70, §71).** One boundary per tab plus a backstop in
+  `index.js`, so a render throw costs that tab rather than blanking the app;
+  and the three charted tabs are their own chunks, loaded on first visit —
+  `main.js` **285.66 kB → 146.6 kB** gzipped, with recharts (112.62 kB) out of
+  the initial bundle.
 - Runtime API config (stop baking `REACT_APP_API_URL`) — **partly overtaken**:
   `src/api/base.js` now defaults to same-origin `/api` in a production build, so
   the single-origin deployment needs no build-time URL at all. The variable is
