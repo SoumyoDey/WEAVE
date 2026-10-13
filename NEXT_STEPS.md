@@ -3656,11 +3656,18 @@ The 43 calls in the `__main__` startup banner. That is a CLI courtesy from the
 dev server, not service output, and `gunicorn` never runs it.
 
 **That boundary hides a real gap, so it is named rather than left implicit:**
-the pool-headroom and storage-headroom warnings live in the same block, so in
+~~the pool-headroom and storage-headroom warnings live in the same block, so in
 production *nobody is told*. §27 added the storage warning "announced where it
 can be acted on" — and in production it is not announced at all. Fixing that
 means moving those checks to application start, a behaviour change to someone
-else's work, and it belongs in its own commit.
+else's work, and it belongs in its own commit.~~
+
+**CLOSED 2026-10-13 (§74)**, and it did get its own commit, as this paragraph
+asked. `report_startup_checks` runs on each worker's first request and logs
+through the application logger; `__main__` calls the same function with `print`
+so the dev banner is unchanged. The gap was named here on 2026-10-08 and stayed
+open for five days — which is fast for this document and still long enough that
+the sweep found it twice.
 
 ### One self-inflicted lesson
 
