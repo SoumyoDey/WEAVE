@@ -6273,6 +6273,91 @@ before treating it as flaky.**
 
 ---
 
+## 72–75. The four latent items, closed — 2026-10-13
+
+Four open items that shared a shape: **nothing was visibly wrong, and each
+would have become wrong later.** Taken one commit at a time.
+
+### §72 — the export divisor, in the last two places
+
+Twelve call sites passed `exported=_export_divisor(...)`; two did not — the
+member branch of `/api/forecast-data` (the map overlay) and
+`/api/point-timeseries` (the cone). Both read `SCALED_EXPORT_DIVISOR_HOURS`,
+which describes the export that *happens to be loaded* rather than the run
+being read.
+
+All 17 loaded run/variable rows agree with the constant, so the two wrong
+branches returned the same numbers as the ten right ones. It would have become
+a map disagreeing with the scores beside it on the first re-export that
+differed.
+
+**I asserted the wrong direction first and the test caught it.**
+`_increment_divisor` is `period / exported`, so the rate is *proportional* to
+`exported`: twice the recorded divisor is twice the rate, not half.
+
+### §73 — freshness on `/api/health`
+
+Health could say the database was connected, the pool fitted and the disk had
+room, and **nothing about whether the numbers were from last week or last
+year**. It now reports three clocks, deliberately not collapsed: `latest_init`
+(how old the weather is), `last_loaded_at` (how long the archive has been
+quiet) and per-source `observations.end` with `covers_latest_init`.
+
+**No `safe` flag**, unlike the two checks beside it, and a test pins that. They
+compare against thresholds that mean something; this is a research archive
+whose subject run is supposed to be old, so a staleness threshold would be
+invented — and one reading `safe: false` forever teaches the reader to ignore
+the field.
+
+### §74 — the startup checks never ran in production
+
+The pool and storage checks were careful, and lived inside
+`if __name__ == '__main__'`. That is the **dev server's** entry point; gunicorn
+imports `flask_api:app`, so the one deployment where "your pool will not fit
+under `max_connections`" matters was the one nobody warned. The figures were on
+`/api/health` throughout, which is not the same thing: *a number available to
+whoever thinks to look is not a warning.*
+
+One reporter now serves both, on each worker's first request, with `__main__`
+passing `print` to keep its banner.
+
+**The fix had the bug it was fixing.** My first version passed a
+`RealDictCursor`; the two older checks read rows positionally, so it raised
+`KeyError: 0`, the `except` swallowed it as *"Could not verify startup
+headroom: 0"*, and the checks silently did not run — inside the function
+written to stop checks silently not running. Found by reading the dev banner,
+not by the suite: every test stubbed all three probes, so **no test exercised
+the cursor contract at all.** `TestAgainstARealCursor` is unstubbed and fails
+on the bad cursor.
+
+### §75 — one definition of what each variable is verified against
+
+The triple (forecast column, observation column, observation source) was an
+`if is_wind:` branch at **eight** sites, and the two reader-facing strings were
+written twice more in `AnalysisTab.jsx`. The UI could name a source the scoring
+code was not using, with nothing to notice — §19's defect, where four spatial
+metrics were confidently labelled `mm/h` for wind.
+
+`OBSERVATION_SOURCES` and `_sources_for()` are now the single definition, the
+eight branches call it, and `/api/config` serves both the sources and
+`candidate_hours`. The client keeps its strings **as a fallback only**, which a
+test enforces by requiring every `IMERG`/`ERA5` literal in that file to sit
+inside the fallback argument of `observationLabelFrom`.
+
+**And wiring a component to `/api/config` made a test do real network I/O.**
+`MetricPanel.test.js` stubs no `fetch`, so after this change it called a dev
+backend if one was running and nothing on CI — a race against its own
+assertions, and the likeliest explanation for two failures I saw once and could
+not reproduce in eleven subsequent runs. *I could not name them, because I had
+piped that run's output through `tail`.* Fixed at both ends: `fetchConfig`
+returns null when `fetch` is unavailable instead of throwing out of the promise
+chain, and the test stubs and resets the module cache.
+
+**Capture the whole log when something fails intermittently.** A summary line
+tells you two tests failed and nothing about which.
+
+---
+
 ## Standing decisions — do not undo these by accident
 
 **GEFS precipitation will not be re-exported.** The correction in

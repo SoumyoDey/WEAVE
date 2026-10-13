@@ -42,4 +42,28 @@ export const useMetricConfig = (local = METRIC_CONFIG) => {
   return metrics;
 };
 
+/**
+ * The whole config, for readers that want more than the metric list.
+ *
+ * `useMetricConfig` merges one specific thing; the obs-source label and the
+ * candidate lead times are two more facts the server owns, and giving each its
+ * own fetching hook would re-implement the same effect three times.
+ * `fetchConfig` is deduplicated per page load, so several consumers cost one
+ * request.
+ *
+ * Returns `null` until the call resolves and `null` forever if it fails, which
+ * is what every accessor in `api/config.js` takes as "use the fallback".
+ */
+export const useConfig = () => {
+  const [config, setConfig] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    fetchConfig().then((c) => { if (alive && c) setConfig(c); });
+    return () => { alive = false; };
+  }, []);
+
+  return config;
+};
+
 export default useMetricConfig;

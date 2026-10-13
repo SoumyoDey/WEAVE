@@ -38,6 +38,12 @@ let inFlight = null;
 export const fetchConfig = async () => {
   if (cached) return cached;
   if (inFlight) return inFlight;
+  // `fetch` missing, or throwing synchronously, must behave like any other
+  // failure to reach the endpoint: return null and let the caller keep its
+  // local constants. Without this the throw escaped the promise chain below
+  // and surfaced as an unhandled rejection in whichever component mounted
+  // first — a soft dependency that was only soft once the call started.
+  if (typeof fetch !== 'function') return null;
   inFlight = fetch(`${API_BASE}/config`)
     .then((r) => {
       if (!r.ok) throw new Error(`config: HTTP ${r.status}`);
@@ -80,6 +86,42 @@ export const unitFrom = (config, variable) =>
   config && config.variables && config.variables[variable]
     ? config.variables[variable].unit
     : null;
+
+/**
+ * What a variable is verified against — the server's own answer.
+ *
+ * The Analysis tab built this string locally: `'Verified against GPM IMERG
+ * V07B observations'` for precipitation, ERA5 for wind. That is a **claim
+ * about the backend that the backend never saw**, and the same shape as §19's
+ * four metrics labelled `mm/h` for wind — a caption that stays confident while
+ * the code underneath it changes. The side that does the verifying now says so
+ * (`NEXT_STEPS.md` §75).
+ *
+ * `fallback` keeps the soft-dependency promise: no server, no change.
+ */
+export const observationLabelFrom = (config, variable, fallback = null) => {
+  const sources = config && config.observation_sources;
+  const spec = sources && sources[variable];
+  return spec && spec.label ? spec.label : fallback;
+};
+
+/**
+ * The lead times the spatial-metric panel should offer for a variable.
+ *
+ * Precipitation starts at +6h and wind at +0h, and the reason is about the
+ * data rather than the UI: a 6 h accumulation has no window before +6h, so
+ * that option always came back empty. A list whose *content is determined by
+ * the data* belongs with the data.
+ *
+ * Returns `fallback` when the server has no opinion, including for a variable
+ * it does not know — so a new variable renders with the local default rather
+ * than an empty selector.
+ */
+export const candidateHoursFrom = (config, variable, fallback = null) => {
+  const hours = config && config.candidate_hours;
+  const forVariable = hours && hours[variable];
+  return Array.isArray(forVariable) && forVariable.length ? forVariable : fallback;
+};
 
 /**
  * The metric list to render, with the server deciding *which* and the local

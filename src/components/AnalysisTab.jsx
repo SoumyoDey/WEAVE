@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { BarChart3, MapPin, Map as MapIcon } from 'lucide-react';
+import { observationLabelFrom } from '../api/config';
 import { fetchSpatialMetric, fetchSpatialMetricPlot } from '../api/spatialApi';
 import { METRIC_CONFIG, VERIFICATION_DEFAULTS as VD } from '../constants';
 import { t } from '../theme';
+import { useConfig } from '../state/useMetricConfig';
 import { useVerification } from '../state/VerificationContext';
 import { fmtLat, fmtLon } from '../utils/geoUtils';
 import { EmptyState } from './ui/PanelState';
@@ -188,9 +190,16 @@ export function AnalysisTab({
   // label and the response it describes cannot look like two different things.
   const yAxisUnit = selectedVariable === 'wind' ? 'm/s' : 'mm/h';
 
-  const verifiedAgainst = selectedVariable === 'precipitation'
-    ? 'Verified against GPM IMERG V07B observations'
-    : 'Verified against ERA5 reanalysis (10-m wind)';
+  // Named by the side that does the verifying. This was two local strings —
+  // a claim about the backend the backend never saw, which is how §19's wind
+  // metrics came to be labelled mm/h. The local pair stays as the fallback
+  // (`NEXT_STEPS.md` §75).
+  const config = useConfig();
+  const verifiedAgainst = 'Verified against ' + observationLabelFrom(
+    config, selectedVariable,
+    selectedVariable === 'precipitation'
+      ? 'GPM IMERG V07B observations'
+      : 'ERA5 reanalysis (10-m wind)');
 
   // Defer chart mount one frame after the tab becomes active so Recharts measures
   // a laid-out container (no width(0)/(-1) warnings). Skipping render while hidden

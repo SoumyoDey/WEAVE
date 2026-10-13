@@ -307,10 +307,13 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
   **the traceback was discarded**. Those are `log.exception` now, and a test
   asserts `exc_info` is present rather than trusting the call.
 
-  *Still open, and worth stating because the boundary above hides it:* the
+  ~~*Still open, and worth stating because the boundary above hides it:* the
   pool-headroom and storage-headroom warnings also live in the `__main__`
-  block, so in production nobody is told. Moving them to application start is a
-  behaviour change to someone else's work and belongs in its own commit.
+  block, so in production nobody is told.~~ **CLOSED 2026-10-13
+  (`NEXT_STEPS.md` §74)** — `report_startup_checks` runs on each worker's first
+  request and logs through the application logger; `__main__` calls the same
+  function with `print` so the dev banner is unchanged. It got its own commit,
+  as this bullet asked.
 - **PARTLY — backup/restore runbook.** This bullet used to read "`DEPLOY.md` has
   eight sections and **none of them mentions `pg_dump`, backup or restore**".
   That stopped being true on 2026-10-01: `DEPLOY.md` now has nine sections and
@@ -379,8 +382,9 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
   existed, passed its tests, and was never called. That is recorded in §35
   rather than quietly corrected, because a well-tested component wired to
   nothing is a failure mode this project has now hit three times.
-- **Still open** — config-driving the hardcoded extent / candidate hours / obs
-  sources. Each verified in place 2026-10-08:
+- **Still open** — config-driving the hardcoded extent. Candidate hours and
+  obs sources closed 2026-10-13 (§75); the rows below are kept because the
+  *extent* is still compiled in. Verified in place 2026-10-08:
 
   | item | where it is written down |
   |---|---|
@@ -414,8 +418,8 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
   region mode requires a drawn region — and reachable by anything that does
   not, including the `curl` examples in `RUNBOOK_LOAD_ONE_RUN.md`. **A default
   nobody exercises is still an answer the endpoint will give.**
-  | candidate hours | `src/components/MetricPanel.jsx:50` — `[0, 6, 12, 18]` for wind, `[6, 12, 18, 24]` otherwise |
-  | obs sources | `src/components/AnalysisTab.jsx:192` and `AboutModal.jsx:80` name IMERG and ERA5 in prose |
+  | ~~candidate hours~~ | **CLOSED 2026-10-13 (§75)** — served as `candidate_hours` from `/api/config`; the panel keeps its list only as a fallback |
+  | ~~obs sources~~ | **CLOSED 2026-10-13 (§75)** — `OBSERVATION_SOURCES` is the one definition, served as `observation_sources`; it also replaced an `if is_wind:` branch at eight backend sites. `AboutModal.jsx` still names them in marketing prose, which is a sentence about the project rather than a claim the scoring code must match |
 
   ~~**base date** — `src/components/Timeline.jsx:67`, and not merely
   unconfigured but *wrong*: an eight-day-stale literal reached on every page
@@ -509,7 +513,7 @@ system. The biggest gaps are in the parts *around* the (now-solid) code.
   because its value belongs to a field rather than a cell.
 
 ### Quick wins (pull forward, <½ day each)
-- ~~React error boundary (S5)~~ **done, §70** · ~~deepen `/api/health` into readiness+freshness~~ **readiness done 2026-10-02 as `/api/ready` (§36); freshness still open** (S1/S2)
+- ~~React error boundary (S5)~~ **done, §70** · ~~deepen `/api/health` into readiness+freshness~~ **readiness done 2026-10-02 as `/api/ready` (§36); freshness done 2026-10-13 (§73)** (S1/S2)
   · Redis cache default (S3) · stale-data banner (S1).
 
 ### Testing / reliability

@@ -12,7 +12,25 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 
 import { MetricPanel } from './MetricPanel';
+import { __resetConfigCache } from '../api/config';
 import { VALUE_UNITS, METRIC_CONFIG } from '../constants';
+
+/**
+ * The panel asks `/api/config` for its candidate lead times (§75), so this
+ * file would otherwise make a **real network call** — to a dev backend if one
+ * happens to be running, and to nothing on CI. Either way the result arrives
+ * whenever it arrives, which is a race against the assertions below.
+ *
+ * Stubbed rather than mocked at the module boundary so the real accessor and
+ * its fallback still run; the cache is module-level, so it is reset per test
+ * or the first response would decide the rest of the file.
+ */
+beforeEach(() => {
+  __resetConfigCache();
+  global.fetch = jest.fn(() => Promise.resolve({
+    ok: true, status: 200, json: () => Promise.resolve({}),
+  }));
+});
 
 const REGION = {
   type: 'rectangle',

@@ -1,6 +1,8 @@
 import React from 'react';
 import { Square, Hexagon, X } from 'lucide-react';
 import { METRIC_CONFIG, withUnit, metricLegend } from '../constants';
+import { candidateHoursFrom } from '../api/config';
+import { useConfig } from '../state/useMetricConfig';
 import { t } from '../theme';
 import { fmtLat, fmtLon } from '../utils/geoUtils';
 
@@ -47,7 +49,14 @@ export function MetricPanel({
   // common 6 h window, so only a lead time such a window ends at is scorable —
   // +0h has no window before it and always came back empty. Wind is instantaneous
   // and does have a value at initialisation.
-  const hourOptions = selectedVariable === 'wind' ? [0, 6, 12, 18] : [6, 12, 18, 24];
+  // The server's list where it can be reached, the local one otherwise. The
+  // two differ because of the data — a 6 h accumulation has no window before
+  // +6h — so the backend owns the list and this keeps a fallback so the panel
+  // works with no config (`NEXT_STEPS.md` §75).
+  const config = useConfig();
+  const hourOptions = candidateHoursFrom(
+    config, selectedVariable,
+    selectedVariable === 'wind' ? [0, 6, 12, 18] : [6, 12, 18, 24]);
 
   // Switching variable can leave a lead time selected that the new one cannot
   // score, which would compute an empty map with nothing to say why.

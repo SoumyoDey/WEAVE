@@ -601,7 +601,11 @@ def _check_data_freshness(cursor):
     runs           = row['runs']           if isinstance(row, dict) else row[2]
 
     observations = {}
-    for label, source in (('precipitation', 'GPM_IMERG_V07B'), ('wind', 'ERA5_WIND')):
+    # Driven by `OBSERVATION_SOURCES` rather than a local pair, so a new
+    # variable appears here without this function being edited. Resolved at
+    # call time, which is why the constant may be defined further down.
+    for label, spec in OBSERVATION_SOURCES.items():
+        source = spec['source']
         cursor.execute(
             "SELECT max(obs_time) AS end FROM regridded_observation WHERE source = %s",
             (source,))
@@ -1749,8 +1753,7 @@ def _member_cases_by_cell(cursor, model_name, variable, init_time,
     against the sparse `observation_data` the old path used.
     """
     is_wind = (variable == 'wind')
-    obs_var = 'wind_speed' if is_wind else 'precipitation'
-    obs_src = 'ERA5_WIND'  if is_wind else 'GPM_IMERG_V07B'
+    _, obs_var, obs_src = _sources_for(variable)
     # Every re-binned precipitation record spans the common window; wind is
     # instantaneous. The per-record period the old pooling carried could only
     # ever have been one of these two.
@@ -1952,10 +1955,7 @@ def _fetch_fcst_obs_pairs_spatial(cursor, model_name, variable,
     is_wind = (variable == 'wind')
     # Cumulative models need one record below hour_min to difference against.
     lookback = 0 if is_wind else _precip_lookback_hours(model_name)
-    if is_wind:
-        fcst_var, obs_var, obs_src = 'wind_u_10m', 'wind_speed', 'ERA5_WIND'
-    else:
-        fcst_var, obs_var, obs_src = variable, 'precipitation', 'GPM_IMERG_V07B'
+    fcst_var, obs_var, obs_src = _sources_for(variable)
 
     # The run this request is about, resolved once. This used to be an inline
     # "latest run" query, which is how /api/spatial-metric came to ignore a
@@ -2453,6 +2453,62 @@ METRIC_REQUIREMENTS = {
 VARIABLE_UNITS = {
     'precipitation': 'mm/h',
     'wind':          'm/s',
+}
+
+
+# What each UI variable is scored against, in one place.
+#
+# This triple — the forecast column, the observation column, the observation
+# source — was written out as an `if is_wind: ... else: ...` branch at **eight**
+# sites, and the two display strings naming the sources were written again in
+# the frontend. Adding a variable therefore meant finding every branch, and the
+# UI could name a source the scoring code was not actually using with nothing
+# to catch the disagreement (`NEXT_STEPS.md` §75).
+#
+# `label` is the reader-facing form and lives here rather than in the client
+# for the reason `/api/config` exists at all: **the server knows what it
+# verified against.** A label in `constants.js` is a claim about the backend
+# that the backend never sees, which is the shape of §19's `mm/h` wind units
+# and the `UI 'wind' is not a stored variable` trap.
+OBSERVATION_SOURCES = {
+    'precipitation': {
+        'forecast_variable': 'precipitation',
+        'obs_variable':      'precipitation',
+        'source':            'GPM_IMERG_V07B',
+        'label':             'GPM IMERG V07B observations',
+    },
+    'wind': {
+        'forecast_variable': 'wind_u_10m',
+        'obs_variable':      'wind_speed',
+        'source':            'ERA5_WIND',
+        'label':             'ERA5 reanalysis (10-m wind)',
+    },
+}
+
+
+def _sources_for(variable):
+    """`(forecast_variable, obs_variable, obs_source)` for a UI variable.
+
+    `variable` is the *UI* name. Precipitation passes its own name through,
+    because the forecast column really is called `precipitation`; wind does
+    not, and that asymmetry is the trap recorded in `project_weave_v3`: the UI's
+    `wind` is not a stored variable, the grid holds `wind_u_10m`/`wind_v_10m`.
+    """
+    spec = OBSERVATION_SOURCES.get(variable, OBSERVATION_SOURCES['precipitation'])
+    forecast = variable if variable != 'wind' else spec['forecast_variable']
+    return forecast, spec['obs_variable'], spec['source']
+
+
+# The lead times the spatial-metric panel offers.
+#
+# Precipitation starts at +6h because a 6-hour accumulation has no window
+# before it and +0h always came back empty; wind is instantaneous and does have
+# a value at initialisation. That reasoning belongs with the data, not in a
+# ternary in `MetricPanel.jsx` where it was, and where a reader changing it had
+# no way to know why the two lists differ.
+CANDIDATE_LEAD_HOURS = {
+    'precipitation': [6, 12, 18, 24],
+    'wind':          [0, 6, 12, 18],
 }
 
 
@@ -3554,6 +3610,18 @@ def get_config():
         # The three that need a spread and so read the member grid (§21, §25).
         'region_spread_metrics': sorted(COMPARE_REGION_SPREAD_METRICS),
         'verification_window_hours': COMMON_VERIFICATION_WINDOW_HOURS,
+        # What each variable is verified against, named by the side that does
+        # the verifying. The client showed "Verified against GPM IMERG V07B"
+        # from its own string, which was a claim about the backend the backend
+        # never saw (§75).
+        'observation_sources': {
+            name: {'source': spec['source'], 'label': spec['label']}
+            for name, spec in OBSERVATION_SOURCES.items()
+        },
+        # The lead times the spatial-metric panel offers per variable. They
+        # differ for a reason about the data — a 6 h accumulation has no window
+        # before +6h — so the list belongs with the data.
+        'candidate_hours': CANDIDATE_LEAD_HOURS,
     })
 
 
@@ -4044,8 +4112,7 @@ def observation_coverage(cursor):
         return jsonify({'error': 'Invalid model or variable'}), 400
 
     is_wind = (variable == 'wind')
-    obs_var = 'wind_speed' if is_wind else 'precipitation'
-    obs_src = 'ERA5_WIND'  if is_wind else 'GPM_IMERG_V07B'
+    _, obs_var, obs_src = _sources_for(variable)
     # Wind is instantaneous, so its window is the hour it is valid for.
     window  = 1 if is_wind else COMMON_VERIFICATION_WINDOW_HOURS
 
@@ -4485,14 +4552,7 @@ def compare_skill(cursor):
     except (TypeError, ValueError):
         return jsonify({'error': 'hour_min and hour_max must be numeric'}), 400
 
-    if variable == 'wind':
-        fcst_var = 'wind_u_10m'
-        obs_var  = 'wind_speed'
-        obs_src  = 'ERA5_WIND'
-    else:
-        fcst_var = variable          # e.g. 'precipitation'
-        obs_var  = 'precipitation'
-        obs_src  = 'GPM_IMERG_V07B'
+    fcst_var, obs_var, obs_src = _sources_for(variable)
 
     if not models:
         return jsonify({'error': 'No models specified'}), 400
@@ -4947,12 +5007,11 @@ def categorical_metrics_endpoint(cursor):
 
     is_wind = (variable == 'wind')
     try:
+        fcst_var, obs_var, obs_src = _sources_for(variable)
         if is_wind:
-            fcst_var, obs_var, obs_src = 'wind_u_10m', 'wind_speed', 'ERA5_WIND'
             # Wind speed is in m/s (instantaneous) — use threshold_ms directly.
             threshold_rate = float(body.get('threshold_ms', 10.0))
         else:
-            fcst_var, obs_var, obs_src = variable, 'precipitation', 'GPM_IMERG_V07B'
             threshold_rate = float(body.get('threshold_mm_6h', 25.0)) / 6.0
     except (TypeError, ValueError):
         return jsonify({'error': 'threshold must be numeric'}), 400
@@ -5299,11 +5358,10 @@ def region_categorical_metrics_endpoint(cursor):
 
     is_wind = (variable == 'wind')
     try:
+        fcst_var, obs_var, obs_src = _sources_for(variable)
         if is_wind:
-            fcst_var, obs_var, obs_src = 'wind_u_10m', 'wind_speed', 'ERA5_WIND'
             threshold_rate = float(body.get('threshold_ms', 10.0))
         else:
-            fcst_var, obs_var, obs_src = variable, 'precipitation', 'GPM_IMERG_V07B'
             threshold_rate = float(body.get('threshold_mm_6h', 25.0)) / 6.0
     except (TypeError, ValueError):
         return jsonify({'error': 'threshold must be numeric'}), 400
@@ -5729,11 +5787,10 @@ def compare_categorical(cursor):
 
     is_wind = (variable == 'wind')
     try:
+        fcst_var, obs_var, obs_src = _sources_for(variable)
         if is_wind:
-            fcst_var, obs_var, obs_src = 'wind_u_10m', 'wind_speed', 'ERA5_WIND'
             threshold_rate = float(body.get('threshold_ms', 10.0))
         else:
-            fcst_var, obs_var, obs_src = variable, 'precipitation', 'GPM_IMERG_V07B'
             threshold_rate = float(body.get('threshold_mm_6h', 25.0)) / 6.0
     except (TypeError, ValueError):
         return jsonify({'error': 'threshold must be numeric'}), 400
