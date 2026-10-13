@@ -442,18 +442,62 @@ initialisation — two components, 155 lead times, 42M rows — took 42 minutes 
 load**, plus conversion and regrid on either side. A full three-model run is
 several hours of wall time and needs the NetCDF sources staged first.
 
-**2. `pg_dump` — faster to restore, and nobody has run it at this size.**
+**2. `pg_dump` — EXERCISED 2026-10-13, end to end, and it works.**
 
 ```bash
-pg_dump -Fc -d weave_weather -f weave_$(date +%F).dump    # custom format, compressed
-pg_restore -d weave_weather -j 4 weave_2026-10-01.dump    # parallel restore
+pg_dump -Fc -d weave_weather -f weave_$(date +%F).dump      # 11m16s -> 2.94 GB
+createdb weave_restore_rehearsal                            # NOT the live database
+pg_restore -d weave_restore_rehearsal -j 4 weave_2026-10-13.dump   # 43m26s
+python Data/verify_restore.py weave_weather weave_restore_rehearsal
 ```
 
-Two things to know before relying on it. The dump of a 123 GB database is itself
-large and has to go somewhere that is not the same disk, and **this has not been
-exercised here** — an untested restore is a plan, not a backup. If it matters,
-run it once against a scratch database and record how long it took and how big
-the file was, in this section.
+Measured against the live 138.4 GB database, PostgreSQL 15.18:
+
+| step | time | result |
+|---|---|---|
+| `pg_dump -Fc` | **11m16s** | **2.94 GB** (3,159,888,895 bytes) |
+| `pg_restore -j 4` | **43m26s** | 99 GB restored, exit 0 |
+| verification | ~4 min | 15 tables, **379M rows**, all 45 indexes |
+| **total** | **~58 min** | |
+
+**The dump is small, and the old warning here was wrong.** This section used to
+say the dump "is itself large and has to go somewhere that is not the same
+disk". It is 2.94 GB — a **47:1 ratio** — because only **39.2 GB of the 138.4
+GB is heap**; the other 99 GB is indexes, and `pg_dump` stores index
+*definitions*, not index data. A 3 GB artifact fits on anything, which makes
+keeping a copy off this machine easy rather than awkward. **The cost is all on
+the restore side**, which rebuilds those 99 GB of indexes and is why it takes
+four times as long as the dump.
+
+**`pg_restore` into a scratch database, never into `weave_weather`.** The second
+line above used to read `pg_restore -d weave_weather`. Against a live database
+holding the only copy of the data, that command is the risk rather than the
+mitigation: it writes into the thing you are trying to protect. Restore beside
+it, verify, and only then decide what to do with the original.
+
+**A restore is also a `VACUUM FULL`.** The restored copy is **99 GB against the
+live 129 GB — 23% smaller** with byte-identical content, because `pg_restore`
+builds each index in one pass instead of growing it incrementally. The heap
+barely moves (25.0 → 20.3 GB on `forecast_data`); the indexes do (53.4 → 42.4 GB
+on the same table, 32.4 → 20.6 GB on `regridded_forecast_member`). Worth knowing
+for the retention decision: a dump/restore cycle reclaims about a fifth of the
+disk without losing anything.
+
+**A clean exit is not a verified restore**, which is why `Data/verify_restore.py`
+exists. It compares row counts, the sum/min/max of every numeric column, and the
+index inventory between the two databases — a sum alone can be fooled by two
+compensating changes, a sum and both extremes per column across every table
+cannot. The strongest check is the last one: the application was pointed at the
+restored database and scored a region, returning **CSI 0.2176 / FSS 0.5712**,
+identical to the live database on the same request. Matching bytes is good;
+matching answers is the point.
+
+**What this rehearsal did NOT establish.** This machine has **one disk** — the
+PostgreSQL data directory, the dump file and the scratch database all live on
+the same 926 GB APFS container. So the procedure's *mechanics* are proven and
+its *disaster recovery* is not: a dump that dies with the disk is not a backup.
+Copying the 2.94 GB artifact somewhere else is now the cheap, unblocked step,
+and it is the one still outstanding.
 
 **The cyclone data is the cheap case.** 201 MB from CSVs that need no
 conversion, so it is always faster to re-run §2c than to restore it. The one

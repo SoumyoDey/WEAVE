@@ -28,10 +28,12 @@
 > **Open, and it is ordinary work**
 >
 > 3. **No containerisation** (S2) — no `Dockerfile`, no compose file.
-> 4. **`pg_dump` has never been run at this size** (S2). `DEPLOY.md` §9 says so
->    itself: *"an untested restore is a plan, not a backup"*, against 129 GB.
->    **The highest-value item on this list** — it is the only one that can lose
->    work rather than merely limit it.
+> 4. ~~**`pg_dump` has never been run at this size**~~ **REHEARSED 2026-10-13
+>    (§77)** — dump 11m16s to **2.94 GB**, restore 43m26s, 379M rows and all 45
+>    indexes verified, and the app scored the restored copy identically. What
+>    remains is **one step, and it is cheap**: this machine has a single disk,
+>    so the 2.94 GB artifact still has to live somewhere else before any of this
+>    counts as disaster recovery.
 > 5. **No Redis, async jobs or load test** (S3). Caps and caching are done.
 >
 > **Yours to decide**
@@ -6493,6 +6495,63 @@ run regridded onto a different lattice is exactly the drift being looked for,
 and filtering to one run would mean never seeing it. The exemption is
 recognised by shape (coordinate extremes, no `WHERE`), like the existing one for
 the query that enumerates runs, so an unrelated query cannot borrow it.
+
+---
+
+## 77. The backup, rehearsed — 2026-10-13
+
+`DEPLOY.md` §9 had said it for twelve days: *"an untested restore is a plan, not
+a backup."* Run now, end to end, against the live 138.4 GB database.
+
+| step | time | result |
+|---|---|---|
+| `pg_dump -Fc` | 11m16s | **2.94 GB** |
+| `pg_restore -j 4` into a scratch database | 43m26s | 99 GB, exit 0 |
+| content verification | ~4 min | 15 tables, 379M rows, 45 indexes |
+
+### The document's own warning was wrong, and backwards
+
+It said the dump "is itself large and has to go somewhere that is not the same
+disk". **It is 2.94 GB — 47:1.** Only 39.2 GB of the 138.4 GB is heap; the
+other 99 GB is indexes, and `pg_dump` stores index *definitions*, not index
+data. The artifact is small enough to put anywhere, which makes off-machine
+backup easy rather than awkward — the opposite of what the section implied, and
+it had discouraged doing the cheap thing for months.
+
+The cost is all on the restore, which rebuilds those 99 GB and takes four times
+as long as the dump.
+
+### A clean exit is not a verified restore
+
+The restored database came back **99 GB against the live 129 GB** — 30 GB
+smaller, with `pg_restore` exiting 0. That is exactly the shape that should stop
+someone: a quiet success with a number that does not match.
+
+It is benign, and the reason is worth knowing. Heaps barely move (`forecast_data`
+25.0 → 20.3 GB); **indexes do** (53.4 → 42.4 GB on the same table, 32.4 → 20.6
+on `regridded_forecast_member`), because a restore builds each index in one pass
+instead of growing it incrementally. **A dump/restore cycle is a `VACUUM FULL`
+that reclaims about a fifth of the disk**, which bears on the retention decision.
+
+`Data/verify_restore.py` is what settled it: row counts, the sum/min/max of every
+numeric column, and the index inventory. The strongest check was the last one —
+the application was pointed at the restored copy and scored a region, returning
+**CSI 0.2176 / FSS 0.5712**, identical to the live database. Matching bytes is
+good; matching answers is the point.
+
+### Two things changed in the procedure
+
+- **`pg_restore -d weave_weather` was the documented command.** Against a
+  database holding the only copy of the data, that writes into the thing you are
+  protecting. It now restores beside it, into a scratch database.
+- **This machine has one disk.** Data directory, dump file and scratch database
+  share one APFS container, so what is proven is the *mechanics*, not disaster
+  recovery. A dump that dies with the disk is not a backup, and the remaining
+  step — copy 2.94 GB elsewhere — is now the cheap one.
+
+**The whole rehearsal cost 58 minutes** and had been deferred for months behind
+an estimate that was wrong by a factor of 47. *Measure the thing you are
+avoiding before deciding it is expensive.*
 
 ---
 
