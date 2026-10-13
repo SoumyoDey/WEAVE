@@ -2408,7 +2408,15 @@ def get_forecast_data(cursor):
             by_cell, truncated = _cap_cells(by_cell)
             result = []
             for (lat, lon), series in by_cell.items():
-                rec = _precip_member_rate_series(model_name, _fill_predecessor(series)).get(forecast_hour)
+                # `exported=` for the same reason the aggregate branch above
+                # passes it: the divisor is a property of the run that was
+                # loaded, recorded in `forecast_run_registry`, not of the model
+                # name. This branch read the module constant instead, so it
+                # would have disagreed with the map beside it the first time a
+                # re-export changed the convention (§72).
+                rec = _precip_member_rate_series(
+                    model_name, _fill_predecessor(series),
+                    exported=_export_divisor(model_name, _map_init)).get(forecast_hour)
                 if rec is None:
                     continue
                 result.append({'lat': lat, 'lon': lon, 'value': rec[0]})
@@ -2569,6 +2577,11 @@ def point_timeseries(cursor):
         run_id = get_model_run_id(cursor, model_name)
         if not run_id:
             return jsonify({'error': f'No data found for model {model_name}'}), 404
+        # The same run `run_id` was resolved from, as an init time, because the
+        # export divisor is recorded per run and this endpoint was reading the
+        # module constant instead (§72). `_resolve_init_time` is the one
+        # resolver and caches per request, so this is not a second lookup.
+        init_time = _resolve_init_time(cursor, model_name)
 
         # One code path for both variables: pull raw members and build the
         # distribution here.
@@ -2637,7 +2650,9 @@ def point_timeseries(cursor):
             # de-accumulated per member, which is exact.
             vals_by_hour = defaultdict(list)
             for series in by_member.values():
-                rates = _precip_member_rate_series(model_name, series, is_wind=is_wind)
+                rates = _precip_member_rate_series(
+                    model_name, series, is_wind=is_wind,
+                    exported=_export_divisor(model_name, init_time))
                 for hour, (rate, _period) in rates.items():
                     vals_by_hour[hour].append(rate)
 
