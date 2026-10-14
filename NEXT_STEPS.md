@@ -28,12 +28,13 @@
 > **Open, and it is ordinary work**
 >
 > 3. **No containerisation** (S2) — no `Dockerfile`, no compose file.
-> 4. ~~**`pg_dump` has never been run at this size**~~ **REHEARSED 2026-10-13
->    (§77)** — dump 11m16s to **2.94 GB**, restore 43m26s, 379M rows and all 45
->    indexes verified, and the app scored the restored copy identically. What
->    remains is **one step, and it is cheap**: this machine has a single disk,
->    so the 2.94 GB artifact still has to live somewhere else before any of this
->    counts as disaster recovery.
+> 4. ~~**`pg_dump` has never been run at this size**~~ ~~rehearsed, but the
+>    artifact is still on the only disk~~ **CLOSED 2026-10-14 (§77, §79)** —
+>    rehearsed end to end, and the 2.94 GB dump now has a **checksum-verified
+>    copy on Explorer** at `/projects/k.aggarwal/weave_backups/`
+>    (`sha256 2704665f…fefee6`, both ends). `DEPLOY.md` §9 has the path and the
+>    re-verification command. Transfer through `xfer.discovery.neu.edu`; the
+>    login node cannot do it (§79).
 > 5. **No Redis, async jobs or load test** (S3). Caps and caching are done.
 >
 > **Yours to decide**
@@ -6761,3 +6762,79 @@ because the badge is `TAB_CONTEXT[activeTab]` and the selector is gated on
 synchronised with the tab switch, and the first diagnosis of this failure
 blamed it on that reading alone, before anyone had the error message. The
 assertions are synchronous now and say so.
+
+## 79. Getting the backup off the machine — 2026-10-14
+
+§77 rehearsed `pg_dump` and `pg_restore` and left one step: the 2.94 GB artifact
+was still on the only disk in the building. It is now on Explorer at
+`/projects/k.aggarwal/weave_backups/weave_weather_2026-10-13.dump`, verified
+`sha256 2704665f…fefee6` at both ends. `DEPLOY.md` §9 carries the path.
+
+Four things cost real time, and each would cost it again.
+
+**`/home` on Explorer is full, and nothing says so.** The transfer failed at
+`mkdir`, before a byte moved: `Disk quota exceeded`. Not nearly full — it will
+not accept a zero-byte file. This is invisible in the obvious place, because
+`df` reports the **shared VAST filesystem** (255 T, 107 T free), which is not
+the user's allowance on it. Reading that number as headroom is what sent the
+first transfer at a directory that could never be created.
+
+Worse, the quota cannot be queried. `quota` cannot read VAST
+(`Operation not permitted`) and `check-quota` is a thin client for an internal
+service on `10.99.128.55:8090` that returns empty replies or refuses
+connections. **So the only reliable test is a real write** — `dd` 10 MB and
+delete it. `/projects/k.aggarwal` passed that test; `/home` failed it. A
+permission bit is not evidence: `/home` had `w` and still refused everything.
+
+The same exhaustion is why the conda hook in `.bashrc` is `Killed` on every
+login — the trap already recorded in §11, with a cause.
+
+**A login node will not carry 3 GB.** `rsync` to
+`login.explorer.northeastern.edu` died **twelve consecutive times** with exit
+255, each attempt lasting 16–85 s and leaving a little more behind. The
+dedicated transfer node did the whole thing in **one 31-minute pass**:
+
+| host | result |
+|---|---|
+| `login.explorer.northeastern.edu` | 12 attempts, all exit 255, 400 MB total |
+| `xfer.discovery.neu.edu` | 1 attempt, exit 0, 2,759,669,848 bytes sent |
+
+The transfer node has to be discovered — there is no `xfer.explorer…` record;
+the working name is `xfer.discovery.neu.edu` (129.10.0.130), and it sees the
+same `/projects` because the mounts are literally
+`vast1-mghpcc-eth.neu.edu:/discovery/…`. It also has **GNU rsync 3.1.2** rather
+than macOS's openrsync. This belongs with §11's operational traps: on a shared
+login node, assume sustained work will be killed.
+
+**macOS ships openrsync, not GNU rsync.** `/usr/bin/rsync` reports
+`openrsync: protocol version 29 / rsync version 2.6.9 compatible`, and it has
+no `--append-verify`. A retry loop built around that flag failed **ten times in
+three minutes**, printing usage text and transferring nothing — a loop that
+faithfully repeated a command that could never work. Retry loops now carry a
+guard: **a failure in under ten seconds is a broken command, not a dropped
+link**, and it aborts instead of retrying.
+
+**Verify the prefix before trusting a resume.** openrsync has `--append` but no
+`--append-verify`, so a resumed transfer appends onto bytes it never checked.
+The prefix is checkable directly, and was:
+
+```bash
+head -c "$(ssh … stat -c %s "$REMOTE")" local.dump | shasum -a 256
+```
+
+It matched, so nothing was discarded. Had it not, every byte after it would
+have been written onto garbage and the final checksum would have been the first
+sign — after another half hour.
+
+**Also attempted, and a dead end worth recording: OneDrive.** The file copies
+into `~/Library/CloudStorage/OneDrive-…` and verifies locally, and **that proves
+nothing** — it is still one disk until the client uploads. It never did: ~6 KB
+of outbound traffic in an hour, measured, while the sync diagnostics log sat
+stale from before the copy. A file in a sync folder is not a backup; a file the
+service has acknowledged is.
+
+The instrument for that measurement was wrong twice before it was right —
+`nettop -L 1` returns a snapshot, not a cumulative counter, so the first
+version could never have reached its threshold whatever uploaded. Same shape as
+§78: **a measurement that cannot reach its own threshold reads as a null result
+and is an absent one.**

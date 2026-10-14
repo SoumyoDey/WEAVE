@@ -492,12 +492,42 @@ restored database and scored a region, returning **CSI 0.2176 / FSS 0.5712**,
 identical to the live database on the same request. Matching bytes is good;
 matching answers is the point.
 
-**What this rehearsal did NOT establish.** This machine has **one disk** — the
-PostgreSQL data directory, the dump file and the scratch database all live on
-the same 926 GB APFS container. So the procedure's *mechanics* are proven and
-its *disaster recovery* is not: a dump that dies with the disk is not a backup.
-Copying the 2.94 GB artifact somewhere else is now the cheap, unblocked step,
-and it is the one still outstanding.
+**The off-machine copy — DONE 2026-10-14.** The rehearsal left this outstanding,
+because the machine has **one disk**: the PostgreSQL data directory, the dump
+file and the scratch database all lived on the same 926 GB APFS container, and a
+dump that dies with the disk is not a backup. There is now a verified copy on
+Explorer:
+
+| | |
+|---|---|
+| path | `/projects/k.aggarwal/weave_backups/weave_weather_2026-10-13.dump` |
+| size | 3,159,888,895 bytes, identical |
+| `sha256` | `2704665fc732993289df285663d8fe81a41235a567e5153b1ffcc777c7fefee6` |
+| verified | both ends, after transfer, 2026-10-14 |
+
+Renamed in transit: the local artifact is `weave_rehearsal.dump`, which names
+the exercise that produced it rather than what it holds. The copy is named for
+the database and the day it was taken, which is what someone reaching for it in
+an emergency needs to read.
+
+**Re-verify it rather than trusting this table.** `sha256sum` on the remote file
+and `shasum -a 256` locally; a backup nobody has checked since the day it was
+written is an assumption.
+
+```bash
+ssh xfer.discovery.neu.edu 'sha256sum /projects/k.aggarwal/weave_backups/weave_weather_2026-10-13.dump'
+```
+
+**Transfer it through `xfer.discovery.neu.edu`, not a login node.** See
+`NEXT_STEPS.md` §79 — `login.explorer.northeastern.edu` killed this transfer
+twelve consecutive times, and the transfer node moved the whole 2.9 GB in one
+31-minute pass. The destination is also deliberate: `/home` is full and cannot
+take a zero-byte file, and `/scratch` is purged on a schedule, which makes it
+the wrong place for the only off-machine copy.
+
+**`/projects/k.aggarwal` is group-readable** (`drwxrws---`, group `k.aggarwal`).
+That is appropriate for a shared project database and worth stating rather than
+discovering: this backup is visible to the collaborators in that group.
 
 **The cyclone data is the cheap case.** 201 MB from CSVs that need no
 conversion, so it is always faster to re-run §2c than to restore it. The one
