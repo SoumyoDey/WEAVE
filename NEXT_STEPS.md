@@ -6713,3 +6713,51 @@ The pattern throughout: a fingerprint in the data reliably shows *that* somethin
 is wrong, and reliably cannot say *which* explanation produced it. Three raw
 files settled in minutes what a week of correlation tests could not. When a
 source of truth exists, go and read it.
+
+## 78. A timeout that could not be reached — 2026-10-14
+
+Found by running the frontend suite during a routine open-items sweep, where it
+came back **2 failed / 396 passed** — on a commit CI had just passed green.
+
+Both failures were jest's own `Exceeded timeout of 5000 ms for a test`, in
+`App.errorContainment.test.js` and `App.tabContext.test.js`. Neither was an app
+defect. Both files render the whole `App`, which since §71 means resolving a
+lazy tab's chunk through `Suspense`, and on a loaded machine that takes longer
+than jest's 5 s per-test default.
+
+**`App.errorContainment.test.js` had already diagnosed this and fixed it
+wrongly.** It defines `CHUNK_WAIT = 10000` and spends it on
+`waitFor({ timeout: CHUNK_WAIT })`, with a comment explaining that a dynamic
+`import()` is slower in a full parallel run. The budget was right and
+unreachable: **10 s of patience inside a 5 s test.** jest killed the test first,
+every time, so the number never did anything. A timeout that cannot be reached
+is the same shape as a check that cannot fail (§28, §49) — it reads as a
+precaution and is decoration.
+
+The one test that failed was the one that waits on **two** chunks — Analysis,
+then Comparison — so it was first past 5 s. The fix is `jest.setTimeout`, raised
+with `CHUNK_WAIT` rather than independently of it.
+
+**Why CI never saw it.** CI runs the suite alone on an idle runner, where these
+files finish in about 8 s of wall time but no single test passes 5 s. Reproduced
+locally by running three copies of the suite at once: 2 of 4 runs failed. After
+the fix, 6 of 6 passed under the same contention, with the two suites measured
+at 8.1–12.2 s — comfortably past the old limit, which is the point.
+
+**A green CI run means the suite passed on an idle box**, not that it passes.
+The local gate (§64) is where contention exists, and it is the only place this
+was visible.
+
+Also removed, in `App.tabContext.test.js`:
+
+```js
+await waitFor(() => expect(header()).toEqual(expect.any(String)));
+```
+
+`header()` returns `textContent`, which is always a string, so this resolved on
+its first evaluation. It was not the cause of the flake — it is harmless,
+because the badge is `TAB_CONTEXT[activeTab]` and the selector is gated on
+`badge.run`, both flushed synchronously by `fireEvent`. But it read as though it
+synchronised with the tab switch, and the first diagnosis of this failure
+blamed it on that reading alone, before anyone had the error message. The
+assertions are synchronous now and say so.

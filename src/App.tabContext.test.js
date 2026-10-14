@@ -27,6 +27,22 @@ import { RunProvider } from './state/RunContext';
 import { VerificationProvider } from './state/VerificationContext';
 import { resetRun } from './api/run';
 
+/**
+ * Every test here renders the whole `App`, which since §71 means resolving a
+ * lazy tab's chunk through `Suspense`. On a loaded machine that exceeds jest's
+ * 5 s per-test default, and the test is killed with
+ * `Exceeded timeout of 5000 ms` at whichever line it happened to be on — a
+ * message that says nothing about the cause and points at an innocent
+ * assertion.
+ *
+ * It only ever appeared in a full parallel run, never when this file ran alone,
+ * which is what kept it off CI: CI runs the suite on an idle box. Reproduced by
+ * running three copies of the suite at once, where this file took 16.2 s.
+ *
+ * Matched to `App.errorContainment.test.js`, which loads the same chunks.
+ */
+jest.setTimeout(25000);
+
 const RUN = '2025-09-16T00:00:00';
 const OLDER = '2025-09-08T00:00:00';
 
@@ -62,9 +78,24 @@ beforeEach(() => {
 const header = () =>
   screen.getByRole('button', { name: 'Visualization' }).parentElement.textContent;
 
-const openTab = async (name) => {
+/**
+ * Switch tabs.
+ *
+ * This used to `await waitFor(() => expect(header()).toEqual(expect.any(String)))`,
+ * which waits for nothing: `header()` returns `textContent`, that is always a
+ * string, so the predicate held on the first evaluation and the `waitFor`
+ * returned immediately. **A check that cannot fail is not a check** — and this
+ * one read as though it were synchronising with the tab switch.
+ *
+ * Nothing needs to be awaited, and that is a fact about the app rather than a
+ * concession. The badge is `TAB_CONTEXT[activeTab]` and the run selector is
+ * gated on `badge.run`, both derived from state that `fireEvent` flushes within
+ * its own `act()`. The lazy chunk loads afterwards and changes neither. So the
+ * assertions below are deliberately synchronous: if the badge ever does start
+ * depending on the chunk, these tests should fail rather than quietly wait.
+ */
+const openTab = (name) => {
   fireEvent.click(screen.getByRole('button', { name }));
-  await waitFor(() => expect(header()).toEqual(expect.any(String)));
 };
 
 const renderApp = async () => {
@@ -86,7 +117,7 @@ describe('the header badge follows the open tab', () => {
 
   test('analysis drops the lead time, which it has no scrubber for', async () => {
     await renderApp();
-    await openTab('Analysis');
+    openTab('Analysis');
     expect(screen.getByRole('combobox', { name: 'Initialisation time' })).toBeInTheDocument();
     expect(header()).toContain('AIFS');
     expect(header()).toContain('Precipitation');
@@ -95,7 +126,7 @@ describe('the header badge follows the open tab', () => {
 
   test('comparison drops the model too, because it picks its own', async () => {
     await renderApp();
-    await openTab('Comparison');
+    openTab('Comparison');
     expect(screen.getByRole('combobox', { name: 'Initialisation time' })).toBeInTheDocument();
     expect(header()).toContain('Precipitation');
     expect(header()).not.toContain('AIFS');
@@ -104,7 +135,7 @@ describe('the header badge follows the open tab', () => {
 
   test('cyclones shows no forecast context at all', async () => {
     await renderApp();
-    await openTab('Cyclones');
+    openTab('Cyclones');
     // The run selector is the one that mattered: the tab has its own
     // initialisation control, and two of them disagreeing is the bug.
     expect(screen.queryByRole('combobox', { name: 'Initialisation time' })).not.toBeInTheDocument();
@@ -115,9 +146,9 @@ describe('the header badge follows the open tab', () => {
 
   test('it comes back when you leave the cyclone tab', async () => {
     await renderApp();
-    await openTab('Cyclones');
+    openTab('Cyclones');
     expect(screen.queryByRole('combobox', { name: 'Initialisation time' })).not.toBeInTheDocument();
-    await openTab('Visualization');
+    openTab('Visualization');
     expect(screen.getByRole('combobox', { name: 'Initialisation time' })).toBeInTheDocument();
     expect(header()).toContain('+6h');
   });

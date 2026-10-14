@@ -29,8 +29,28 @@ import { RunProvider } from './state/RunContext';
 import { VerificationProvider } from './state/VerificationContext';
 import { resetRun } from './api/run';
 
-/** Budget for a lazy tab's chunk to load; see `openBrokenTab`. */
+/**
+ * Budget for a lazy tab's chunk to load; see `openBrokenTab`.
+ *
+ * **`jest.setTimeout` has to move with it.** The per-test default is 5 s, which
+ * is *less* than this budget, so a `waitFor({ timeout: CHUNK_WAIT })` could
+ * never spend what it asked for — jest killed the test at 5 s and the generous
+ * budget was decoration. A timeout that cannot be reached is the same shape of
+ * defect as a check that cannot fail.
+ *
+ * It surfaced as an intermittent failure in `the other tabs still open and
+ * render`, which is the one test here that waits on **two** chunks — Analysis
+ * through `openBrokenTab`, then Comparison — so it is the first to need more
+ * than 5 s. Measured on a loaded machine: that suite took 11.2 s and 17.8 s on
+ * the two runs that failed, and the error was always jest's own
+ * `Exceeded timeout of 5000 ms`, never either `waitFor` giving up.
+ *
+ * Two chunks plus the app's own start-up, with room to spare: a test that is
+ * genuinely stuck still fails, it just fails honestly rather than at an
+ * arbitrary line that had nothing to do with the cause.
+ */
 const CHUNK_WAIT = 10000;
+jest.setTimeout(CHUNK_WAIT * 2 + 5000);
 
 const RUN = '2025-09-16T00:00:00';
 const OLDER = '2025-09-08T00:00:00';
