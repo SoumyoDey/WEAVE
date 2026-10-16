@@ -29,9 +29,15 @@
 >    gridded field, in the box or out of it; the closest of all 1,181 is CHIDO
 >    at **271 days**. So "tracks cannot be scored against gridded fields
 >    *outside that box*" was misleading — they cannot be scored anywhere.
->    Not a scope decision about the domain: scoring needs either gridded fields
->    for 2016–2024 storm dates or cyclone tracks for September 2025, and both
->    are ingests.
+>    Not a scope decision about the domain. **And neither ingest is viable
+>    (§82):** there is **no 2025 cyclone data at the source** — `Shuochen/` has
+>    no file or directory mentioning 2025 — so the cheap direction (tracks are
+>    201 MB) does not exist; and the expensive one is **20 storms × 58 GB ≈
+>    1.16 TB** against 121 GB of headroom under the 250 GB review threshold,
+>    roughly nine times the entire budget for 20 of 138 storms. The model sets
+>    do not correspond either: the archive is ECMWF-ENS / MOGREPS / GEFS, the
+>    grids are AIFS / GEFS / UKMO. **Treat this as declined on cost, not
+>    pending** — the cyclone tab is track-only by necessity.
 >
 > **Open, and it is ordinary work**
 >
@@ -51,7 +57,17 @@
 >    (`sha256 2704665f…fefee6`, both ends). `DEPLOY.md` §9 has the path and the
 >    re-verification command. Transfer through `xfer.discovery.neu.edu`; the
 >    login node cannot do it (§79).
-> 5. **No Redis, async jobs or load test** (S3). Caps and caching are done.
+> 5. **S3 — load test DONE, Redis and async still open (§82).**
+>    `Data/loadtest.py` exists and found a real defect before either was
+>    built: at 16 concurrent, **8 of 36 requests returned HTTP 500** on an
+>    exhausted pool, and the retry budget (1.25 s) was shorter than the
+>    slowest request holding a connection (4.4 s cold). Both fixed — 503 with
+>    `Retry-After`, budget 12 s. **Redis as a cache buys little** (one
+>    instance; `FileSystemCache` is already shared across workers), but
+>    `RATE_LIMIT_STORAGE=memory://` is **per-worker**, so "300 per minute" is
+>    really up to 1,200 across 4 workers — a correctness gap worth closing
+>    when the limit needs to be trusted. **Async** is the right answer to a
+>    4.4 s request holding a pooled connection, and the next thing to measure.
 >
 > **Yours to decide**
 >
@@ -7000,3 +7016,88 @@ The first build passed, the container started, and the health check went green
 The first two are the recurring shape in a new place: **a warning in a log is
 not a failure anyone sees.** The build was green, the container was healthy,
 and the image was quietly worse than the host deployment in two ways.
+
+## 82. The load test, and what it found before Redis could — 2026-10-16
+
+S3 asks for "Redis, async jobs and a load test". **The load test goes first**,
+for §50's reason: the 217-second region request turned out to be one
+unindexable `COUNT(DISTINCT)`, and a cache in front of it would have hidden
+the defect instead of fixing it. `Data/loadtest.py` is the harness — a
+weighted mix of what the tabs actually call, against the real 129 GB database.
+
+Nothing had ever measured this app under concurrency. It fails at 16.
+
+| concurrency | req/s | p50 | p95 | ok |
+|---|---|---|---|---|
+| 1 | 0.6 | 47 ms | 9,472 ms | 36/36 |
+| 2 | 1.0 | 44 ms | 8,934 ms | 36/36 |
+| 4 | 2.3 | 43 ms | 10,928 ms | 36/36 |
+| 8 | 4.1 | 144 ms | 8,535 ms | 36/36 |
+| 16 | 4.7 | 1,191 ms | 7,381 ms | **28/36** |
+
+**Eight of thirty-six requests returned HTTP 500**, all of them
+`psycopg2.pool.PoolError: connection pool exhausted` reaching the generic 500
+handler. Eight is `DB_POOL_MAX`.
+
+### Two defects, and they compound
+
+**A 500 for a server that has not faulted.** Nothing was broken — eight
+connections were in use by requests that were all succeeding. 500 tells a
+browser the server is broken, invites a load balancer to evict the instance
+and a health check to restart it, when the correct response is to wait a
+moment. It is now **503 with `Retry-After`**, which is what the rate limiter
+beside it already does with 429.
+
+**A retry budget that could not cover what it waits for.** `_pool_getconn`
+retried 5 × 0.25 s = **1.25 s**, with a comment saying it was tuned for the
+region "Compute All Maps" burst — a different workload from the one that
+exhausts the pool. `/api/point-timeseries` takes **4.4 s cold** (1.5 s warm,
+serially) and holds its connection throughout, so the retry gave up about
+three seconds before the connection could possibly come back. Now 24 × 0.5 s
+= 12 s.
+
+**That is §78's defect in another place**: 1.25 s of patience for a 4.4 s wait
+is the same shape as a 10 s `waitFor` inside a 5 s test. Both read as
+precautions and neither could be spent. The project has now found this three
+times (§78, §79's unreachable saturation metric, here), which is enough to
+name it: **a budget is only a budget if it exceeds the thing it is budgeting
+for, and that is an arithmetic check nobody was doing.**
+
+### A correction I made mid-measurement
+
+I read 9.5 s for `/api/point-timeseries` under load and took it for a
+regression against §51's recorded 4.1 s. Timed serially it is 4.4 s cold and
+1.5 s warm — §51 stands, and the 9.5 s was contention. The retry arithmetic
+indicts the budget either way, because 1.25 s does not cover even the
+uncontended 4.4 s.
+
+### And the harness lied first
+
+The first run reported **3 ms p50 and looked excellent**. `WEIGHTED` was built
+in declaration order and indexed `i % len`, so a 20-request run only ever
+fired the first four endpoints — the cheap ones. `region`, `spread` and
+`timeseries`, the whole reason for the test, never ran. It is shuffled with a
+fixed seed now. **A load test that exercises the fast paths measures nothing
+and reports a number that invites you to stop.**
+
+### What this says about Redis and async
+
+Not yet, and not for the reason S3 assumes.
+
+* **Redis as a cache** buys little here. `FileSystemCache` is on disk and
+  already shared across workers on one host; Redis matters when there are
+  multiple *instances*, and there is one.
+* **Redis as rate-limit storage is a real correctness gap**, visible in the
+  code rather than this test: `RATE_LIMIT_STORAGE` defaults to `memory://`,
+  which is per-worker, so the advertised "300 per minute" is up to 1,200
+  across 4 workers and which limit a client meets depends on which worker it
+  lands on. That is worth fixing when there is a reason to trust the limit.
+* **Async jobs** are the right answer to a 4.4 s request holding a pooled
+  connection, and that is the next thing to measure rather than build.
+
+**What this test did not exercise**, so the result is not over-read (§66): the
+dev server, one process, one pool of 8. Production is 4 gunicorn workers with
+a pool each, so 16 concurrent spreads to 4 per worker and would not have
+exhausted anything — the failure needs ~33+ concurrent there, or an uneven
+distribution. The per-worker rate limiter and a cache shared between instances
+are read off the code, not from this run.

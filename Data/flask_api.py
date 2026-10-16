@@ -103,6 +103,29 @@ def _err_rate(e):
 def _err_internal(e):
     return jsonify({'error': 'Internal server error'}), 500
 
+@app.errorhandler(psycopg2.pool.PoolError)
+def _err_pool_exhausted(e):
+    """Every connection is checked out. That is **busy, not broken.**
+
+    Measured 2026-10-16 (§82): at 16 concurrent requests against one worker,
+    **8 of 36 returned HTTP 500** with `PoolError: connection pool exhausted`
+    reaching the generic handler. A 500 tells a client and any proxy in front
+    of it that the server has faulted, so the sensible responses — back off,
+    retry, try another instance — all look wrong. Nothing had faulted: eight
+    connections were in use by requests that were succeeding.
+
+    503 with `Retry-After` is the accurate answer, and it is the one that lets
+    a browser, a load balancer and a health check all behave correctly. The
+    rate limiter beside this already returns 429 for the analogous case.
+    """
+    log.warning('Connection pool exhausted — returning 503')
+    resp = jsonify({
+        'error': 'Server busy — all database connections are in use.',
+        'retry_after_seconds': 2,
+    })
+    resp.headers['Retry-After'] = '2'
+    return resp, 503
+
 
 # ── Rate limiting ─────────────────────────────────────────────────────────────
 # Best-effort DoS protection; no-op if flask-limiter isn't installed. With multiple
@@ -797,13 +820,48 @@ def _run_startup_checks_once():
         log.warning("Could not verify startup headroom: %s", e)
 
 
+# The retry budget, as named constants so a test can assert on the *same*
+# numbers the code uses. A test that restates a literal passes whatever the
+# code does — which is what the first version of
+# `test_retry_budget_exceeds_the_slowest_measured_request` did.
+#
+# 24 × 0.5 s = 12 s, against the 4.4 s slowest cold request measured in §82.
+DB_POOL_RETRIES_DEFAULT = 24
+DB_POOL_RETRY_DELAY_DEFAULT = 0.5
+
+# The slowest cold request measured under §82's load test
+# (`/api/point-timeseries`, 4.4 s). Named here because the retry budget is
+# only meaningful relative to it, and a budget below it cannot help in the
+# case that actually exhausts the pool.
+SLOWEST_COLD_REQUEST_SECONDS = 4.4
+
+
 def _pool_getconn():
-    """getconn with a short bounded retry. ThreadedConnectionPool.getconn raises
-    PoolError immediately when every connection is checked out; a brief wait lets
-    an in-flight request return one instead of surfacing an instant 500. Tuned
-    for the region 'Compute All Maps' burst (several concurrent requests)."""
-    retries = int(os.environ.get('DB_POOL_RETRIES', 5))
-    delay   = float(os.environ.get('DB_POOL_RETRY_DELAY', 0.25))
+    """getconn with a bounded retry. `ThreadedConnectionPool.getconn` raises
+    `PoolError` immediately when every connection is checked out; waiting lets
+    an in-flight request return one instead of surfacing an error.
+
+    **The budget has to exceed the slowest request that can hold a
+    connection, and it did not.** It was 5 × 0.25 s = **1.25 s**, with a
+    comment saying it was tuned for the region "Compute All Maps" burst — a
+    different workload from the one that exhausts the pool. Measured §82:
+    `/api/point-timeseries` takes **4.4 s cold** and 6–9 s under contention,
+    and it holds its connection throughout. So the retry gave up roughly three
+    seconds before the connection it was waiting for could possibly be
+    returned, and 8 of 36 requests failed at 16 concurrent.
+
+    A budget shorter than the thing it is waiting on is the same defect as
+    §78's 10 s `waitFor` inside a 5 s test: it reads as patience and cannot
+    be spent.
+
+    12 s is deliberately longer than the slowest measured cold request. It
+    trades latency for success, which is the right trade when the alternative
+    is an error — and when the wait genuinely runs out, the caller now gets a
+    503 with `Retry-After` rather than a 500 (see `_err_pool_exhausted`).
+    """
+    retries = int(os.environ.get('DB_POOL_RETRIES', DB_POOL_RETRIES_DEFAULT))
+    delay   = float(os.environ.get('DB_POOL_RETRY_DELAY',
+                                   DB_POOL_RETRY_DELAY_DEFAULT))
     last_err = None
     for attempt in range(retries):
         try:
