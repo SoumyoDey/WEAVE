@@ -121,18 +121,60 @@ def run(concurrency, total):
             'max': max(allms), 'ok': ok, 'total': total, 'codes': codes}
 
 
+def preflight():
+    """Refuse to run against a server that is not there.
+
+    **§82a: a 25-minute run was spent firing at a server that had died 25
+    minutes earlier.** Every request failed instantly with connection-refused,
+    the harness dutifully recorded them, and the run looked like it was
+    queueing hard under the new retry budget — a slow clock read as the fix
+    working. A load generator that cannot tell "busy" from "absent" will
+    report the second as the first.
+    """
+    try:
+        with urllib.request.urlopen(BASE + '/ready', timeout=20) as r:
+            if r.status != 200:
+                raise SystemExit(f'preflight: /ready returned {r.status}')
+    except Exception as e:
+        raise SystemExit(
+            f'preflight: cannot reach {BASE}/ready ({type(e).__name__}: {e}).\n'
+            'Start the API first. Refusing to measure a server that is not '
+            'answering — see NEXT_STEPS.md §82a.')
+    print(f'preflight: {BASE} is answering')
+
+
+def guard(results_summary):
+    """Say loudly when a level was dominated by transport failures.
+
+    A status of `URLError` is not a latency measurement, and a table full of
+    them still renders as a table.
+    """
+    for s in results_summary:
+        bad = sum(n for c, n in s['codes'].items() if not isinstance(c, int))
+        if bad:
+            print(f'  ⚠️  concurrency {s["concurrency"]}: {bad}/{s["total"]} '
+                  f'requests never reached the server — these are transport '
+                  f'failures, not latencies. {s["codes"]}')
+
+
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('--levels', default='1,2,4,8,16,32')
     ap.add_argument('--requests', type=int, default=60)
     a = ap.parse_args()
 
+    preflight()
+
     summary = []
     for c in [int(x) for x in a.levels.split(',')]:
         summary.append(run(c, a.requests))
+        # Re-check between levels: if the server dies partway through, the
+        # remaining levels would otherwise be measured against nothing.
+        preflight()
 
     print('\n=== summary ===')
     print(f'{"conc":>5}{"req/s":>9}{"p50 ms":>9}{"p95 ms":>9}{"max ms":>9}{"ok":>9}')
     for s in summary:
         print(f'{s["concurrency"]:>5}{s["rps"]:>9.1f}{s["p50"]:>9.0f}'
               f'{s["p95"]:>9.0f}{s["max"]:>9.0f}{s["ok"]:>5}/{s["total"]}')
+    guard(summary)

@@ -7144,3 +7144,45 @@ vacuously.
 cannot tell you whether the module under test imports it.** Every in-process
 suite has a blind spot exactly the size of its own fixtures, and the only way
 to see into it is a fresh interpreter.
+
+### §82b. The pool fix, measured against a server confirmed alive — 2026-10-16
+
+§82a's run was worthless: it fired at a server that had died at startup. Re-run
+against an API verified answering `200` on `/api/ready` and `/api/health`
+first, with the harness now refusing to start otherwise.
+
+| concurrency | req/s | p50 | p95 | ok | before the fix |
+|---|---|---|---|---|---|
+| 1 | 0.6 | 46 ms | 9,607 ms | 36/36 | 36/36 |
+| 4 | 1.6 | 53 ms | 13,334 ms | 36/36 | 36/36 |
+| 8 | 2.8 | 184 ms | 12,761 ms | 36/36 | 36/36 |
+| 16 | 2.9 | 2,128 ms | 12,267 ms | **36/36** | **28/36** |
+| 32 | 3.1 | 1,786 ms | 11,782 ms | **36/36** | not reached |
+
+**Zero failures at 32 concurrent**, where 16 previously lost eight requests to
+HTTP 500. No request spent the full 12 s budget, so the 503 path was never
+taken — the waiting absorbed all of it. The whole five-level run took under
+two minutes, which also confirms §82a's reading was wrong: the 25-minute run
+was a dead server, not the budget queueing.
+
+**The cost is latency, as intended.** p50 goes from 46 ms to ~2 s once
+concurrency exceeds the pool of 8. That is the right trade for a
+password-protected reviewer deployment with a handful of users, and it would
+be the wrong trade for a public API, where shedding load fast matters more
+than serving every request eventually. Worth revisiting if the audience ever
+changes.
+
+**Throughput plateaus at ~3 req/s and the ceiling has a name:**
+`/api/point-timeseries`, ~12 s under contention while holding a pooled
+connection. Serially it is 4.4 s cold and 1.5 s warm, so most of that 12 s is
+contention for the database rather than the query. **That is the case for
+async, now measured instead of assumed** — one endpoint holding a connection
+for twelve seconds is what caps the other eight.
+
+### The harness refuses to measure nothing
+
+`preflight()` checks `/api/ready` before the first level **and between every
+level**, and exits rather than producing a table. `guard()` prints a warning
+when a level's statuses include transport failures, because `URLError` is not
+a latency and a table full of them still renders as a table. Verified to fire:
+run it with nothing listening and it refuses with a pointer to §82a.
