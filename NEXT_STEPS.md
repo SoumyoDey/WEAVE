@@ -7186,3 +7186,40 @@ level**, and exits rather than producing a table. `guard()` prints a warning
 when a level's statuses include transport failures, because `URLError` is not
 a latency and a table full of them still renders as a table. Verified to fire:
 run it with nothing listening and it refuses with a pointer to §82a.
+
+### §82c. The guard needed a database, and CI has none — 2026-10-16
+
+`test_imports_standalone.py` as first written went green locally and **failed
+CI on both commits**. Not the app: the test.
+
+`flask_api.py:453` constructs its `ThreadedConnectionPool` at **import time**,
+so importing the module reaches for a live database. In-process tests never
+notice, because `conftest.py` replaces `ThreadedConnectionPool` with a
+`MagicMock` before anything imports `flask_api`. A subprocess gets no such
+help, and CI has no `weave_weather`:
+
+```
+psycopg2.OperationalError: connection to server at "localhost" (::1), port 5432
+failed: FATAL:  database "weave_weather" does not exist
+```
+
+**The obvious stub is the one that cannot be used.** Doing what conftest does
+— replacing `psycopg2.pool.ThreadedConnectionPool` — requires naming
+`psycopg2.pool`, which imports the submodule and masks the precise bug the
+file exists to catch. The stub is one level lower instead: replace
+`psycopg2.connect`, which the pool constructor calls, so the pool builds
+against fakes while `psycopg2.pool` is left for `flask_api` to import or fail
+to.
+
+`test_these_tests_do_not_need_a_database` pins it by running the import with
+`DB_NAME` pointed at a database that certainly does not exist — CI's
+environment, reproduced locally, so the dependency cannot creep back
+unnoticed. Verified both ways: 5 pass with the real database and 5 with no
+database, and 4 of 5 still fail against the broken commit `cd9b360`.
+
+**Three rounds on one change, each caught by the next environment down**: the
+suite missed a module that would not import (conftest had bound the
+submodule), the first guard missed CI (conftest had stubbed the pool), and
+only running it with no database at all settled it. *Each test environment
+hides exactly what its own fixtures provide*, and the way to find out is to
+take one away.

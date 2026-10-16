@@ -30,7 +30,26 @@ import pytest
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-def _fresh(code):
+# `flask_api` builds its `ThreadedConnectionPool` at **import time**
+# (`flask_api.py:453`), so importing it reaches for a real database. In-process
+# tests never notice because `conftest.py` replaces `ThreadedConnectionPool`
+# with a `MagicMock`; a subprocess gets no such help, and the first version of
+# this file duly passed locally and failed CI with
+# `database "weave_weather" does not exist`.
+#
+# **The stub cannot be `psycopg2.pool.ThreadedConnectionPool`**, the way
+# conftest does it, because reaching that name requires `import psycopg2.pool`
+# — which binds the submodule and masks the exact bug these tests exist to
+# catch. Stubbing `psycopg2.connect` instead is one level lower: the pool
+# constructor calls it, so the pool builds against fakes, and `psycopg2.pool`
+# is left for `flask_api` to import or fail to.
+_PRELUDE = (
+    'import psycopg2, unittest.mock as _m; '
+    'psycopg2.connect = _m.MagicMock(); '
+)
+
+
+def _fresh(code, prelude=True):
     """Run `code` in a new interpreter with `Data/` importable and nothing else.
 
     `-S` is deliberately not used — the real deployment has site-packages. What
@@ -38,7 +57,7 @@ def _fresh(code):
     has to satisfy its own dependencies.
     """
     return subprocess.run(
-        [sys.executable, '-c', code],
+        [sys.executable, '-c', (_PRELUDE if prelude else '') + code],
         cwd=HERE, capture_output=True, text=True, timeout=180,
         # A clean-ish environment: no pytest, no conftest, no TESTING flag.
         env={**os.environ, 'PYTHONPATH': HERE, 'FLASK_DEBUG': '0'},
@@ -86,3 +105,22 @@ def test_the_guard_can_fail():
     """
     r = _fresh('import a_module_that_does_not_exist_94e1')
     assert r.returncode != 0, 'the subprocess helper does not surface failures'
+
+
+def test_these_tests_do_not_need_a_database():
+    """The tests above must pass where CI runs, which has no `weave_weather`.
+
+    The first version of this file did not, and went green locally and red on
+    CI for a reason that had nothing to do with what it was testing. Pointing
+    the config at a database that certainly does not exist reproduces CI's
+    environment here, so the dependency cannot creep back in unnoticed.
+    """
+    r = subprocess.run(
+        [sys.executable, '-c', _PRELUDE + 'import flask_api'],
+        cwd=HERE, capture_output=True, text=True, timeout=180,
+        env={**os.environ, 'PYTHONPATH': HERE, 'FLASK_DEBUG': '0',
+             'DB_NAME': 'definitely_not_a_database_8f21a'},
+    )
+    assert r.returncode == 0, (
+        'flask_api cannot be imported without a live database — these tests '
+        f'will fail on CI.\nstderr:\n{r.stderr[-2000:]}')
