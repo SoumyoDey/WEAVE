@@ -349,6 +349,29 @@ class TestTwoRunsCanDisagree:
         assert reg.resolve_divisor(writable, 'GEFS', 'precipitation', loaded) == 3.0
 
 
+class TestRecordingAnExistingRunFromTheCommandLine:
+    """`run_registry.py --record`, which `scale_precip.py` prints for per-window
+    GEFS. `record()` upserts, so a mistyped init time would create a registry
+    row for a run that was never loaded, and the run selector would offer it.
+    This path refuses that instead."""
+
+    def test_a_run_that_was_never_loaded_is_refused_and_nothing_is_written(self, writable):
+        with pytest.raises(reg.UnknownConventionError, match='migrate_init_time'):
+            reg.record_existing(writable, 'GEFS', 'precipitation', FUTURE_RUN, reg.RATE)
+        writable.execute(f"SELECT count(*) AS n FROM {reg.TABLE} WHERE init_time = %s",
+                         (FUTURE_RUN,))
+        assert writable.fetchone()['n'] == 0
+
+    def test_a_loaded_run_relabelled_rate_resolves_per_window(self, writable):
+        loaded = _a_loaded_run(writable, 'GEFS', 'precipitation')
+        reg.record_existing(writable, 'GEFS', 'precipitation', loaded, reg.RATE)
+        assert reg.resolve_divisor(writable, 'GEFS', 'precipitation', loaded) == reg.PER_WINDOW
+
+    def test_the_command_line_refuses_an_incomplete_record(self):
+        with pytest.raises(SystemExit):
+            reg.main(['--record', '--model', 'GEFS'])
+
+
 class TestAnUndeclaredModelIsRecordedHonestly:
     def test_it_is_written_but_refuses_to_resolve(self, writable):
         """A new model can be loaded before anyone declares its convention —
@@ -485,7 +508,7 @@ class TestTheRateConvention:
     the period; `unscaled` would divide a rate by its window a second time.
 
     The case that forced it: GEFS 09-16 had been scaled through the current
-    per-window `aifs react.py` while `record()` wrote `scaled, 3` from the
+    per-window scaling stage while `record()` wrote `scaled, 3` from the
     module constant, so every 6-hour bucket was halved again — MAE read 0.1864
     where the correctly-labelled value is 0.2318.
 

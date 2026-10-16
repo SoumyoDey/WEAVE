@@ -19,7 +19,7 @@ Where this sits in the pipeline
     GEFS NetCDF  ->  [THIS SCRIPT]  ->  json_data_gefs_ensemble/
                                             |
                                             v
-                            Data_convert_weave/"aifs react.py"   (the divisor)
+                            scale_precip.py --model GEFS          (the divisor)
                                             |
                                             v
                                      load_to_postgres.py
@@ -81,15 +81,19 @@ Conventions, every one measured against the loaded run
 
 * **Values round to 3 decimals**, Python's `round`, as for AIFS.
 
-A new load will not match the old GEFS rows, on purpose
--------------------------------------------------------
-The loaded GEFS precipitation is `round(round(tp, 3) / 3, 3)` — the **fixed**
+Which divisor the next stage applies, and why it is still 3
+-----------------------------------------------------------
+The loaded GEFS precipitation is `round(round(tp, 3) / 3, 3)`: the **flat**
 divisor of 3 applied to every file, including the `h%6==0` files that hold 6-hour
-totals, so those are stored at **twice** the rate they should be. That is
-`METRICS_AUDIT.md` finding 2, and `aifs react.py` has since been fixed to divide
-by each record's own window. Converting afresh and scaling through the fixed
-script therefore *changes* every `h%6==0` value. That is the defect being
-repaired, not a discrepancy to reconcile.
+totals. Stored alone, those would be twice the rate they should be
+(`METRICS_AUDIT.md` finding 2). Scoring undoes it per window, because the
+registry records the run as `scaled, 3`, so the scores are right.
+
+`scale_precip.py` defaults to that same flat rule, so a new load matches the
+loaded one and the registry's declared label. Its `--rule per-window` divides
+each record by its own window instead. That gives identical scores **only if
+the run is then registered `rate`**, and is wrong by up to 2x if it is not
+(`NEXT_STEPS.md` §22); the script prints the registry command.
 
 `--verify` exists to check this script against the rows already loaded, so it
 applies the **legacy** fixed divisor deliberately, the way `convert_aifs.py`'s
@@ -172,7 +176,7 @@ def output_stem(init_time, hour, variable):
     **Not the source stem.** GEFS files are named `..._f003.nc`, and both
     downstream stages parse the lead time with `-(\d+)h-`:
 
-    * `aifs react.py` skips a file it cannot parse and reports it — which is how
+    * `scale_precip.py` skips a file it cannot parse and reports it — which is how
       this was caught, with all 2,560 files listed as skipped.
     * `load_to_postgres.py` does `int(match.group(1)) if match else 0`, so it
       would have **silently loaded every GEFS row at forecast hour 0**: no

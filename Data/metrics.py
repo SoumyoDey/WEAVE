@@ -308,15 +308,13 @@ RATE_STORED_PRECIP_MODELS = {'AIFS', 'GEFS'}
 RATE_CUMULATED_PRECIP_MODELS = RATE_STORED_PRECIP_MODELS
 
 
-# Hours the JSON export divided each model's precipitation by on its way to mm/h.
-# Straight from Data_convert_weave/"aifs react.py":
-#
-#     scale_json_files(... scale_factor=6, model_name='AIFS')
-#     scale_json_files(... scale_factor=3, model_name='GEFS')
+# Hours the JSON export divided each model's precipitation by on its way to mm/h:
+# the `flat` rule of `scale_precip.py` (`FLAT_DIVISOR_HOURS`), which every loaded
+# run used.
 #
 # One fixed factor per model, applied to every record regardless of the window
-# that record covers. UKMO is absent because it was never scaled — React.py
-# converts its native `total_rainfall_rate` (m/s) straight to mm/h with x3.6e6.
+# that record covers. UKMO is absent because it was never scaled — its converter
+# turns the native `total_rainfall_rate` (m/s) straight into mm/h with x3.6e6.
 #
 # The factor is right where it matches the record: AIFS is 6-hourly throughout,
 # and GEFS's h%6==3 buckets really are 3 h. It is wrong for GEFS's h%6==0

@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 """Convert AIFS ensemble NetCDF into the JSON the WEAVE loaders read.
 
-This is the stage that did not exist. `Data_convert_weave/React.py` handles UKMO
-only, and `Data_convert_weave/"aifs react.py"` — despite its name — is JSON to
-JSON rescaling that sits *downstream* of this step. The AIFS run already in the
+This is the stage that did not exist. The AIFS run first loaded into the
 database was converted off-machine by something that was never kept, which is
-why a second AIFS run could not be loaded at all. See `NEXT_STEPS.md` §14.
+why a second AIFS run could not be loaded at all. See `NEXT_STEPS.md` §14. The
+JSON-to-JSON rescaling that sits *downstream* of this step is
+`scale_precip.py`, which also used to live outside the repository.
 
 It lives in the repository, unlike the converters it joins, for the reason
 `load_observations.py` does: a stage kept outside the tree is a stage that gets
@@ -16,7 +16,7 @@ Where this sits in the pipeline
     AIFS NetCDF  ->  [THIS SCRIPT]  ->  json_data_aifs_ensemble/
                                             |
                                             v
-                            Data_convert_weave/"aifs react.py"   (divides by 6)
+                            scale_precip.py --model AIFS          (divides by 6)
                                             |
                                             v
                                      json_data_aifs_ensemble_scaled/
@@ -163,7 +163,7 @@ MIN_PRECIP_MM = 0.01
 VALUE_DECIMALS = 3
 
 # The legacy scaling stage, reproduced for --verify only. Real conversions go
-# through `aifs react.py`, which owns this divisor.
+# through `scale_precip.py`, which owns this divisor.
 LEGACY_DIVISOR_HOURS = 6.0
 LEGACY_DECIMALS = 3
 
@@ -421,8 +421,8 @@ def convert_folder(source, out_dir, threshold=None, decimals=VALUE_DECIMALS,
     if totals['empty']:
         print(f'hours with no member records: {totals["empty"]} — expected at hour 0 '
               f'for a cumulative field, since nothing has accumulated yet')
-    print('\nNext: `aifs react.py` to divide by the 6 h emit interval, then '
-          'load_to_postgres.py.')
+    print('\nNext: `scale_precip.py --model AIFS` to divide by the 6 h emit '
+          'interval, then load_to_postgres.py.')
     return totals
 
 
@@ -582,7 +582,7 @@ def verify(source, model='AIFS', variable='precipitation', init_time=None,
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description='Convert AIFS ensemble NetCDF to the JSON the WEAVE loaders read.',
-        epilog='This script does not divide by the emit interval; `aifs react.py` does.')
+        epilog='This script does not divide by the emit interval; `scale_precip.py` does.')
     parser.add_argument('--source', required=True,
                         help='directory of *.nc files for one variable and cycle')
     parser.add_argument('--out', help='output directory (required unless --verify)')
@@ -630,7 +630,7 @@ def main(argv=None):
         if name not in ACCUMULATED:
             print(f'NOTE: {name} is not an accumulation, so no threshold is applied and '
                   f'no divisor belongs downstream — the registry records wind '
-                  f'`unscaled`. Do not run this output through `aifs react.py`.\n')
+                  f'`unscaled`. Do not run this output through `scale_precip.py`.\n')
 
     convert_folder(args.source, args.out, args.threshold, args.decimals,
                    write_stats=not args.no_stats)

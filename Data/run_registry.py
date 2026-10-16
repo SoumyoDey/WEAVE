@@ -323,7 +323,29 @@ def backfill_conventions(cur):
     return scored + cur.rowcount
 
 
-def main():
+def record_existing(cur, model_name, variable_name, init_time, convention,
+                    export_divisor_h=None):
+    """`record()` for a run already in the registry, refusing one that is not.
+
+    The command-line path. `record()` upserts, so a mistyped init time would
+    otherwise create a registry row for a run that was never loaded, and the
+    run selector would offer it. Register the run with `migrate_init_time.py`
+    first, then state its convention here.
+    """
+    cur.execute(f"""
+        SELECT 1 FROM {TABLE}
+        WHERE model_name = %s AND variable_name = %s AND init_time = %s
+    """, (model_name, variable_name, init_time))
+    if cur.fetchone() is None:
+        raise UnknownConventionError(
+            f'{model_name}/{variable_name} at {init_time} is not in {TABLE}; '
+            f'load and regrid it, then run migrate_init_time.py, before '
+            f'recording its convention')
+    record(cur, model_name, variable_name, init_time,
+           convention=convention, export_divisor_h=export_divisor_h)
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--backfill', action='store_true',
@@ -331,14 +353,33 @@ def main():
     parser.add_argument('--refresh', action='store_true',
                         help='recompute counts and ranges from the member table')
     parser.add_argument('--show', action='store_true', help='print the registry')
-    args = parser.parse_args()
-    if not (args.backfill or args.refresh or args.show):
-        parser.error('give --backfill, --refresh and/or --show')
+    parser.add_argument('--record', action='store_true',
+                        help='state one run\'s export convention, overriding the '
+                             'declared default (needs --model, --variable, '
+                             '--init-time and --convention)')
+    parser.add_argument('--model')
+    parser.add_argument('--variable')
+    parser.add_argument('--init-time')
+    parser.add_argument('--convention', choices=CONVENTIONS)
+    parser.add_argument('--divisor', type=float,
+                        help='export_divisor_h, for --convention scaled only')
+    args = parser.parse_args(argv)
+    if not (args.backfill or args.refresh or args.show or args.record):
+        parser.error('give --backfill, --refresh, --record and/or --show')
+    if args.record and not (args.model and args.variable and args.init_time
+                            and args.convention):
+        parser.error('--record needs --model, --variable, --init-time and --convention')
 
     conn = psycopg2.connect(**DB_CONFIG)
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             ensure_schema(cur)
+            if args.record:
+                record_existing(cur, args.model, args.variable, args.init_time,
+                                args.convention, args.divisor)
+                print(f'recorded {args.model}/{args.variable} at {args.init_time} '
+                      f'as {args.convention}'
+                      + (f', {args.divisor:g}h' if args.divisor is not None else ''))
             if args.refresh:
                 print(f'refreshed {refresh_from_members(cur)} rows from members')
             if args.backfill:

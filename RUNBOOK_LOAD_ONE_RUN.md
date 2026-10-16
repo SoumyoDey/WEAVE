@@ -84,12 +84,36 @@ Wind is two separate conversions, `wind_u_10m` and `wind_v_10m`. They are
 separate variables all the way through and nothing combines them until the API
 computes √(u²+v²).
 
+### 2b. Scale AIFS and GEFS precipitation to mm/h
+
+The converters write each record's accumulation in mm. AIFS and GEFS
+precipitation must be divided to mm/h before loading:
+
+```bash
+python scale_precip.py --model AIFS --source <json dir> --out <scaled json dir>
+python scale_precip.py --model GEFS --source <json dir> --out <scaled json dir>
+```
+
+Load the **scaled** directory in §3. Skip this step for UKMO precipitation
+(`convert_ukmo.py` already emits mm/h) and for every wind component.
+
+The default rule, `flat`, is what every loaded run used: AIFS ÷6, GEFS ÷3. It
+is also what the registry assumes, so §5 records it without being told.
+`--rule per-window` divides GEFS's 6-hour buckets by 6 instead. That gives the
+same scores **only if the run is registered `rate`** in §5. Left at the
+default label it reads up to 2× wrong (`NEXT_STEPS.md` §22). The script prints
+the command when it is needed.
+
+The output directory gets a `SCALED.json` marker. The script refuses to scale
+a directory that already has one, because dividing twice would be silent.
+
 ---
 
 ## 3. Load into the native tables
 
 ```bash
-python load_to_postgres.py --source <json dir> --model AIFS --init-time "2025-09-16 00:00:00"
+# precipitation: the SCALED directory from §2b for AIFS and GEFS, the converted one for UKMO
+python load_to_postgres.py --source <scaled json dir> --model AIFS --init-time "2025-09-16 00:00:00"
 
 python load_wind.py --source <u json dir> --model AIFS \
     --init-time "2025-09-16 00:00:00" --variable wind_u_10m
@@ -158,7 +182,21 @@ python regrid_members.py --verify-grid --hours 0
 ```bash
 python migrate_init_time.py --dry-run    # says what it would change
 python migrate_init_time.py
+python run_registry.py --backfill --show # names each new row's export convention
 ```
+
+`migrate_init_time.py` records the precipitation divisor, but not the name of
+the convention. Until `--backfill` names it, scoring falls back to the module
+constant and logs a warning on every new key. **Only for GEFS scaled with
+`--rule per-window`** (§2b), record it as a rate after the backfill:
+
+```bash
+python run_registry.py --record --model GEFS --variable precipitation \
+    --init-time "2025-09-16 00:00:00" --convention rate
+```
+
+`--record` refuses a run that is not already in the registry, so a mistyped
+init time cannot create a run that was never loaded.
 
 Idempotent, and safe whichever state you are in. It populates
 `forecast_run_registry` — the per-run record of member counts, hour ranges and

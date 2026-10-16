@@ -112,7 +112,7 @@ class TestRounding:
         assert ca._points(grid, LATS, LONS, None, 3)[0]['value'] == 1.235
 
     def test_it_does_not_divide_by_the_emit_interval(self):
-        """The /6 belongs to `aifs react.py`. Doing it here as well would make
+        """The /6 belongs to `scale_precip.py`. Doing it here as well would make
         every precipitation score a sixth of what it should be, with no error."""
         grid = np.full((5, 7), 6.0, dtype=np.float32)
         assert ca._points(grid, LATS, LONS, None, 3)[0]['value'] == 6.0
