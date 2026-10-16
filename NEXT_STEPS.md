@@ -7101,3 +7101,46 @@ a pool each, so 16 concurrent spreads to 4 per worker and would not have
 exhausted anything — the failure needs ~33+ concurrent there, or an uneven
 distribution. The per-worker rate limiter and a cache shared between instances
 are read off the code, not from this run.
+
+### §82a. The fix broke `main`, and CI could not see it — 2026-10-16
+
+The `PoolError` handler above went in as `@app.errorhandler(psycopg2.pool.PoolError)`
+near the top of the module. **`import psycopg2` does not bind the `pool`
+submodule** — the explicit `import psycopg2.pool` was 280 lines further down,
+beside the pool construction — so the module raised
+
+```
+AttributeError: module 'psycopg2' has no attribute 'pool'
+```
+
+at import. Under `gunicorn flask_api:app` that is not a degraded service, it
+is **no service**: the process exited seven seconds into startup.
+
+**All four CI jobs passed on that commit**, and so did 1,199 local tests.
+They had to. `conftest.py:20` does `import psycopg2.pool` in order to stub
+`ThreadedConnectionPool`, so by the time any test imports `flask_api` the
+submodule is already bound and the attribute resolves. **The fixture that
+makes the suite possible is what blinds it.** Measured:
+`python -c "import psycopg2; print(hasattr(psycopg2,'pool'))"` → `False`,
+while the same check inside pytest is `True`.
+
+Found by the load test hammering a server that had died 25 minutes earlier —
+the run looked like it was queueing under the new 12 s budget, and the API had
+been returning connection-refused the whole time. **The slow run was read as
+the fix working hard.** A load generator that cannot distinguish "server busy"
+from "server absent" will report the second as the first; the harness records
+the exception type per request, and nobody looked at it until the clock
+stopped making sense.
+
+`Data/test_imports_standalone.py` is the guard: it imports `flask_api` in a
+**subprocess with a clean interpreter**, which is the only environment that
+resembles gunicorn, and asserts the WSGI callable resolves under the exact
+name `flask_api:app` that DEPLOY.md §3 and `deploy/Dockerfile.api` both use.
+Three of its four tests fail against the broken commit; the fourth proves the
+subprocess helper surfaces failures at all, so the other three cannot pass
+vacuously.
+
+**The transferable rule: a test process that has already imported something
+cannot tell you whether the module under test imports it.** Every in-process
+suite has a blind spot exactly the size of its own fixtures, and the only way
+to see into it is a fresh interpreter.

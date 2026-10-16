@@ -2,6 +2,20 @@ from flask import Flask, jsonify, request, Response, g, has_request_context
 import functools
 from flask_cors import CORS
 import psycopg2
+# **`import psycopg2` alone does not bind `psycopg2.pool`.** The submodule has
+# to be imported explicitly, and it is needed at line ~106 by the
+# `PoolError` errorhandler — far above the `import psycopg2.pool` that used to
+# sit beside the pool construction. Without this the module raises
+# `AttributeError: module 'psycopg2' has no attribute 'pool'` at import, which
+# means gunicorn cannot start the app at all.
+#
+# **The test suite cannot catch that**, which is how it reached `main`:
+# `conftest.py` imports `psycopg2.pool` itself, so under pytest the submodule
+# is already bound before `flask_api` loads and the decorator resolves fine.
+# Every test passed, CI went green on all four jobs, and the server exited
+# seven seconds into startup. `test_imports_standalone.py` now checks the
+# import in a fresh interpreter, which is the only place this is visible.
+import psycopg2.pool
 from psycopg2.extras import RealDictCursor
 
 import domain
