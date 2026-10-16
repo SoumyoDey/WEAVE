@@ -57,18 +57,73 @@ from 197 MB already on disk. (a) and (c) look nearly identical in a mockup and
 differ enormously in cost, which is why the choice was worth making deliberately
 rather than discovering halfway through.
 
-§6a specifies it. (a) is not refused, only deferred: if member rasters are
-wanted later, the decoupling below is how to find out whether they are worth the
-ingest.
+§6a specifies it. ~~(a) is not refused, only deferred~~ — **(a) was prototyped
+on 2026-10-16 and is now DECLINED on its merits, not on its cost.** The
+measurement is below.
 
-### A decoupling worth taking either way
+### The decoupling, taken — and what it found
 
 The app **already holds per-member gridded fields** — `regridded_forecast_member`
-for 2025-09-08 and 09-16. If (a) is what is wanted, the *rendering* problem can
-be prototyped on that today, with no cyclone data at all. That separates the
-hard question (fifty translucent layers, ~84,000 points per lead time) from the
-expensive one (a new ingest), and answers whether the visualisation earns its
-keep before anyone pays for the data.
+for 2025-09-08 and 09-16 — so the *rendering* question could be answered with no
+cyclone data at all, separating the hard question (fifty translucent layers,
+~84,000 points per lead time) from the expensive one (a TIGGE ingest).
+
+Prototyped against AIFS precipitation, `2025-09-16 00Z`, +96 h: **50 members ×
+1,681 cells = 84,050 points**, matching this document's own estimate and the
+same order as the 51-member ECMWF-ENS case. +96 h was chosen because the
+ensemble genuinely disagrees there (mean 1.85 mm, mean per-cell spread 1.12) —
+a flat field would have flattered the idea. Both renderings were drawn from the
+same 50 members, side by side.
+
+| | (a) overplot | (c) derived field |
+|---|---|---|
+| render | 68.8 ms | 0.8 ms |
+| draw calls | 76,826 `fillRect` | 707 cells |
+| the 50th member's visible effect | **0.0% of painted px** (mean 0.9/255) | — |
+| reversing member draw order | **visibly changes 7.7%** | order-independent |
+
+**Two results, and the second is disqualifying.**
+
+**The last member is invisible.** Adding member 50 changes nothing a reader can
+see, so the display cannot distinguish a 40-member ensemble from a 50-member
+one — the first thing anyone would ask of it.
+
+**The picture depends on member numbering.** `source-over` is not commutative:
+the member drawn last contributes its full alpha, the member drawn first
+contributes `(1-alpha)^49`, which at 50 layers of 0.08 is under 2%. So the image
+is weighted by `ensemble_member` ascending — **an arbitrary index, rendered as
+though it were meteorology.** Drawing the same ensemble backwards produces a
+visibly different field.
+
+No alpha escapes it. Across a sweep, the order artifact exceeds the signal from
+the last member at *every* setting:
+
+| alpha | 50th member visible | order artifact |
+|---|---|---|
+| 0.02 | 0.0% | 0.0% |
+| 0.08 | 0.0% | 7.7% |
+| 0.20 | 2.7% | 20.8% |
+| 0.45 | 20.2% | 32.9% |
+| 0.60 | 28.5% | 36.7% |
+
+Turn alpha down until ordering stops mattering and the members stop showing;
+turn it up to see them and the artifact grows faster than the signal. **The only
+escape is to composite order-independently — to sum or average the layers — and
+that is a derived field. (a) done correctly converges on (c).**
+
+So the ingest is not merely expensive, it buys a worse rendering than the one
+already shipped. **Treat "render every member as a translucent layer" as
+answered**: for *tracks* it is feature 1 and it works, because fifty polylines
+stay distinguishable; for *fields* it does not, because fifty translucent
+rasters are a blurred mean with an ordering bias.
+
+Caveats, so the result is not over-read: this was precipitation on the 41×41
+analysis grid rather than a storm-centred cyclone grid — a TC field is larger
+and more sharply structured, which makes the ordering artifact *more* visible,
+not less — and 68.8 ms is raw canvas compositing, before Leaflet's per-pan
+overhead. The prototype itself was deleted; it had served its purpose, and a
+400 KB data fixture in the repo to re-derive a settled conclusion is a cost with
+no reader. `NEXT_STEPS.md` §80 records how it was measured.
 
 ---
 

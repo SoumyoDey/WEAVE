@@ -6838,3 +6838,58 @@ The instrument for that measurement was wrong twice before it was right —
 version could never have reached its threshold whatever uploaded. Same shape as
 §78: **a measurement that cannot reach its own threshold reads as a null result
 and is an absent one.**
+
+## 80. The member-raster prototype, and what it declined — 2026-10-16
+
+`TC_TAB_DESIGN.md` §2 split "render all individual model runs as semi-transparent
+layers at once" into three readings and chose (c), the derived field, leaving
+(a) — per-member *rasters* — *"not refused, only deferred"*. It also said how to
+settle (a) cheaply: the app already holds per-member gridded fields in
+`regridded_forecast_member`, so the **rendering** question can be answered
+without the TIGGE ingest the data would need.
+
+Taken, and it settles it. **(a) is now declined on its merits rather than its
+cost** — the full measurement is in `TC_TAB_DESIGN.md` §2.
+
+The short version: 50 AIFS members at +96 h, 84,050 points, drawn beside the
+derived field computed from the same members. Overplotting costs 68.8 ms against
+0.8 ms, the 50th member changes **0.0%** of painted pixels, and drawing the same
+ensemble in reverse order visibly changes **7.7%** of them. `source-over` is not
+commutative, so the picture is weighted by `ensemble_member` ascending — an
+arbitrary index presented as weather. Every alpha from 0.02 to 0.60 shows the
+order artifact exceeding the last member's contribution, and the only
+order-independent way to combine the layers is to average them, **which is a
+derived field**. (a) done correctly converges on (c).
+
+### Two instruments were wrong before either was right
+
+Worth recording, because it is now the third session running where the
+measurement was the defect (§78's unreachable timeout, §79's snapshot counter).
+
+**A saturation metric that could not fire.** The first legibility number tested
+for near-white pixels — and the colour ramp never reaches white. It reported
+"saturated 0%", which reads as a clean result and was an absent one. Same shape
+as §79's `nettop -L 1`: *when a measurement reports zero, check that it could
+have reported anything else.*
+
+**A number measured against a dirty canvas.** The replacement reported 43.8%
+order-dependence at alpha 0.08. Re-measured in one consistent pass it is 7.7% —
+the first reading diffed against a canvas the initial render had left in another
+state. It was quoted to the user before it was checked, and it was quoted as the
+figure that *decided the question*. The sweep that corrected it was run only
+because the series was non-monotonic, which is to say **the error was caught by
+the shape of the numbers rather than by the discipline that should have caught
+it.** Re-measure a figure before it carries a decision.
+
+Both corrections made the case against (a) *stronger*, which is the trap: a
+wrong number pointing the way you already lean does not feel wrong.
+
+### The prototype was deleted
+
+It lived at `public/member-raster/` for an afternoon: a 10 KB page, a 400 KB
+data fixture and the exporter that built it. Kept in the repo it would be a
+fixture nobody reads, re-deriving a conclusion already written down, and a
+second place for the AIFS +96 h grid to drift from the database. The exporter is
+twenty lines of SQL and JSON and is reproducible from §2's description if the
+question is ever reopened. **The finding is the artifact; the prototype was
+scaffolding.**
