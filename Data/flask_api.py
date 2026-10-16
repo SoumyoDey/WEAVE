@@ -3022,6 +3022,27 @@ def point_timeseries(cursor):
         # resolver and caches per request, so this is not a second lookup.
         init_time = _resolve_init_time(cursor, model_name)
 
+        # **The slowest endpoint in the app was the one with no result cache.**
+        # `/api/spread-skill`, immediately below this one, has cached since the
+        # caching existed; this never adopted it, so every repeat of an
+        # identical request paid the full 4.4 s cold cost again. §84 measured
+        # it: the S3 load test fired five identical point-timeseries requests
+        # per level and each one re-ran the query, which is most of what capped
+        # throughput at ~3 req/s.
+        #
+        # Deterministic given these parameters — the rows are a pure function
+        # of (run, variable, cell, radius) — so a hit is exactly the answer a
+        # miss would compute. `_metric_cache_key` folds in the data version, so
+        # a reload invalidates rather than serving stale numbers.
+        _key = _metric_cache_key(
+            'point_timeseries', cursor, model=model_name, variable=variable,
+            init_time=init_time, lat=round(lat, 4), lon=round(lon, 4),
+            radius=radius,
+        )
+        _cached = _cache_get(_key)
+        if _cached is not None:
+            return jsonify(_cached)
+
         # One code path for both variables: pull raw members and build the
         # distribution here.
         #
@@ -3118,6 +3139,10 @@ def point_timeseries(cursor):
 
         log.info(f"✅ Timeseries: {len(result)} hours for {model_name} at ({lat}, {lon}) "
               f"[{variable}]")
+        # Cached on the way out, not on the way in: an empty `result` is a
+        # legitimate answer (a point outside the loaded grid) and is worth
+        # caching too, but only once the query has actually run.
+        _cache_set(_key, result, timeout=METRIC_CACHE_TTL)
         return jsonify(result)
 
     except RunSelectionError:

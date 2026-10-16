@@ -57,17 +57,26 @@
 >    (`sha256 2704665f…fefee6`, both ends). `DEPLOY.md` §9 has the path and the
 >    re-verification command. Transfer through `xfer.discovery.neu.edu`; the
 >    login node cannot do it (§79).
-> 5. **S3 — load test DONE, Redis and async still open (§82).**
->    `Data/loadtest.py` exists and found a real defect before either was
->    built: at 16 concurrent, **8 of 36 requests returned HTTP 500** on an
->    exhausted pool, and the retry budget (1.25 s) was shorter than the
->    slowest request holding a connection (4.4 s cold). Both fixed — 503 with
->    `Retry-After`, budget 12 s. **Redis as a cache buys little** (one
->    instance; `FileSystemCache` is already shared across workers), but
->    `RATE_LIMIT_STORAGE=memory://` is **per-worker**, so "300 per minute" is
->    really up to 1,200 across 4 workers — a correctness gap worth closing
->    when the limit needs to be trusted. **Async** is the right answer to a
->    4.4 s request holding a pooled connection, and the next thing to measure.
+> 5. ~~**No Redis, async jobs or load test** (S3)~~ **CLOSED 2026-10-16
+>    (§82, §83, §84)** — all three settled, two by building and one by
+>    measurement.
+>    **Load test**: `Data/loadtest.py`, which found 8 of 36 requests returning
+>    HTTP 500 on an exhausted pool at 16 concurrent, and a retry budget
+>    (1.25 s) shorter than the request holding the connection (4.4 s). Both
+>    fixed — 503 with `Retry-After`, budget 12 s, re-measured 36/36 at 32
+>    concurrent (§82).
+>    **Redis**: wired for the rate limiter, which was per-worker and so 4×
+>    looser than configured; *not* for caching, which `FileSystemCache`
+>    already shares across workers on one host (§83).
+>    **Async**: ~~the right answer to a 4.4 s request holding a connection~~
+>    **unjustified on the numbers.** `point_timeseries` had no result cache
+>    at all while the endpoint below it did; adding one took repeats from
+>    10.4 s to **0.64 s** and the load test from 0.6 to **3.3 req/s** at
+>    concurrency 1. The connection is now held on the first call per
+>    (run, variable, point) and no other, so a worker service, two endpoints
+>    and a polling client would move work that mostly no longer happens.
+>    **Not refused — revisit if many distinct points are ever requested
+>    concurrently by many users** (§84).
 >
 > **Yours to decide**
 >
@@ -7287,3 +7296,83 @@ again: *follow the property, do not weaken the assertion.*
 
 Eleven new tests, all eleven failing against the previous commit, including a
 guard that one worker with `memory://` reports `safe: true`.
+
+## 84. The async item, and the cache that made it hard to justify — 2026-10-16
+
+S3's last piece is "async jobs", and §82 said the measured case for it was
+`/api/point-timeseries` holding a pooled connection for ~12 s under
+contention. Before building a queue around that query, it was worth asking
+why it costs what it does.
+
+**It fetches 25 cells and uses one.** The query takes a ±`radius` box —
+74,988 rows, 25 distinct cells, measured — and Python then picks the single
+nearest cell and discards the rest. That looks like the whole answer and is
+not: a nearest-cell lookup over the same box costs 957 ms against the full
+fetch's 1,070 ms, because the cost is scanning the box rather than
+transferring rows.
+
+**And no index can serve it cheaply.** `forecast_data` already carries six
+indexes totalling ~49 GB, and none leads with
+`(run_id, variable_id, latitude, longitude)` — the natural key has lat/lon in
+positions five and six, behind `forecast_hour` and `ensemble_member`. Adding
+a covering index would cost ~10 GB against a database at 129 GB of a 250 GB
+threshold, which §52 already established is a *per-run* cost. So the query is
+structurally expensive, and that supported async rather than undermining it.
+
+### Except the endpoint had no result cache at all
+
+`/api/spread-skill` sits immediately below `point_timeseries` and has cached
+since the caching existed. `point_timeseries` never adopted it. **Every
+repeat of an identical request re-ran the query**, which is most of what
+capped the load test at ~3 req/s — the harness fires five identical
+point-timeseries requests per level and each one paid in full.
+
+§64's pattern again: *a mechanism gets applied where someone noticed the
+problem, and the other half of the file keeps paying.* Found only by reading
+the endpoint to justify building something else.
+
+| | before | after |
+|---|---|---|
+| cold | 10.1 s | 10.1 s |
+| repeat | 10.4 s | **0.64 s** |
+| a *different* point | — | 3.5 s (a miss, correctly) |
+
+And on the load test, with no other change:
+
+| concurrency | req/s before | req/s after | p95 before | p95 after |
+|---|---|---|---|---|
+| 1 | 0.6 | **3.3** | 9,607 ms | **1,016 ms** |
+| 8 | 2.8 | **5.1** | 8,535 ms | 5,689 ms |
+| 32 | 3.1 | **4.7** | — | 6,121 ms |
+
+### So async is now hard to justify, and that is the finding
+
+The case for it was a 12 s request holding a connection on every call. It
+holds one on the *first* call per (run, variable, point) and on no other. For
+a password-protected deployment where reviewers explore a bounded set of
+points, the second visit to anything is already fast.
+
+A job queue would add a worker service, two endpoints, a polling client and
+several new failure modes, to move work that is now mostly not happening.
+**Not refused — unjustified at this size, on these numbers.** The thing that
+would change it is many distinct points being requested concurrently by many
+users, which is a different deployment from the one described in
+`REVIEW_DEPLOY_PREREQS.md`.
+
+### Two measurement mistakes, both mine, both caught
+
+**I deleted the cache directory while the server was running** to get a cold
+measurement, and `FileSystemCache` creates it once at import. Every write
+then failed with `FileNotFoundError`, cachelib swallowed it as a warning, and
+the endpoint timed at 10 s on four consecutive identical requests — which I
+briefly read as "the cache does not work". The cache worked; I had removed
+the directory underneath it. **Clear a cache through its own interface, or
+restart the thing that owns it.**
+
+**And the load test reported 20/36 at concurrency 16**, which looks like a
+regression and is not: 16 requests failed with `RemoteDisconnected` and never
+reached the server, with no application error logged. §82b's `guard()` named
+them as transport failures rather than latencies, which is the only reason
+the number was not reported as a capacity result. The Werkzeug dev server
+drops connections under burst; production is gunicorn, and **this harness
+cannot speak to that** (§66).
