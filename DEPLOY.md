@@ -538,3 +538,96 @@ files were skipped — `--skip-bad` prints that list and nothing stores it.
 the converters are all in git, so the *code* half needs no backup. What is not in
 git is the 123 GB of loaded data and the staged NetCDF sources — and of those,
 only the data is reproducible from Explorer.
+
+## 10. Containers
+
+> **Added 2026-10-16.** `SYSTEM_DESIGN_PLAN.md` S2 has asked for
+> containerisation since 2026-07-28 and nothing had been written. Everything
+> below was built and run before it was documented — the numbers and the
+> failure modes are measured, not anticipated.
+
+Three files: `deploy/Dockerfile.api`, `deploy/Dockerfile.web`, `compose.yaml`,
+plus `deploy/Caddyfile.compose` and a `.dockerignore`.
+
+```bash
+export DB_PASSWORD='choose one'
+export WEAVE_AUTH_HASH="$(caddy hash-password)"   # prompts, does not echo
+docker compose up -d
+```
+
+That gives you the application on `127.0.0.1:8080`, behind the password, with
+an **empty** database. See "the data" below, which is the only hard part.
+
+### What each service is, and what it deliberately does not do
+
+| service | image | published |
+|---|---|---|
+| `db` | `postgres:15` | **nothing** |
+| `api` | built, python 3.13-slim + gunicorn | **nothing** |
+| `web` | built, CRA build served by `caddy:2-alpine` | `127.0.0.1:8080` only |
+
+**Only `web` publishes a port, and that is the security model.** The host
+deployment binds gunicorn to `127.0.0.1` so port 5000 cannot be addressed
+around Caddy's password (§3, and the Caddyfile's own comments). Inside a
+container that instruction would instead make the API unreachable from `web`,
+because the loopback is the container's own — so the API binds `0.0.0.0` and
+the property is preserved by publishing no port for it. Verified by curl from
+the host:
+
+| | |
+|---|---|
+| `GET :8080/` without a password | **401** |
+| `GET :8080/api/ready` without a password | **401** |
+| `GET :8080/api/ready` with it | `{"ready":true}` |
+| `GET :5000/api/ready` direct | **refused** |
+| `:5432` direct | **refused** |
+
+**Adding `ports:` to the `api` service to make debugging easier removes the
+only thing protecting the API.** Use `docker compose exec` instead.
+
+### The architecture pin is load-bearing
+
+Both images are `--platform=linux/amd64`. `NEXT_STEPS.md` §34 established that
+no `libgeos-dev`/`libproj-dev` are needed because the wheels bundle them — and
+that is a fact about wheels *existing for your architecture*. Measured while
+writing this: on **linux/arm64 + cp313 there is no `cartopy==0.25.0` wheel**
+(the earliest with one is 0.26.0), so pip falls back to the sdist and the build
+dies on a missing `g++`. On amd64 every pin resolves to a wheel. amd64 is also
+what CI runs, so the image is the combination the project actually tests. On
+Apple Silicon this builds and runs under emulation — correct, slower.
+
+### The data is not in here, and nothing can put it there
+
+`docker compose up` on a new machine gives an empty PostgreSQL. The app starts,
+serves, passes its health check at `/api/ready`, and has nothing to show. That
+is expected, and `/api/health` now says so specifically rather than reporting
+the database as unavailable:
+
+```json
+{"status":"unhealthy","database":"connected","schema":"absent",
+ "hint":"database is reachable and empty; restore a dump ..."}
+```
+
+To fill it, restore the dump from §9 — 2.94 GB on the wire, about 43 minutes,
+rebuilding 99 GB of indexes:
+
+```bash
+docker compose up -d db
+docker compose exec -T db pg_restore -U weave -d weave_weather -j 4 \
+    --no-owner < weave_weather_2026-10-13.dump
+```
+
+`--no-owner` because the dump's roles are the host installation's and the
+container's user is whatever `DB_USER` says. The dump lives off-machine at
+`/projects/k.aggarwal/weave_backups/` (§79).
+
+### What this does not cover
+
+**TLS.** `Caddyfile.compose` serves plain HTTP on 8080 with `auto_https off`,
+because automatic certificates need a real hostname and a reachable :443, which
+a container behind an unknown ingress does not have. Terminate TLS in front —
+the host's own Caddy, a load balancer, or a tunnel. The published port is bound
+to `127.0.0.1` so it cannot be reached directly until something does.
+
+**Orchestration, logging and metrics.** `restart: unless-stopped` and the two
+health checks are the whole of it. A real deployment target will bring its own.

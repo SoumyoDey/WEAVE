@@ -19,15 +19,31 @@
 >    **GEFS 1** (`2025-09-16 00Z`), for all three variables. Last load
 >    `2026-09-30`. This bounds what the project may claim, and closes only when
 >    a second three-model run is ingested.
-> 2. **The analysis domain and the cyclone archive barely overlap.** The grid is
->    one 25–45 N / −85..−65 W box; the archive is global. Measured: **144 of
->    1,181 runs and 20 of 138 storms** ever enter it. Nothing is broken — the
->    cyclone tab is track-only — but tracks cannot be scored against gridded
->    fields outside that box. A decision about scope, not a defect.
+> 2. ~~**The analysis domain and the cyclone archive barely overlap**~~
+>    **REFRAMED 2026-10-16 (§81) — the domain was never the constraint.** The
+>    spatial figure is right (144 of 1,181 runs, 20 of 138 storms enter the
+>    25–45 N / −85..−65 W box) and it gates nothing, because **the two datasets
+>    do not overlap in time at all**: the cyclone archive runs
+>    `2016-01-01 → 2024-12-11` and the only gridded fields are `2025-09-08` and
+>    `2025-09-16`. **Zero** of the 1,181 cyclone runs share a date with any
+>    gridded field, in the box or out of it; the closest of all 1,181 is CHIDO
+>    at **271 days**. So "tracks cannot be scored against gridded fields
+>    *outside that box*" was misleading — they cannot be scored anywhere.
+>    Not a scope decision about the domain: scoring needs either gridded fields
+>    for 2016–2024 storm dates or cyclone tracks for September 2025, and both
+>    are ingests.
 >
 > **Open, and it is ordinary work**
 >
-> 3. **No containerisation** (S2) — no `Dockerfile`, no compose file.
+> 3. ~~**No containerisation** (S2) — no `Dockerfile`, no compose file.~~
+>    **CLOSED 2026-10-16 (§81)** — `deploy/Dockerfile.api`,
+>    `deploy/Dockerfile.web`, `compose.yaml`, `deploy/Caddyfile.compose`,
+>    `.dockerignore`. Built and run, not just written: the password covers both
+>    halves (401 without, 200 with), and ports 5000 and 5432 are refused from
+>    the host. `DEPLOY.md` §10. **The data is not in it and cannot be** — a
+>    fresh stand-up is an empty database, and `/api/health` now says
+>    `schema: absent` with the restore command rather than reporting the
+>    database unavailable.
 > 4. ~~**`pg_dump` has never been run at this size**~~ ~~rehearsed, but the
 >    artifact is still on the only disk~~ **CLOSED 2026-10-14 (§77, §79)** —
 >    rehearsed end to end, and the 2.94 GB dump now has a **checksum-verified
@@ -6893,3 +6909,94 @@ second place for the AIFS +96 h grid to drift from the database. The exporter is
 twenty lines of SQL and JSON and is reproducible from §2's description if the
 question is ever reopened. **The finding is the artifact; the prototype was
 scaffolding.**
+
+## 81. Containers, and a measurement that was answering the wrong question — 2026-10-16
+
+Two open items taken together. One closed, one turned out to be misframed in a
+way that made it look like a decision when it is an ingest.
+
+### Item 2: the domain was never the constraint
+
+The open block has said for two weeks that the analysis domain and the cyclone
+archive "barely overlap" — 144 of 1,181 runs and 20 of 138 storms entering the
+25–45 N / −85..−65 W box — and that *"tracks cannot be scored against gridded
+fields **outside that box**"*. That last clause implies they could be scored
+inside it.
+
+They cannot be scored anywhere:
+
+| | |
+|---|---|
+| cyclone archive | `2016-01-01` → `2024-12-11` |
+| gridded forecast runs | `2025-09-08`, `2025-09-16` |
+| cyclone runs sharing a date with a gridded field | **0 of 1,181** |
+| closest approach of any run | CHIDO, **271 days** |
+
+**The binding constraint is time, by nine months, and geography is irrelevant
+to it.** The spatial number is correct and answers a question nothing depends
+on — I had repeated it in every sweep for two weeks without once asking whether
+the two datasets were contemporaneous. Scoring tracks against fields needs
+either gridded fields for 2016–2024 storm dates or cyclone tracks for September
+2025. Both are data acquisitions; neither is a decision about the domain box.
+
+Same shape as §44 and §49: *an open item is more likely stale than open, and
+correcting the marker is what finds what it was hiding.* The variant here is
+sharper — the item carried a **true measurement**, which is what kept anyone
+from re-examining it. A number nobody disputes is not the same as a number that
+bears on the question.
+
+### Item 3: containerisation, built and run
+
+`deploy/Dockerfile.api`, `deploy/Dockerfile.web`, `compose.yaml`,
+`deploy/Caddyfile.compose`, `.dockerignore`. `DEPLOY.md` §10 is the guide.
+
+**The isolation property had to be re-expressed, not copied.** The host
+deployment binds gunicorn to `127.0.0.1` so port 5000 cannot be addressed
+around Caddy's password. Transplanted into a container that makes the API
+unreachable from the web container, because the loopback is the container's
+own. The container binds `0.0.0.0` and `compose.yaml` publishes no port for it,
+which preserves the property by a different mechanism. Verified rather than
+asserted: 401 on both `/` and `/api/*` without the password, 200 with it, and
+both `:5000` and `:5432` refused from the host.
+
+**§34's finding is narrower than it reads.** "No `libgeos-dev`/`libproj-dev`
+needed, the wheels bundle them" is a fact about wheels existing *for your
+architecture*. On linux/arm64 + cp313 there is no `cartopy==0.25.0` wheel —
+the earliest is 0.26.0 — so pip falls back to the sdist and the build dies on a
+missing `g++`. The images pin `--platform=linux/amd64`, where every pin
+resolves to a wheel and which is what CI runs. **A dependency conclusion drawn
+on one architecture is a conclusion about that architecture.**
+
+### Three things only running it could find
+
+The first build passed, the container started, and the health check went green
+— and two of these were live the whole time.
+
+1. **`chmod a+rX` is not writable.** The matplotlib font cache was built at
+   image-build time to keep it off the request path, then made read-and-execute
+   — so matplotlib rejected the directory and rebuilt the cache into a fresh
+   `/tmp` dir *in every worker on every start*, which is exactly the cost the
+   step existed to avoid. It announced itself only in a log line.
+2. **Plot caching was silently off.** `flask_api.py:133` builds its cache path
+   as `dirname(__file__)/../.cache/plots`; with `Data/` copied to `/app` that
+   is the container root, which a non-root user cannot create in. The API
+   catches the failure and logs "Plot caching disabled", so the container
+   served correctly while throwing away every rendered plot — the slowest
+   endpoints in the app (§51) losing their cache, visibly nowhere.
+3. **A reachable empty database was reported as unavailable.** `/api/health`
+   probes `'forecast_data'::regclass`, which raises `UndefinedTable` on an
+   empty schema and fell into the broad `except` as
+   `{"database": "unavailable"}` — the same word used for a database the API
+   cannot reach. **That state was unreachable until `compose.yaml` existed**
+   and is now the *normal* first state of a stand-up, where it sends the reader
+   to debug networking that is fine. It now answers 503 with
+   `database: connected`, `schema: absent` and the restore command.
+   `test_health_empty_schema.py` pins it, including a guard that a genuinely
+   unreachable database still says `unavailable` — without which the fix could
+   swallow every real connection failure and the other tests would still pass.
+   Three of its four tests were confirmed to fail against `HEAD`; the fourth is
+   the guard and passes both sides, which is the point of it.
+
+The first two are the recurring shape in a new place: **a warning in a log is
+not a failure anyone sees.** The build was green, the container was healthy,
+and the image was quietly worse than the host deployment in two ways.

@@ -1,0 +1,111 @@
+# WEAVE, containerised — `SYSTEM_DESIGN_PLAN.md` S2.
+#
+#     WEAVE_AUTH_HASH="$(caddy hash-password)" docker compose up -d
+#
+# **The database is not in here, and that is the whole difficulty.** The live
+# database is 129 GB. An image cannot carry it, a volume does not create it,
+# and `docker compose up` on a fresh machine gives you an empty PostgreSQL —
+# the app will start, serve, and return nothing. DEPLOY.md §9 is the path:
+# restore the 2.94 GB dump into the volume this file declares. The dump lives
+# off-machine at `/projects/k.aggarwal/weave_backups/` (§79), and a restore
+# takes about 43 minutes and rebuilds 99 GB of indexes.
+#
+#     docker compose up -d db
+#     docker compose exec -T db pg_restore -U weave -d weave_weather -j 4 \
+#         --no-owner < weave_weather_2026-10-13.dump
+#
+# So this file stands the *application* up reproducibly. It does not make the
+# data appear, and nothing can.
+
+name: weave
+
+services:
+  db:
+    # **15, matching the live server's 15.18.** A dump taken by 15.18 restores
+    # into any 15.x and into later majors, but not into an earlier one, and a
+    # floating `postgres:latest` would silently become a major nobody tested
+    # the schema or the restore against.
+    image: postgres:15
+    environment:
+      POSTGRES_DB: ${DB_NAME:-weave_weather}
+      POSTGRES_USER: ${DB_USER:-weave}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD, there is no default}
+      # The restore rebuilds 99 GB of indexes (DEPLOY.md §9). The stock 128 MB
+      # makes that slower for no reason; this is per-session and transient.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    command:
+      - postgres
+      - -c
+      - max_connections=100
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - maintenance_work_mem=1GB
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # `pg_isready` alone returns true while PostgreSQL is still replaying;
+      # a real query is what the api service needs to be true.
+      test: ["CMD-SHELL", "psql -U $${POSTGRES_USER} -d $${POSTGRES_DB} -c 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    # No published port. The database is reachable from the api service and
+    # from `docker compose exec`, and from nowhere else.
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.api
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: ${DB_NAME:-weave_weather}
+      DB_USER: ${DB_USER:-weave}
+      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD, there is no default}
+      # These two are multiplied by the startup pool check and compared
+      # against the server's `max_connections` minus its superuser reserve.
+      # 4 x 8 = 32 against 100. DEPLOY.md §3 has the arithmetic.
+      WEB_CONCURRENCY: "4"
+      DB_POOL_MAX: "8"
+      FLASK_DEBUG: "0"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5000/api/ready', timeout=5).status==200 else 1)\""]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    # **No `ports:`, deliberately.** This is what replaces the host
+    # deployment's `gunicorn -b 127.0.0.1`: the API is reachable on the compose
+    # network and nowhere else, so Caddy's password cannot be walked around by
+    # addressing port 5000 directly. Adding a port mapping here to "make
+    # debugging easier" removes the only thing protecting the API.
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.web
+    environment:
+      WEAVE_AUTH_USER: ${WEAVE_AUTH_USER:-reviewer}
+      # From `caddy hash-password`. Not defaulted: an unset hash makes
+      # `basic_auth` reject everything, which fails closed but reads as a
+      # broken deployment, and any default here would be a published password.
+      WEAVE_AUTH_HASH: ${WEAVE_AUTH_HASH:?run `caddy hash-password` and export WEAVE_AUTH_HASH}
+    ports:
+      # The only published port in the file. Bound to loopback because this
+      # serves plain HTTP — whatever terminates TLS in front of it is expected
+      # on the same host. Publish on 0.0.0.0 only behind something that does.
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  pgdata:

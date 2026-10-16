@@ -1,0 +1,69 @@
+# WEAVE in containers — the same one-door arrangement as `deploy/Caddyfile`,
+# adapted for compose.
+#
+# Three differences from the host file, each deliberate:
+#
+#   1. **Plain HTTP on :8080, no hostname.** Caddy's automatic HTTPS needs a
+#      real name resolving to this box and a reachable :443. A container behind
+#      an unknown ingress has neither, so TLS terminates in front of this —
+#      at the host's Caddy, a load balancer, or a tunnel. Keeping the
+#      `weave-review.example.com` block here would make Caddy try to provision
+#      a certificate for a name it does not own and fail at startup.
+#
+#   2. **`reverse_proxy api:5000`, not `127.0.0.1:5000`.** The host file says
+#      127.0.0.1 so that port 5000 is not reachable around the password. In
+#      compose, loopback is the *container's own* loopback and the API is a
+#      different container, so that address reaches nothing. The property is
+#      preserved by `compose.yaml` publishing no port for the api service: it
+#      exists only on the internal network, and this is the only way in.
+#
+#   3. **`basic_auth` reads a hash from the environment.** The host file
+#      carries a placeholder to be edited in place. Baking a hash into an image
+#      layer puts it in every copy of that image, so it comes from
+#      `WEAVE_AUTH_HASH` at run time instead.
+#
+# The password is still over BOTH halves. Applying it only to the static build
+# is the mistake these files exist to prevent.
+
+{
+	# The container is not the edge; something in front terminates TLS.
+	auto_https off
+	admin off
+}
+
+:8080 {
+	basic_auth {
+		{$WEAVE_AUTH_USER:reviewer} {$WEAVE_AUTH_HASH}
+	}
+
+	handle /api/* {
+		reverse_proxy api:5000 {
+			# The Cartopy render endpoints are slow on a cold cache; the
+			# default would cut them off mid-render and surface as a 502.
+			transport http {
+				response_header_timeout 120s
+			}
+		}
+	}
+
+	handle {
+		root * /srv/weave/build
+		# Single-page app: a reviewer refreshing on a client-side route would
+		# otherwise get a 404 from the file server.
+		try_files {path} /index.html
+		file_server
+	}
+
+	encode gzip zstd
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/weave-review.log
+	}
+}

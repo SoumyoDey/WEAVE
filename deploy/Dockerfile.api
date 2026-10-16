@@ -1,0 +1,101 @@
+# The Flask API, under gunicorn.
+#
+# `SYSTEM_DESIGN_PLAN.md` S2 asks for containerisation and nothing had been
+# written. This is the API half; `Dockerfile.web` is the frontend and Caddy,
+# and `compose.yaml` wires them to PostgreSQL.
+#
+# **Python 3.13 to match CI.** The test workflow runs 3.13, and the pinned
+# dependency set was resolved against it — `numpy==2.4.6`, `cartopy==0.25.0`,
+# `netCDF4==1.7.4`. Floating the interpreter here would mean the image runs a
+# combination nothing tests.
+#
+# **No `apt-get install libgeos-dev libproj-dev`.** That was in DEPLOY.md and
+# the CI workflow for weeks, and NEXT_STEPS.md §34 measured it false: cartopy
+# links neither, shapely bundles libgeos and pyproj bundles libproj, and the
+# manylinux policy forbids a wheel linking them from the system. Adding them
+# here would reintroduce a dependency the project already proved it does not
+# have.
+#
+# **`--platform=linux/amd64` is load-bearing, and §34's finding is narrower
+# than it reads.** "No system libraries needed" is a fact about *wheels being
+# available*, and that is per-architecture. Measured 2026-10-16 while writing
+# this file: on linux/arm64 + cp313 the only cartopy with a wheel is **0.26.0**,
+# so the pinned 0.25.0 falls back to the sdist and the build dies on a missing
+# `g++`. On linux/amd64 every pin resolves to a wheel —
+# `cartopy-0.25.0-cp313-cp313-manylinux_2_24_x86_64`,
+# `netcdf4-1.7.4-cp311-abi3`, `numpy-2.4.6-cp313`, `scipy-1.17.1-cp313` — which
+# is the architecture CI runs and the one a reviewer host will almost certainly
+# be. Pinning it keeps the image on the only combination this project tests.
+#
+# On an Apple Silicon machine this builds and runs under emulation: correct,
+# and slower. Building natively on arm64 would need either cartopy >= 0.26.0,
+# which is a pin change nothing has tested, or a C++ toolchain in the image to
+# compile the sdist. Neither is worth it for a deployment artifact.
+FROM --platform=linux/amd64 python:3.13-slim AS base
+
+# Dependencies first, in their own layer: they change far less often than the
+# source, and `pip install` is the expensive step.
+WORKDIR /app
+COPY Data/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+ && python -c "import cartopy, netCDF4, numpy, scipy, matplotlib, psycopg2; \
+print('compiled deps import OK')"
+
+# Not root. Nothing here needs it.
+#
+# `--system` with uid 10001 warns, because Debian reserves system uids below
+# 1000 and 10001 is the conventional container uid. Taking the uid and
+# dropping the flag keeps both the convention and a clean build.
+RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin weave
+
+# **Two directories the API writes to, both owned by that user.** Found by
+# running the container, not by reading the code — the first build looked
+# clean and both of these failed at runtime in a warning nobody would see
+# unless they read the log.
+#
+#   `MPLCONFIGDIR` — matplotlib's font cache. The first version built the
+#   cache as root and then `chmod -R a+rX`, which grants read and execute and
+#   **not write**, so matplotlib rejected the directory and rebuilt the cache
+#   into a fresh `/tmp` dir in *every worker on every start* — precisely the
+#   cold-cache cost on the render path the step was added to avoid.
+#
+#   `/.cache/plots` — flask-caching's `FileSystemCache`. `flask_api.py:133`
+#   builds that path as `dirname(__file__)/../.cache/plots`, and since `Data/`
+#   is copied to `/app` the parent is the container root, which a non-root
+#   user cannot create in. The API catches the failure and logs
+#   "Plot caching disabled", so the container serves correctly and throws away
+#   every rendered plot — the slowest endpoints in the app (§51) losing their
+#   cache silently.
+ENV MPLBACKEND=Agg \
+    MPLCONFIGDIR=/var/cache/matplotlib
+RUN mkdir -p /var/cache/matplotlib /.cache/plots \
+ && python -c "import matplotlib.pyplot as plt; plt.figure()" \
+ && chown -R weave:weave /var/cache/matplotlib /.cache
+
+COPY --chown=weave:weave Data/ /app/
+
+USER weave
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    FLASK_DEBUG=0
+
+# **`workers` and `WEB_CONCURRENCY` must agree**, and DEPLOY.md §3 explains
+# why: each worker holds its own pool of `DB_POOL_MAX` (default 8), the startup
+# check multiplies the two to verify the product fits under PostgreSQL's
+# `max_connections`, and gunicorn reads the same variable. Setting it once
+# serves both. 4 × 8 = 32 against a default 100 with 3 superuser-reserved.
+ENV WEB_CONCURRENCY=4 \
+    DB_POOL_MAX=8
+
+EXPOSE 5000
+
+# **`0.0.0.0`, not the `127.0.0.1` DEPLOY.md insists on for a host install.**
+# That instruction exists so port 5000 is not reachable around Caddy's
+# password, and inside a container it would instead make the API unreachable
+# from the web container — the loopback here is the container's own. The
+# property is preserved a different way: `compose.yaml` publishes no port for
+# this service, so it is reachable only on the compose network. Copying the
+# host command in verbatim is the mistake this comment exists to prevent.
+CMD ["sh", "-c", "exec gunicorn -w ${WEB_CONCURRENCY} -b 0.0.0.0:5000 \
+     --timeout 180 --graceful-timeout 30 --access-logfile - flask_api:app"]

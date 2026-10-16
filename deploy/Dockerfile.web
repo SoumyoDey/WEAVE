@@ -1,0 +1,56 @@
+# The static build, behind Caddy and its password.
+#
+# Two stages: Node builds the bundle, Caddy serves it. The Node layer does not
+# ship — the runtime image holds the compiled assets and nothing that produced
+# them, which is the point of building here rather than copying a `build/` the
+# host happened to have lying around.
+
+FROM --platform=linux/amd64 node:24-slim AS build
+
+WORKDIR /src
+
+# `npm ci`, not `npm install`: it installs exactly the lockfile and fails if
+# `package.json` and `package-lock.json` disagree, so the image cannot quietly
+# resolve a different dependency tree than CI did.
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY public/ ./public/
+COPY src/ ./src/
+
+# **`GENERATE_SOURCEMAP=false`** — DEPLOY.md §5 measured the default CRA build
+# shipping a 4.5 MB source map containing the full original source. Behind a
+# reviewer password that is not a breach, but it is 4.5 MB of this project's
+# source handed to every reviewer for no benefit.
+#
+# **`REACT_APP_API_URL` is deliberately unset.** `src/api/base.js` defaults to
+# same-origin `/api` in a production build, and the Caddyfile serves both
+# halves from one vhost precisely so no second origin is baked into the bundle
+# — an origin in the JavaScript is an address anyone can call around the
+# password. See REVIEW_DEPLOY_PREREQS.md §1.
+#
+# CI treats warnings as errors in this build, so a lint regression fails here
+# too rather than shipping.
+ENV GENERATE_SOURCEMAP=false CI=true
+RUN npm run build
+
+
+FROM --platform=linux/amd64 caddy:2-alpine
+
+COPY --from=build /src/build /srv/weave/build
+COPY deploy/Caddyfile.compose /etc/caddy/Caddyfile
+
+# Caddy opens its log writer at config *load*, not on first request, so a
+# missing directory fails startup outright with a message that reads like a
+# config error — the trap recorded in the Caddyfile's own comments and in
+# DEPLOY.md §7. Creating it at build time rather than hoping the runtime has it.
+RUN mkdir -p /var/log/caddy
+
+EXPOSE 8080
+
+# No HTTPS here. Caddy's automatic certificates need a real hostname and a
+# reachable port 443, which a container behind an unknown ingress does not
+# have; terminating TLS is the host's job in this arrangement, and
+# `Caddyfile.compose` serves plain HTTP on 8080 for it to proxy. Using the
+# repo's `deploy/Caddyfile` unchanged would try to provision a certificate for
+# `weave-review.example.com` and fail.

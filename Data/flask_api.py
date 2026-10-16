@@ -4469,6 +4469,28 @@ def health_check():
         # A 400 about the request, not a server fault: let the
         # errorhandler answer instead of reporting 500.
         raise
+    except psycopg2.errors.UndefinedTable:
+        # **Connected, but the schema is not there.** Reported separately
+        # because "unavailable" sends a reader to look at networking, and the
+        # database is fine — it is empty.
+        #
+        # This was unreachable until `compose.yaml` existed: a fresh PostgreSQL
+        # volume is the *normal* first state of a container stand-up, and the
+        # first thing anyone does is curl this endpoint. DEPLOY.md §9 is the
+        # answer (restore the dump), so the payload says so rather than making
+        # the reader deduce it from a 500.
+        #
+        # Still a 503 and still not "healthy": an empty database cannot serve
+        # anything, so a load balancer should keep taking this instance out.
+        log.warning("Health check: database reachable but schema is absent — "
+                    "restore a dump (DEPLOY.md §9) or run the loaders.")
+        return jsonify({
+            "status": "unhealthy",
+            "database": "connected",
+            "schema": "absent",
+            "hint": "database is reachable and empty; restore a dump "
+                    "(DEPLOY.md section 9) or run the loaders",
+        }), 503
     except Exception as e:
         # Log the detail server-side but don't leak the raw exception string
         # (DB internals / connection strings) to the client.
