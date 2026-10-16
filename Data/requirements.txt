@@ -49,3 +49,14 @@ netCDF4==1.7.4
 
 # Production WSGI server (do NOT use Flask's app.run() in beta/prod)
 gunicorn>=21.2
+
+# Shared storage for the rate limiter. `flask-limiter` defaults to `memory://`,
+# which each gunicorn worker keeps privately — so `300 per minute` across
+# `-w 4` admits up to 1,200, and which counter a client meets depends on which
+# worker serves it (NEXT_STEPS.md §83). This is the client `limits` uses for
+# `RATE_LIMIT_STORAGE=redis://…`; it is a hard dependency of the containerised
+# deployment, where `compose.yaml` wires one in.
+#
+# Pure Python, no system libraries, and unused when the storage URI stays
+# `memory://` — a single-worker dev server never opens a connection.
+redis==5.2.1

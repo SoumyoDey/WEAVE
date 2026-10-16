@@ -7223,3 +7223,67 @@ submodule), the first guard missed CI (conftest had stubbed the pool), and
 only running it with no database at all settled it. *Each test environment
 hides exactly what its own fixtures provide*, and the way to find out is to
 take one away.
+
+## 83. The rate limit was four times what it said — 2026-10-16
+
+§82 noted this from the code and left it. `flask-limiter` defaults to
+`memory://`, which **each gunicorn worker keeps privately**: `300 per minute`
+under `-w 4` admits up to 1,200, and which counter a client meets depends on
+which worker the proxy hands it to — the same client can be throttled on one
+request and not the next.
+
+It had been written in a comment beside the limiter since the limiter was
+added, and reported nowhere. Meanwhile `deploy/Dockerfile.api` ships
+`WEB_CONCURRENCY=4`, so **the shipped configuration had the gap**. A comment
+describing a defect is not a defence against it; §32's "the frontend consumes
+the endpoint" was the same mistake, and so was §63's note about what the
+design intended.
+
+Not a security hole — the limit still bounds a single client, at N× the
+advertised rate. It is a correctness gap, and the kind that is invisible until
+someone depends on the number.
+
+### Both halves, because either alone is insufficient
+
+**A shared store, so the containerised deployment is right by default.**
+`compose.yaml` gains a `redis:7-alpine` service and the api gets
+`RATE_LIMIT_STORAGE=redis://redis:6379/0`. No published port, like `db`.
+Counters are reconstructible and worthless after a restart, so persistence is
+off and there is a 64 MB ceiling with `allkeys-lru` — a runaway key set
+cannot take the host down. **This is not a cache**: `FileSystemCache` stays
+where it is, being already shared between workers on one host, and moving it
+to Redis buys nothing until there is more than one instance.
+
+**And a report, because most deployments will not be this compose file.**
+`_check_rate_limit_storage` puts the *effective* limit on `/api/health` beside
+`connection_pool`, and `report_startup_checks` warns when it differs from the
+configured one. `safe` is false only when the storage is per-process **and**
+there is more than one process — a single worker with `memory://` is correct,
+and a check that fires in a correct configuration is one nobody reads.
+
+### Verified in the containers, both ways
+
+| | storage | workers | effective | safe |
+|---|---|---|---|---|
+| as shipped | `redis` | 4 | **300/min** | true |
+| same image, `RATE_LIMIT_STORAGE=memory://` | `memory` | 4 | **1200/min** | false |
+
+Redis holds real counters rather than merely being connected —
+`LIMITS:LIMITER/172.19.0.5/get_models/300/1/minute` after five requests, one
+key per client and endpoint rather than one per worker.
+
+### Two things running it found that reading did not
+
+**The report was invisible exactly when it mattered.** `/api/health`
+short-circuits on an absent schema (§81), which is the state of every fresh
+`docker compose up` — so the only moment someone would check their limiter
+configuration was the only moment the endpoint would not show it. The 503
+payload now carries `rate_limit` too; it needs no database.
+
+**An existing test caught the contract change, correctly.**
+`test_startup_checks.py` pins the exact key set `__main__` destructures, and
+adding `rate_limit` broke it. That is the test doing its job — §63's rule
+again: *follow the property, do not weaken the assertion.*
+
+Eleven new tests, all eleven failing against the previous commit, including a
+guard that one worker with `memory://` reports `safe: true`.

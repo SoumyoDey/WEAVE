@@ -55,6 +55,30 @@ services:
     # from `docker compose exec`, and from nowhere else.
     restart: unless-stopped
 
+  redis:
+    # **One shared counter for the rate limiter.** `flask-limiter` defaults to
+    # `memory://`, which each worker keeps privately, so the configured
+    # "300 per minute" admits up to 1,200 across the four workers this stack
+    # runs and a client meets a different counter depending on which worker
+    # serves it (§83). That is why this service exists; it is not a cache.
+    #
+    # Caching stays on `FileSystemCache`: it is on disk and already shared
+    # between workers on one host, so moving it here would buy nothing until
+    # there is more than one instance.
+    image: redis:7-alpine
+    # Rate-limit counters are reconstructible and worthless after a restart —
+    # no persistence, and a hard memory ceiling so a runaway key set cannot
+    # take the host down.
+    command: ["redis-server", "--save", "", "--appendonly", "no",
+              "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    # No published port, like `db`: reachable on the compose network only.
+    restart: unless-stopped
+
   api:
     build:
       context: .
@@ -65,6 +89,9 @@ services:
       DB_NAME: ${DB_NAME:-weave_weather}
       DB_USER: ${DB_USER:-weave}
       DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD, there is no default}
+      # One counter across all four workers. Without this the limit below is
+      # per-worker and the real ceiling is 4x what it says (§83).
+      RATE_LIMIT_STORAGE: redis://redis:6379/0
       # These two are multiplied by the startup pool check and compared
       # against the server's `max_connections` minus its superuser reserve.
       # 4 x 8 = 32 against 100. DEPLOY.md §3 has the arithmetic.
@@ -73,6 +100,8 @@ services:
       FLASK_DEBUG: "0"
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5000/api/ready', timeout=5).status==200 else 1)\""]

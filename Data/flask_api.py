@@ -24,6 +24,7 @@ import math
 import io
 import base64
 import os
+import re
 import json
 import hashlib
 import logging
@@ -142,19 +143,79 @@ def _err_pool_exhausted(e):
 
 
 # ── Rate limiting ─────────────────────────────────────────────────────────────
-# Best-effort DoS protection; no-op if flask-limiter isn't installed. With multiple
-# gunicorn workers the in-memory limit is per-worker — use a shared store
-# (RATE_LIMIT_STORAGE=redis://…) for a global limit in production.
+# Best-effort DoS protection; no-op if flask-limiter isn't installed.
+#
+# **`memory://` is per-worker, so the stated limit is a lie under gunicorn.**
+# Each worker keeps its own counters, so `300 per minute` across `-w 4` admits
+# up to 1,200, and which limit a given client meets depends on which worker the
+# load balancer hands it — the same client can be throttled or not from one
+# request to the next. That was documented in a comment here and reported
+# nowhere, while `deploy/Dockerfile.api` ships `WEB_CONCURRENCY=4`, so the
+# shipped configuration had the gap (§83).
+#
+# It is a *correctness* gap rather than a security hole: the limit still bounds
+# a single client, just at N× the advertised rate. `_check_rate_limit_storage`
+# puts the effective number on `/api/health` so it is visible rather than
+# inferred, and `compose.yaml` wires Redis so the containerised deployment is
+# correct by default.
+RATE_LIMIT        = os.environ.get('RATE_LIMIT', '300 per minute')
+RATE_LIMIT_STORAGE = os.environ.get('RATE_LIMIT_STORAGE', 'memory://')
+
 try:
     from flask_limiter import Limiter
     from flask_limiter.util import get_remote_address
     Limiter(
         key_func=get_remote_address, app=app,
-        default_limits=[os.environ.get('RATE_LIMIT', '300 per minute')],
-        storage_uri=os.environ.get('RATE_LIMIT_STORAGE', 'memory://'),
+        default_limits=[RATE_LIMIT],
+        storage_uri=RATE_LIMIT_STORAGE,
     )
+    _RATE_LIMITER_ACTIVE = True
 except Exception as _e:  # pragma: no cover
     log.warning(f"⚠️  Rate limiting disabled: {_e}")
+    _RATE_LIMITER_ACTIVE = False
+
+
+def _rate_limit_per_minute(limit_string):
+    """Requests per minute implied by a flask-limiter limit string.
+
+    Only the shapes this project uses — `N per minute`, `per second`, `per
+    hour`. Returns None for anything else rather than guessing, because a
+    wrong number reported confidently is worse than an absent one.
+    """
+    m = re.match(r'\s*(\d+)\s*(?:/|per)\s*(second|minute|hour)\s*$',
+                 str(limit_string), re.I)
+    if not m:
+        return None
+    n, unit = int(m.group(1)), m.group(2).lower()
+    return {'second': n * 60, 'minute': n, 'hour': n / 60.0}[unit]
+
+
+def _check_rate_limit_storage():
+    """Whether the advertised rate limit is the one a client actually meets.
+
+    Reported on `/api/health` beside `connection_pool` for the same reason
+    (§27): a limit that is silently N× looser than configured is invisible
+    until someone depends on it, and by then the evidence is gone. `safe` is
+    false only when the storage is per-process *and* there is more than one
+    process — a single worker with `memory://` is correct, and saying
+    otherwise would be a warning nobody can act on.
+    """
+    workers = _worker_count()
+    scheme  = (RATE_LIMIT_STORAGE.split('://', 1)[0] or 'memory').lower()
+    shared  = scheme not in ('memory', 'memory_storage', '')
+    stated  = _rate_limit_per_minute(RATE_LIMIT)
+    effective = stated if (shared or workers == 1) else (
+        stated * workers if stated is not None else None)
+    return {
+        'active':               _RATE_LIMITER_ACTIVE,
+        'storage':              scheme,
+        'shared_across_workers': shared,
+        'workers':              workers,
+        'configured':           RATE_LIMIT,
+        'stated_per_minute':    stated,
+        'effective_per_minute': effective,
+        'safe':                 shared or workers == 1,
+    }
 
 
 # ── Plot caching ───────────────────────────────────────────────────────────────
@@ -408,7 +469,9 @@ def _cache_set(key, value, timeout):
 # ── Lightweight input allowlist ───────────────────────────────────────────────
 # Queries are parameterised (injection-safe); this is defence-in-depth + a clean
 # 400 for obviously-malformed model/variable tokens instead of an empty result.
-import re
+# (`re` is imported at the top of the module — it is needed by the rate-limit
+# check 280 lines above this, and an import below its first use is exactly the
+# shape that took the server down in §82a.)
 _TOKEN_RE = re.compile(r'^[A-Za-z0-9_]{1,40}$')
 def _bad_token(*vals):
     return any(v is not None and not _TOKEN_RE.match(str(v)) for v in vals)
@@ -811,9 +874,23 @@ def report_startup_checks(emit=None):
              f"Every request that names no bounding box is being scoped to the "
              f"configured box — check WEAVE_DOMAIN_LAT/LON, or re-run the regrid.")
 
+    # Needs no database, so it is computed outside the cursor block above.
+    rate = _check_rate_limit_storage()
+    if not rate['safe']:
+        effective = (f"{rate['effective_per_minute']:.0f}"
+                     if rate['effective_per_minute'] is not None else 'unknown')
+        emit(f"RATE LIMIT IS PER-WORKER — storage is '{rate['storage']}', which "
+             f"each of the {rate['workers']} workers keeps privately, so the "
+             f"configured '{rate['configured']}' actually admits about "
+             f"{effective} per minute and a client meets a different counter "
+             f"depending on which worker serves it. Set "
+             f"RATE_LIMIT_STORAGE=redis://… for one shared counter — "
+             f"DEPLOY.md section 10.")
+
     log.info("WEAVE data: %s run(s), latest init %s, last loaded %s",
              fresh['runs'], fresh['latest_init'], fresh['last_loaded_at'])
-    return {'pool': pool, 'storage': store, 'freshness': fresh, 'domain': dom}
+    return {'pool': pool, 'storage': store, 'freshness': fresh, 'domain': dom,
+            'rate_limit': rate}
 
 
 @app.before_request
@@ -4516,6 +4593,12 @@ def health_check():
             # Reported here because the failure it predicts only appears under
             # concurrent load, by which point it reads as a database fault.
             "connection_pool": _check_pool_headroom(cursor),
+            # Whether the advertised rate limit is the one a client meets.
+            # `safe: false` means the storage is per-process and there is
+            # more than one process, so the real ceiling is workers × the
+            # configured limit — see §83. Not a fault; a number that differs
+            # from the one in the configuration.
+            "rate_limit": _check_rate_limit_storage(),
             # Whether another run still fits under the retention threshold.
             # `safe: false` means a retention decision is due, not that anything
             # is wrong — see DB_SIZE_REVISIT_GB and DATA_EXPANSION_DESIGN.md
@@ -4562,6 +4645,11 @@ def health_check():
             "schema": "absent",
             "hint": "database is reachable and empty; restore a dump "
                     "(DEPLOY.md section 9) or run the loaders",
+            # Needs no database, and a fresh stand-up is exactly when someone
+            # checks their limiter configuration. Omitting it meant the only
+            # state where this payload is returned was the one state where
+            # the rate-limit report could not be read (§83).
+            "rate_limit": _check_rate_limit_storage(),
         }), 503
     except Exception as e:
         # Log the detail server-side but don't leak the raw exception string

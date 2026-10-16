@@ -71,6 +71,20 @@ def test_absent_schema_answers_503_not_500(_client):
     assert client.get('/api/health').status_code == 503
 
 
+def test_absent_schema_still_reports_the_rate_limit(_client):
+    """It needs no database, and this is when someone would look.
+
+    Found by standing the containerised stack up (§83): the only state in
+    which this payload is returned was the only state where the rate-limit
+    report could not be read, because the handler returns before the full
+    health body is built.
+    """
+    client = _client(psycopg2.errors.UndefinedTable('relation ... does not exist'))
+    body = client.get('/api/health').get_json()
+    assert 'rate_limit' in body, body
+    assert 'safe' in body['rate_limit'], body['rate_limit']
+
+
 def test_absent_schema_says_what_to_do_about_it(_client):
     """A health endpoint read during a first stand-up should name the fix."""
     client = _client(psycopg2.errors.UndefinedTable('relation ... does not exist'))

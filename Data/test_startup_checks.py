@@ -150,11 +150,15 @@ class TestAgainstARealCursor:
         out = []
         result = api.report_startup_checks(emit=_emit_to(out))
 
-        # The shapes the caller destructures in `__main__`.
-        assert set(result) == {'pool', 'storage', 'freshness', 'domain'}
+        # The shapes the caller destructures in `__main__`. `rate_limit`
+        # joined them in §83 — it needs no database, so it is computed
+        # outside the cursor block, but it is reported the same way.
+        assert set(result) == {'pool', 'storage', 'freshness', 'domain',
+                               'rate_limit'}
         assert isinstance(result['storage']['database_gb'], float)
         assert isinstance(result['pool']['usable_connections'], int)
         assert 'latest_init' in result['freshness']
+        assert isinstance(result['rate_limit']['safe'], bool)
 
     def test_the_dev_banner_fields_all_resolve(self, fixture_pool, monkeypatch):
         """`__main__` formats these by key; a missing one is an AttributeError
